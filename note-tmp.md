@@ -91,3 +91,7 @@ brown.advanceの結果が例えば100だった場合、the.advance(100) -> the.p
 brown.advance(105) = the.position + 1 -> ok
 foxに対して同じことをする
 これだと計算量がかなり減る
+
+---
+
+fsDirectory では毎回syscallしてfileからユーザー空間にメモリをマップしているけど、Mmapして参照更新すればsyscallのオーバーヘッドを減らせる

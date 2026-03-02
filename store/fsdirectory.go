@@ -1,0 +1,112 @@
+package store
+
+import (
+	"encoding/binary"
+	"io"
+	"os"
+	"path/filepath"
+)
+
+// FSDirectory is a file-system based Directory.
+type FSDirectory struct {
+	path string
+}
+
+func NewFSDirectory(path string) (*FSDirectory, error) {
+	if err := os.MkdirAll(path, 0755); err != nil {
+		return nil, err
+	}
+	return &FSDirectory{path: path}, nil
+}
+
+func (d *FSDirectory) CreateOutput(name string) (IndexOutput, error) {
+	f, err := os.Create(filepath.Join(d.path, name))
+	if err != nil {
+		return nil, err
+	}
+	return &fsIndexOutput{file: f}, nil
+}
+
+func (d *FSDirectory) OpenInput(name string) (IndexInput, error) {
+	f, err := os.Open(filepath.Join(d.path, name))
+	if err != nil {
+		return nil, err
+	}
+	return &fsIndexInput{file: f}, nil
+}
+
+func (d *FSDirectory) ListAll() ([]string, error) {
+	entries, err := os.ReadDir(d.path)
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	return names, nil
+}
+
+func (d *FSDirectory) DeleteFile(name string) error {
+	return os.Remove(filepath.Join(d.path, name))
+}
+
+func (d *FSDirectory) FileExists(name string) bool {
+	_, err := os.Stat(filepath.Join(d.path, name))
+	return err == nil
+}
+
+// --- IndexOutput ---
+
+type fsIndexOutput struct {
+	file *os.File
+}
+
+func (o *fsIndexOutput) Write(p []byte) (int, error) {
+	return o.file.Write(p)
+}
+
+func (o *fsIndexOutput) WriteVInt(v int) error {
+	var buf [binary.MaxVarintLen64]byte
+	n := binary.PutUvarint(buf[:], uint64(v))
+	_, err := o.file.Write(buf[:n])
+	return err
+}
+
+func (o *fsIndexOutput) Close() error {
+	return o.file.Close()
+}
+
+// --- IndexInput ---
+
+type fsIndexInput struct {
+	file *os.File
+}
+
+func (in *fsIndexInput) Read(p []byte) (int, error) {
+	return in.file.Read(p)
+}
+
+func (in *fsIndexInput) ReadVInt() (int, error) {
+	val, err := binary.ReadUvarint(newByteReader(in.file))
+	return int(val), err
+}
+
+func (in *fsIndexInput) Close() error {
+	return in.file.Close()
+}
+
+// byteReader adapts io.Reader to io.ByteReader.
+type byteReader struct {
+	r   io.Reader
+	buf [1]byte
+}
+
+func newByteReader(r io.Reader) *byteReader {
+	return &byteReader{r: r}
+}
+
+func (br *byteReader) ReadByte() (byte, error) {
+	_, err := br.r.Read(br.buf[:])
+	return br.buf[0], err
+}
