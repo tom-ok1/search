@@ -117,6 +117,36 @@ func TestReadLatestSegmentInfosNoFile(t *testing.T) {
 	}
 }
 
+func TestReferencedFiles(t *testing.T) {
+	si := &SegmentInfos{
+		Generation: 2,
+		Segments: []*SegmentCommitInfo{
+			{Name: "_seg0", Files: []string{"_seg0.meta", "_seg0.body.tidx"}},
+			{Name: "_seg1", Files: []string{"_seg1.meta", "_seg1.del"}},
+		},
+	}
+
+	refs := si.ReferencedFiles()
+
+	// Should contain the segments file itself
+	if !refs["segments_2"] {
+		t.Error("expected segments_2 in referenced files")
+	}
+	// Should contain all segment files
+	for _, want := range []string{"_seg0.meta", "_seg0.body.tidx", "_seg1.meta", "_seg1.del"} {
+		if !refs[want] {
+			t.Errorf("expected %q in referenced files", want)
+		}
+	}
+	// Should not contain unrelated files
+	if refs["segments_1"] {
+		t.Error("segments_1 should not be in referenced files")
+	}
+	if refs["_seg2.meta"] {
+		t.Error("_seg2.meta should not be in referenced files")
+	}
+}
+
 func TestSegmentCommitInfoFields(t *testing.T) {
 	info := &SegmentCommitInfo{
 		Name:     "_seg0",

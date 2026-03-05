@@ -876,3 +876,155 @@ func TestNewWriterGenerationContinuity(t *testing.T) {
 		t.Errorf("TotalDocCount: got %d, want 2", reader.TotalDocCount())
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Tests for stale file cleanup
+// ---------------------------------------------------------------------------
+
+func TestCommitCleansUpOldSegmentsFile(t *testing.T) {
+	analyzer := analysis.NewAnalyzer(
+		analysis.NewWhitespaceTokenizer(),
+		&analysis.LowerCaseFilter{},
+	)
+	dir, _ := store.NewFSDirectory(t.TempDir())
+	writer := NewIndexWriter(dir, analyzer, 100)
+
+	// First commit → segments_1
+	doc := document.NewDocument()
+	doc.AddField("body", "hello", document.FieldTypeText)
+	writer.AddDocument(doc)
+	if err := writer.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if !dir.FileExists("segments_1") {
+		t.Fatal("segments_1 should exist after first commit")
+	}
+
+	// Second commit → segments_2, should delete segments_1
+	doc2 := document.NewDocument()
+	doc2.AddField("body", "world", document.FieldTypeText)
+	writer.AddDocument(doc2)
+	if err := writer.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	if !dir.FileExists("segments_2") {
+		t.Error("segments_2 should exist after second commit")
+	}
+	if dir.FileExists("segments_1") {
+		t.Error("segments_1 should have been cleaned up after second commit")
+	}
+}
+
+func TestCommitCleansUpStalePendingFiles(t *testing.T) {
+	analyzer := analysis.NewAnalyzer(
+		analysis.NewWhitespaceTokenizer(),
+		&analysis.LowerCaseFilter{},
+	)
+	dir, _ := store.NewFSDirectory(t.TempDir())
+
+	// Simulate a leftover pending file from a prior crash
+	out, _ := dir.CreateOutput("pending_segments_99")
+	out.Write([]byte("stale"))
+	out.Close()
+
+	writer := NewIndexWriter(dir, analyzer, 100)
+
+	doc := document.NewDocument()
+	doc.AddField("body", "hello", document.FieldTypeText)
+	writer.AddDocument(doc)
+	if err := writer.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	if dir.FileExists("pending_segments_99") {
+		t.Error("pending_segments_99 should have been cleaned up after commit")
+	}
+}
+
+func TestNewWriterCleansUpStalePendingFiles(t *testing.T) {
+	analyzer := analysis.NewAnalyzer(
+		analysis.NewWhitespaceTokenizer(),
+		&analysis.LowerCaseFilter{},
+	)
+	dir, _ := store.NewFSDirectory(t.TempDir())
+
+	// Simulate leftover pending files
+	out, _ := dir.CreateOutput("pending_segments_1")
+	out.Write([]byte("stale"))
+	out.Close()
+	out2, _ := dir.CreateOutput("pending_segments_5")
+	out2.Write([]byte("stale"))
+	out2.Close()
+
+	// Creating a new writer should clean up pending files
+	_ = NewIndexWriter(dir, analyzer, 100)
+
+	if dir.FileExists("pending_segments_1") {
+		t.Error("pending_segments_1 should have been cleaned up on writer startup")
+	}
+	if dir.FileExists("pending_segments_5") {
+		t.Error("pending_segments_5 should have been cleaned up on writer startup")
+	}
+}
+
+func TestCommitPreservesCurrentSegmentFiles(t *testing.T) {
+	analyzer := analysis.NewAnalyzer(
+		analysis.NewWhitespaceTokenizer(),
+		&analysis.LowerCaseFilter{},
+	)
+	dir, _ := store.NewFSDirectory(t.TempDir())
+	writer := NewIndexWriter(dir, analyzer, 100)
+
+	doc := document.NewDocument()
+	doc.AddField("body", "hello world", document.FieldTypeText)
+	writer.AddDocument(doc)
+	if err := writer.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Collect all files referenced by the current commit
+	refs := writer.segmentInfos.ReferencedFiles()
+
+	// Verify all referenced files still exist on disk
+	for f := range refs {
+		if !dir.FileExists(f) {
+			t.Errorf("referenced file %q should still exist after commit", f)
+		}
+	}
+}
+
+func TestCommitCleansUpOrphanedSegmentFiles(t *testing.T) {
+	analyzer := analysis.NewAnalyzer(
+		analysis.NewWhitespaceTokenizer(),
+		&analysis.LowerCaseFilter{},
+	)
+	dir, _ := store.NewFSDirectory(t.TempDir())
+
+	// Create an orphaned segment file (not referenced by any commit)
+	out, _ := dir.CreateOutput("_seg99.meta")
+	out.Write([]byte("orphaned"))
+	out.Close()
+
+	writer := NewIndexWriter(dir, analyzer, 100)
+
+	doc := document.NewDocument()
+	doc.AddField("body", "hello", document.FieldTypeText)
+	writer.AddDocument(doc)
+	if err := writer.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	if dir.FileExists("_seg99.meta") {
+		t.Error("orphaned _seg99.meta should have been cleaned up after commit")
+	}
+
+	// Verify real segment files still exist
+	for _, info := range writer.segmentInfos.Segments {
+		for _, f := range info.Files {
+			if !dir.FileExists(f) {
+				t.Errorf("current segment file %q should still exist", f)
+			}
+		}
+	}
+}
