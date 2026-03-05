@@ -59,3 +59,54 @@ func TestEmptyPostingsIterator(t *testing.T) {
 		t.Error("Positions: expected nil")
 	}
 }
+
+func TestSlicePostingsIteratorSinglePosting(t *testing.T) {
+	postings := []Posting{
+		{DocID: 42, Freq: 1, Positions: []int{7}},
+	}
+	iter := NewSlicePostingsIterator(postings)
+
+	if !iter.Next() {
+		t.Fatal("expected Next() to return true")
+	}
+	if iter.DocID() != 42 {
+		t.Errorf("DocID: got %d, want 42", iter.DocID())
+	}
+	if iter.Freq() != 1 {
+		t.Errorf("Freq: got %d, want 1", iter.Freq())
+	}
+	if len(iter.Positions()) != 1 || iter.Positions()[0] != 7 {
+		t.Errorf("Positions: got %v, want [7]", iter.Positions())
+	}
+	if iter.Next() {
+		t.Error("expected Next() to return false after single posting")
+	}
+}
+
+func TestSlicePostingsIteratorNoPositions(t *testing.T) {
+	postings := []Posting{
+		{DocID: 0, Freq: 1, Positions: nil},
+	}
+	iter := NewSlicePostingsIterator(postings)
+	if !iter.Next() {
+		t.Fatal("expected Next() to return true")
+	}
+	if iter.Positions() != nil {
+		t.Errorf("Positions: got %v, want nil", iter.Positions())
+	}
+}
+
+func TestSlicePostingsIteratorMultipleCallsAfterExhaustion(t *testing.T) {
+	postings := []Posting{
+		{DocID: 0, Freq: 1, Positions: []int{0}},
+	}
+	iter := NewSlicePostingsIterator(postings)
+	iter.Next() // consume the only posting
+
+	// Multiple calls after exhaustion should all return false
+	for range 3 {
+		if iter.Next() {
+			t.Error("expected Next() to return false after exhaustion")
+		}
+	}
+}

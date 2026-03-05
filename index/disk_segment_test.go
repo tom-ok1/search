@@ -277,3 +277,116 @@ func TestDiskSegmentBM25ScoresMatch(t *testing.T) {
 	}
 }
 
+func TestDiskSegmentNonExistentField(t *testing.T) {
+	seg := buildTestSegment(t)
+	ds, _ := writeAndOpenDiskSegment(t, seg)
+	defer ds.Close()
+
+	if ds.DocFreq("nonexistent", "the") != 0 {
+		t.Error("expected 0 DocFreq for non-existent field")
+	}
+	if ds.FieldLength("nonexistent", 0) != 0 {
+		t.Error("expected 0 FieldLength for non-existent field")
+	}
+	if ds.TotalFieldLength("nonexistent") != 0 {
+		t.Error("expected 0 TotalFieldLength for non-existent field")
+	}
+	iter := ds.PostingsIterator("nonexistent", "the")
+	if iter.Next() {
+		t.Error("expected empty iterator for non-existent field")
+	}
+}
+
+func TestDiskSegmentStoredFieldsOutOfRange(t *testing.T) {
+	seg := buildTestSegment(t)
+	ds, _ := writeAndOpenDiskSegment(t, seg)
+	defer ds.Close()
+
+	fields, err := ds.StoredFields(100)
+	if err != nil {
+		t.Errorf("StoredFields out of range should not error, got: %v", err)
+	}
+	if fields != nil {
+		t.Error("expected nil for out-of-range docID")
+	}
+}
+
+func TestDiskSegmentIsDeletedWithoutDelFile(t *testing.T) {
+	seg := buildTestSegment(t)
+	ds, _ := writeAndOpenDiskSegment(t, seg)
+	defer ds.Close()
+
+	// No .del file, so all docs should be alive
+	for i := range ds.DocCount() {
+		if ds.IsDeleted(i) {
+			t.Errorf("doc %d should not be deleted (no .del file)", i)
+		}
+	}
+}
+
+func TestDiskSegmentLiveDocCountNoDeletions(t *testing.T) {
+	seg := buildTestSegment(t)
+	ds, _ := writeAndOpenDiskSegment(t, seg)
+	defer ds.Close()
+
+	if ds.LiveDocCount() != ds.DocCount() {
+		t.Errorf("LiveDocCount without deletions: got %d, want %d", ds.LiveDocCount(), ds.DocCount())
+	}
+}
+
+func TestDiskSegmentMultipleFields(t *testing.T) {
+	tmpDir := t.TempDir()
+	dir, _ := store.NewFSDirectory(tmpDir)
+	analyzer := analysis.NewAnalyzer(
+		analysis.NewWhitespaceTokenizer(),
+		&analysis.LowerCaseFilter{},
+	)
+	writer := NewIndexWriter(dir, analyzer, 100)
+
+	doc := document.NewDocument()
+	doc.AddField("title", "Quick Fox", document.FieldTypeText)
+	doc.AddField("body", "The quick brown fox jumps", document.FieldTypeText)
+	writer.AddDocument(doc)
+
+	doc2 := document.NewDocument()
+	doc2.AddField("title", "Lazy Dog", document.FieldTypeText)
+	doc2.AddField("body", "The lazy brown dog sleeps", document.FieldTypeText)
+	writer.AddDocument(doc2)
+
+	writer.Flush()
+
+	ds, err := OpenDiskSegment(tmpDir, writer.segmentInfos.Segments[0].Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ds.Close()
+
+	// Title field
+	if ds.DocFreq("title", "quick") != 1 {
+		t.Errorf("title DocFreq 'quick': got %d, want 1", ds.DocFreq("title", "quick"))
+	}
+	// Body field
+	if ds.DocFreq("body", "jumps") != 1 {
+		t.Errorf("body DocFreq 'jumps': got %d, want 1", ds.DocFreq("body", "jumps"))
+	}
+	// Cross-field: "jumps" not in title
+	if ds.DocFreq("title", "jumps") != 0 {
+		t.Error("'jumps' should not appear in title")
+	}
+
+	// Field lengths for different fields
+	if ds.FieldLength("title", 0) != 2 {
+		t.Errorf("title FieldLength doc0: got %d, want 2", ds.FieldLength("title", 0))
+	}
+	if ds.FieldLength("body", 0) != 5 {
+		t.Errorf("body FieldLength doc0: got %d, want 5", ds.FieldLength("body", 0))
+	}
+}
+
+func TestOpenDiskSegmentNonExistentPath(t *testing.T) {
+	_, err := OpenDiskSegment("/nonexistent/path", "_seg0")
+	if err == nil {
+		t.Error("expected error for non-existent path")
+	}
+}
+
