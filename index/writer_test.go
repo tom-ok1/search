@@ -1,6 +1,7 @@
 package index
 
 import (
+	"fmt"
 	"testing"
 
 	"gosearch/analysis"
@@ -504,5 +505,374 @@ func TestCommitPersistsDeletes(t *testing.T) {
 	}
 	if seg.IsDeleted(1) {
 		t.Error("doc 1 (id=2) should not be deleted")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests for NewIndexWriter loading existing state from directory
+// ---------------------------------------------------------------------------
+
+// TestNewWriterLoadsExistingSegments verifies that a new IndexWriter
+// loads committed segments from disk and can read them via NRT reader.
+func TestNewWriterLoadsExistingSegments(t *testing.T) {
+	analyzer := analysis.NewAnalyzer(
+		analysis.NewWhitespaceTokenizer(),
+		&analysis.LowerCaseFilter{},
+	)
+	dir, _ := store.NewFSDirectory(t.TempDir())
+
+	// Session 1: add documents and commit
+	w1 := NewIndexWriter(dir, analyzer, 100)
+	doc0 := document.NewDocument()
+	doc0.AddField("body", "hello world", document.FieldTypeText)
+	w1.AddDocument(doc0)
+
+	doc1 := document.NewDocument()
+	doc1.AddField("body", "hello go", document.FieldTypeText)
+	w1.AddDocument(doc1)
+
+	if err := w1.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	w1.Close()
+
+	// Session 2: open a new writer on the same directory
+	w2 := NewIndexWriter(dir, analyzer, 100)
+	defer w2.Close()
+
+	// The new writer should have loaded the committed segments
+	reader, err := OpenNRTReader(w2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+
+	if reader.TotalDocCount() != 2 {
+		t.Errorf("TotalDocCount: got %d, want 2", reader.TotalDocCount())
+	}
+	seg := reader.Leaves()[0].Segment
+	if seg.DocFreq("body", "hello") != 2 {
+		t.Errorf("DocFreq 'hello': got %d, want 2", seg.DocFreq("body", "hello"))
+	}
+}
+
+// TestNewWriterCanAddDocumentsAfterLoad verifies that after loading
+// existing state, the writer can add new documents without segment
+// name collisions and the new documents are queryable alongside old ones.
+func TestNewWriterCanAddDocumentsAfterLoad(t *testing.T) {
+	analyzer := analysis.NewAnalyzer(
+		analysis.NewWhitespaceTokenizer(),
+		&analysis.LowerCaseFilter{},
+	)
+	dir, _ := store.NewFSDirectory(t.TempDir())
+
+	// Session 1: add and commit
+	w1 := NewIndexWriter(dir, analyzer, 100)
+	doc0 := document.NewDocument()
+	doc0.AddField("body", "hello world", document.FieldTypeText)
+	w1.AddDocument(doc0)
+	if err := w1.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	w1.Close()
+
+	// Session 2: open, add more, commit
+	w2 := NewIndexWriter(dir, analyzer, 100)
+	doc1 := document.NewDocument()
+	doc1.AddField("body", "hello go", document.FieldTypeText)
+	w2.AddDocument(doc1)
+	if err := w2.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	w2.Close()
+
+	// Session 3: verify all documents are visible
+	w3 := NewIndexWriter(dir, analyzer, 100)
+	defer w3.Close()
+
+	reader, err := OpenNRTReader(w3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+
+	if reader.TotalDocCount() != 2 {
+		t.Errorf("TotalDocCount: got %d, want 2", reader.TotalDocCount())
+	}
+	if reader.LiveDocCount() != 2 {
+		t.Errorf("LiveDocCount: got %d, want 2", reader.LiveDocCount())
+	}
+}
+
+// TestNewWriterPreservesDeletes verifies that deletions committed in
+// a prior session are visible after reopening the writer.
+func TestNewWriterPreservesDeletes(t *testing.T) {
+	analyzer := analysis.NewAnalyzer(
+		analysis.NewWhitespaceTokenizer(),
+		&analysis.LowerCaseFilter{},
+	)
+	dir, _ := store.NewFSDirectory(t.TempDir())
+
+	// Session 1: add docs, delete one, commit
+	w1 := NewIndexWriter(dir, analyzer, 100)
+	doc0 := document.NewDocument()
+	doc0.AddField("id", "1", document.FieldTypeKeyword)
+	doc0.AddField("body", "hello world", document.FieldTypeText)
+	w1.AddDocument(doc0)
+
+	doc1 := document.NewDocument()
+	doc1.AddField("id", "2", document.FieldTypeKeyword)
+	doc1.AddField("body", "hello go", document.FieldTypeText)
+	w1.AddDocument(doc1)
+
+	w1.DeleteDocuments("id", "1")
+	if err := w1.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	w1.Close()
+
+	// Session 2: reopen and verify deletion is preserved
+	w2 := NewIndexWriter(dir, analyzer, 100)
+	defer w2.Close()
+
+	reader, err := OpenNRTReader(w2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+
+	if reader.TotalDocCount() != 2 {
+		t.Errorf("TotalDocCount: got %d, want 2", reader.TotalDocCount())
+	}
+	if reader.LiveDocCount() != 1 {
+		t.Errorf("LiveDocCount: got %d, want 1", reader.LiveDocCount())
+	}
+}
+
+// TestNewWriterDeletesAcrossSessions verifies that a new writer can
+// delete documents from segments committed in a prior session.
+func TestNewWriterDeletesAcrossSessions(t *testing.T) {
+	analyzer := analysis.NewAnalyzer(
+		analysis.NewWhitespaceTokenizer(),
+		&analysis.LowerCaseFilter{},
+	)
+	dir, _ := store.NewFSDirectory(t.TempDir())
+
+	// Session 1: add docs and commit
+	w1 := NewIndexWriter(dir, analyzer, 100)
+	doc0 := document.NewDocument()
+	doc0.AddField("id", "1", document.FieldTypeKeyword)
+	doc0.AddField("body", "hello world", document.FieldTypeText)
+	w1.AddDocument(doc0)
+
+	doc1 := document.NewDocument()
+	doc1.AddField("id", "2", document.FieldTypeKeyword)
+	doc1.AddField("body", "hello go", document.FieldTypeText)
+	w1.AddDocument(doc1)
+
+	if err := w1.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	w1.Close()
+
+	// Session 2: delete a document from the prior session's segment
+	w2 := NewIndexWriter(dir, analyzer, 100)
+	w2.DeleteDocuments("id", "1")
+	if err := w2.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	w2.Close()
+
+	// Session 3: verify deletion persisted
+	reader, err := OpenDirectoryReader(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+
+	if reader.LiveDocCount() != 1 {
+		t.Errorf("LiveDocCount: got %d, want 1", reader.LiveDocCount())
+	}
+	seg := reader.Leaves()[0].Segment
+	if !seg.IsDeleted(0) {
+		t.Error("doc 0 (id=1) should be deleted")
+	}
+	if seg.IsDeleted(1) {
+		t.Error("doc 1 (id=2) should not be deleted")
+	}
+}
+
+// TestNewWriterSegmentNameContinuity verifies that the segment counter
+// continues from the highest existing segment number, avoiding name collisions.
+func TestNewWriterSegmentNameContinuity(t *testing.T) {
+	analyzer := analysis.NewAnalyzer(
+		analysis.NewWhitespaceTokenizer(),
+		&analysis.LowerCaseFilter{},
+	)
+	dir, _ := store.NewFSDirectory(t.TempDir())
+
+	// Session 1: add docs across multiple segments (bufferSize=1 forces flush per doc)
+	w1 := NewIndexWriter(dir, analyzer, 1)
+	for i := 0; i < 3; i++ {
+		doc := document.NewDocument()
+		doc.AddField("body", "hello", document.FieldTypeText)
+		w1.AddDocument(doc) // auto-flush creates _seg0, _seg1, _seg2
+	}
+	if err := w1.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	w1.Close()
+
+	// Session 2: add another doc — its segment name must not collide
+	w2 := NewIndexWriter(dir, analyzer, 100)
+	doc := document.NewDocument()
+	doc.AddField("body", "world", document.FieldTypeText)
+	w2.AddDocument(doc)
+	if err := w2.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	w2.Close()
+
+	// Verify all 4 docs are present across 4 segments
+	reader, err := OpenDirectoryReader(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+
+	if reader.TotalDocCount() != 4 {
+		t.Errorf("TotalDocCount: got %d, want 4", reader.TotalDocCount())
+	}
+	leaves := reader.Leaves()
+	if len(leaves) != 4 {
+		t.Fatalf("expected 4 segments, got %d", len(leaves))
+	}
+
+	// Verify no duplicate segment names
+	names := make(map[string]bool)
+	for _, leaf := range leaves {
+		name := leaf.Segment.Name()
+		if names[name] {
+			t.Errorf("duplicate segment name: %s", name)
+		}
+		names[name] = true
+	}
+}
+
+// TestNewWriterMultipleSegmentsLoad verifies that a writer correctly
+// loads multiple segments committed in a prior session.
+func TestNewWriterMultipleSegmentsLoad(t *testing.T) {
+	analyzer := analysis.NewAnalyzer(
+		analysis.NewWhitespaceTokenizer(),
+		&analysis.LowerCaseFilter{},
+	)
+	dir, _ := store.NewFSDirectory(t.TempDir())
+
+	// Session 1: create multiple segments (bufferSize=2)
+	w1 := NewIndexWriter(dir, analyzer, 2)
+	for i, text := range []string{"hello world", "hello go", "world go"} {
+		doc := document.NewDocument()
+		doc.AddField("id", fmt.Sprintf("%d", i), document.FieldTypeKeyword)
+		doc.AddField("body", text, document.FieldTypeText)
+		w1.AddDocument(doc)
+	}
+	if err := w1.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	w1.Close()
+
+	// Session 2: load and verify
+	w2 := NewIndexWriter(dir, analyzer, 100)
+	defer w2.Close()
+
+	reader, err := OpenNRTReader(w2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+
+	if reader.TotalDocCount() != 3 {
+		t.Errorf("TotalDocCount: got %d, want 3", reader.TotalDocCount())
+	}
+	if len(reader.Leaves()) != 2 {
+		t.Errorf("expected 2 segments, got %d", len(reader.Leaves()))
+	}
+}
+
+// TestNewWriterEmptyDirectory verifies that creating a writer on a
+// fresh directory (no existing segments) still works as before.
+func TestNewWriterEmptyDirectory(t *testing.T) {
+	analyzer := analysis.NewAnalyzer(
+		analysis.NewWhitespaceTokenizer(),
+		&analysis.LowerCaseFilter{},
+	)
+	dir, _ := store.NewFSDirectory(t.TempDir())
+
+	w := NewIndexWriter(dir, analyzer, 100)
+	defer w.Close()
+
+	doc := document.NewDocument()
+	doc.AddField("body", "hello", document.FieldTypeText)
+	w.AddDocument(doc)
+
+	if err := w.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	reader, err := OpenDirectoryReader(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+
+	if reader.TotalDocCount() != 1 {
+		t.Errorf("TotalDocCount: got %d, want 1", reader.TotalDocCount())
+	}
+}
+
+// TestNewWriterGenerationContinuity verifies that commits after
+// reopening use the correct generation number (continuing from the
+// prior session's generation, not restarting from 0).
+func TestNewWriterGenerationContinuity(t *testing.T) {
+	analyzer := analysis.NewAnalyzer(
+		analysis.NewWhitespaceTokenizer(),
+		&analysis.LowerCaseFilter{},
+	)
+	dir, _ := store.NewFSDirectory(t.TempDir())
+
+	// Session 1: commit (generation becomes 1)
+	w1 := NewIndexWriter(dir, analyzer, 100)
+	doc := document.NewDocument()
+	doc.AddField("body", "hello", document.FieldTypeText)
+	w1.AddDocument(doc)
+	if err := w1.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	w1.Close()
+
+	// Session 2: commit again (generation should become 2, not 1)
+	w2 := NewIndexWriter(dir, analyzer, 100)
+	doc2 := document.NewDocument()
+	doc2.AddField("body", "world", document.FieldTypeText)
+	w2.AddDocument(doc2)
+	if err := w2.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	w2.Close()
+
+	// Verify: segments_2 should exist (generation 2)
+	if !dir.FileExists("segments_2") {
+		t.Error("expected segments_2 to exist (generation continuity)")
+	}
+
+	// And both commits should be readable
+	reader, err := OpenDirectoryReader(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+
+	if reader.TotalDocCount() != 2 {
+		t.Errorf("TotalDocCount: got %d, want 2", reader.TotalDocCount())
 	}
 }

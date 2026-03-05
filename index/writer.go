@@ -29,12 +29,31 @@ type IndexWriter struct {
 
 func NewIndexWriter(dir store.Directory, analyzer *analysis.Analyzer, bufferSize int) *IndexWriter {
 	w := &IndexWriter{
-		dir:          dir,
-		analyzer:     analyzer,
-		segmentInfos: NewSegmentInfos(),
-		bufferSize:   bufferSize,
-		readerMap:    make(map[string]*ReadersAndUpdates),
+		dir:        dir,
+		analyzer:   analyzer,
+		bufferSize: bufferSize,
+		readerMap:  make(map[string]*ReadersAndUpdates),
 	}
+
+	// Try to load existing committed state from the directory.
+	si, err := ReadLatestSegmentInfos(dir)
+	if err == nil {
+		w.segmentInfos = si
+		// Set segmentCounter past the highest existing segment number
+		// to avoid name collisions.
+		for _, info := range si.Segments {
+			var n int
+			if _, parseErr := fmt.Sscanf(info.Name, "_seg%d", &n); parseErr == nil {
+				if n+1 > w.segmentCounter {
+					w.segmentCounter = n + 1
+				}
+			}
+		}
+	} else {
+		// No existing state — start fresh.
+		w.segmentInfos = NewSegmentInfos()
+	}
+
 	w.buffer = newInMemorySegment(w.nextSegmentName())
 	return w
 }
