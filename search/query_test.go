@@ -7,14 +7,17 @@ import (
 	"gosearch/analysis"
 	"gosearch/document"
 	"gosearch/index"
+	"gosearch/store"
 )
 
-func setupTestIndex() *index.InMemoryIndex {
+func setupTestSegment(t *testing.T) index.SegmentReader {
+	t.Helper()
+	dir, _ := store.NewFSDirectory(t.TempDir())
 	analyzer := analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
 	)
-	idx := index.NewInMemoryIndex(analyzer)
+	writer := index.NewIndexWriter(dir, analyzer, 100)
 
 	docs := []string{
 		"the quick brown fox",     // doc0
@@ -26,20 +29,26 @@ func setupTestIndex() *index.InMemoryIndex {
 	for _, text := range docs {
 		doc := document.NewDocument()
 		doc.AddField("body", text, document.FieldTypeText)
-		idx.AddDocument(doc)
+		writer.AddDocument(doc)
 	}
-	return idx
+	writer.Flush()
+	reader, err := index.OpenNRTReader(writer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { reader.Close() })
+	return reader.Leaves()[0].Segment
 }
 
 func TestBooleanMust(t *testing.T) {
-	idx := setupTestIndex()
+	seg := setupTestSegment(t)
 
 	// "brown" AND "fox"
 	q := NewBooleanQuery().
 		Add(NewTermQuery("body", "brown"), OccurMust).
 		Add(NewTermQuery("body", "fox"), OccurMust)
 
-	results := q.Execute(idx)
+	results := q.Execute(seg)
 
 	docIDs := extractDocIDs(results)
 	// doc0 and doc3 contain both "brown" and "fox"
@@ -52,14 +61,14 @@ func TestBooleanMust(t *testing.T) {
 }
 
 func TestBooleanMustNot(t *testing.T) {
-	idx := setupTestIndex()
+	seg := setupTestSegment(t)
 
 	// "brown" AND NOT "fox"
 	q := NewBooleanQuery().
 		Add(NewTermQuery("body", "brown"), OccurMust).
 		Add(NewTermQuery("body", "fox"), OccurMustNot)
 
-	results := q.Execute(idx)
+	results := q.Execute(seg)
 
 	docIDs := extractDocIDs(results)
 	// only doc1 has "brown" but not "fox"
@@ -69,14 +78,14 @@ func TestBooleanMustNot(t *testing.T) {
 }
 
 func TestBooleanShould(t *testing.T) {
-	idx := setupTestIndex()
+	seg := setupTestSegment(t)
 
 	// "quick" OR "lazy"
 	q := NewBooleanQuery().
 		Add(NewTermQuery("body", "quick"), OccurShould).
 		Add(NewTermQuery("body", "lazy"), OccurShould)
 
-	results := q.Execute(idx)
+	results := q.Execute(seg)
 
 	docIDs := extractDocIDs(results)
 	// doc0: quick, doc1: lazy, doc2: quick
@@ -89,11 +98,11 @@ func TestBooleanShould(t *testing.T) {
 }
 
 func TestPhraseQuery(t *testing.T) {
-	idx := setupTestIndex()
+	seg := setupTestSegment(t)
 
 	// phrase "brown fox"
 	q := NewPhraseQuery("body", "brown", "fox")
-	results := q.Execute(idx)
+	results := q.Execute(seg)
 
 	docIDs := extractDocIDs(results)
 	// doc0: "... brown fox" (positions 2,3) -> match
@@ -111,13 +120,13 @@ func TestPhraseQuery(t *testing.T) {
 }
 
 func TestPhraseQueryNoMatch(t *testing.T) {
-	idx := setupTestIndex()
+	seg := setupTestSegment(t)
 
 	// "quick fox" - not adjacent in any doc
 	// doc0: quick(pos=1), fox(pos=3) -> diff=2, no match
 	// doc2: quick(pos=1), fox(pos=3) -> diff=2, no match
 	q := NewPhraseQuery("body", "quick", "fox")
-	results := q.Execute(idx)
+	results := q.Execute(seg)
 
 	if len(results) != 0 {
 		docIDs := extractDocIDs(results)

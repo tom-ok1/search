@@ -16,16 +16,16 @@ func NewPhraseQuery(field string, terms ...string) *PhraseQuery {
 	return &PhraseQuery{Field: field, Terms: terms}
 }
 
-func (q *PhraseQuery) Execute(idx *index.InMemoryIndex) []DocScore {
+func (q *PhraseQuery) Execute(seg index.SegmentReader) []DocScore {
 	if len(q.Terms) == 0 {
 		return nil
 	}
 
-	// Retrieve PostingsList for each term
+	// Materialize PostingsLists from iterators
 	var postingsLists []*index.PostingsList
 	for _, term := range q.Terms {
-		pl := idx.GetPostings(q.Field, term)
-		if pl == nil {
+		pl := materializePostings(term, seg.PostingsIterator(q.Field, term))
+		if len(pl.Postings) == 0 {
 			return nil // any missing term means no match
 		}
 		postingsLists = append(postingsLists, pl)
@@ -35,8 +35,13 @@ func (q *PhraseQuery) Execute(idx *index.InMemoryIndex) []DocScore {
 	commonDocs := findCommonDocs(postingsLists)
 
 	scorer := NewBM25Scorer()
-	docCount := idx.DocCount()
-	avgDocLen := idx.AvgFieldLength(q.Field)
+	docCount := seg.DocCount()
+
+	totalFieldLen := seg.TotalFieldLength(q.Field)
+	avgDocLen := 0.0
+	if docCount > 0 {
+		avgDocLen = float64(totalFieldLen) / float64(docCount)
+	}
 
 	var results []DocScore
 	for _, docID := range commonDocs {
@@ -44,7 +49,7 @@ func (q *PhraseQuery) Execute(idx *index.InMemoryIndex) []DocScore {
 		if q.matchPositions(postingsLists, docID) {
 			// Score: sum of BM25 scores for each term
 			totalScore := 0.0
-			docLen := float64(idx.FieldLength(q.Field, docID))
+			docLen := float64(seg.FieldLength(q.Field, docID))
 			for i, pl := range postingsLists {
 				posting := findPosting(pl, docID)
 				if posting != nil {
@@ -57,6 +62,19 @@ func (q *PhraseQuery) Execute(idx *index.InMemoryIndex) []DocScore {
 	}
 
 	return results
+}
+
+// materializePostings collects all postings from an iterator into a PostingsList.
+func materializePostings(term string, iter index.PostingsIterator) *index.PostingsList {
+	pl := &index.PostingsList{Term: term}
+	for iter.Next() {
+		pl.Postings = append(pl.Postings, index.Posting{
+			DocID:     iter.DocID(),
+			Freq:      iter.Freq(),
+			Positions: iter.Positions(),
+		})
+	}
+	return pl
 }
 
 // matchPositions checks whether term positions are consecutive for the given DocID.

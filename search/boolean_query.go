@@ -34,13 +34,13 @@ func (q *BooleanQuery) Add(query Query, occur Occur) *BooleanQuery {
 	return q
 }
 
-func (q *BooleanQuery) Execute(idx *index.InMemoryIndex) []DocScore {
+func (q *BooleanQuery) Execute(seg index.SegmentReader) []DocScore {
 	var mustResults [][]DocScore
 	var shouldResults [][]DocScore
 	var mustNotResults [][]DocScore
 
 	for _, clause := range q.Clauses {
-		results := clause.Query.Execute(idx)
+		results := clause.Query.Execute(seg)
 		switch clause.Occur {
 		case OccurMust:
 			mustResults = append(mustResults, results)

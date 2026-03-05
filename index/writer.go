@@ -4,23 +4,38 @@ import (
 	"fmt"
 	"gosearch/analysis"
 	"gosearch/document"
+	"gosearch/store"
+	"sort"
 )
+
+// DeleteTerm represents a buffered delete-by-term operation.
+// Actual resolution (finding matching docIDs) is deferred until Commit.
+type DeleteTerm struct {
+	Field string
+	Term  string
+}
 
 // IndexWriter adds documents to the index and manages segments.
 type IndexWriter struct {
-	analyzer       *analysis.Analyzer
-	segments       []*Segment
-	buffer         *Segment // in-memory buffer (not yet a segment)
-	bufferSize     int      // flush threshold (number of documents)
-	segmentCounter int
+	dir                store.Directory
+	analyzer           *analysis.Analyzer
+	segmentInfos       *SegmentInfos
+	buffer             *InMemorySegment // in-memory buffer (not yet a segment)
+	bufferSize         int              // flush threshold (number of documents)
+	segmentCounter     int
+	pendingDeleteTerms []DeleteTerm                  // buffered deletes, resolved at commit time
+	readerMap          map[string]*ReadersAndUpdates // per-segment reader + pending deletes
 }
 
-func NewIndexWriter(analyzer *analysis.Analyzer, bufferSize int) *IndexWriter {
+func NewIndexWriter(dir store.Directory, analyzer *analysis.Analyzer, bufferSize int) *IndexWriter {
 	w := &IndexWriter{
-		analyzer:   analyzer,
-		bufferSize: bufferSize,
+		dir:          dir,
+		analyzer:     analyzer,
+		segmentInfos: NewSegmentInfos(),
+		bufferSize:   bufferSize,
+		readerMap:    make(map[string]*ReadersAndUpdates),
 	}
-	w.buffer = newSegment(w.nextSegmentName())
+	w.buffer = newInMemorySegment(w.nextSegmentName())
 	return w
 }
 
@@ -98,47 +113,211 @@ func (w *IndexWriter) AddDocument(doc *document.Document) error {
 
 	// Auto flush
 	if w.buffer.docCount >= w.bufferSize {
-		w.Flush()
+		if err := w.Flush(); err != nil {
+			return err
+		}
 	}
 
 	return nil
 }
 
-// Flush commits the in-memory buffer as a new segment.
-func (w *IndexWriter) Flush() {
+// Flush writes the in-memory buffer to disk as a new segment.
+func (w *IndexWriter) Flush() error {
 	if w.buffer.docCount == 0 {
-		return
+		return nil
 	}
-	w.segments = append(w.segments, w.buffer)
-	w.buffer = newSegment(w.nextSegmentName())
+
+	// Write segment files to disk (no fsync yet)
+	files, err := WriteSegmentV2(w.dir, w.buffer)
+	if err != nil {
+		return fmt.Errorf("flush segment %s: %w", w.buffer.name, err)
+	}
+
+	// Build SegmentCommitInfo
+	fields := make([]string, 0, len(w.buffer.fields))
+	for f := range w.buffer.fields {
+		fields = append(fields, f)
+	}
+	sort.Strings(fields)
+
+	info := &SegmentCommitInfo{
+		Name:   w.buffer.name,
+		MaxDoc: w.buffer.docCount,
+		Fields: fields,
+		Files:  files,
+	}
+
+	// Transfer any buffer deletions to a ReadersAndUpdates
+	if len(w.buffer.deletedDocs) > 0 {
+		rau := NewReadersAndUpdates(info, w.dir.FilePath(""))
+		for docID := range w.buffer.deletedDocs {
+			rau.Delete(docID)
+		}
+		w.readerMap[info.Name] = rau
+	}
+
+	w.segmentInfos.Segments = append(w.segmentInfos.Segments, info)
+	w.segmentInfos.Version++
+
+	// Reset buffer — old buffer is now GC'd
+	w.buffer = newInMemorySegment(w.nextSegmentName())
+	return nil
 }
 
-// Segments returns all current segments (including the buffer if non-empty).
-func (w *IndexWriter) Segments() []*Segment {
+// Commit flushes any buffered data, resolves pending deletes, and writes
+// the segment metadata (segments_N) to disk using Lucene's multi-stage
+func (w *IndexWriter) Commit() error {
+	// 1. Flush buffered data to disk (no fsync)
+	if err := w.Flush(); err != nil {
+		return err
+	}
+
+	// 2. Resolve buffered delete terms against disk segments
+	if err := w.applyPendingDeletes(); err != nil {
+		return err
+	}
+
+	// 3. Write deletion bitmaps and collect .del file names
+	for _, info := range w.segmentInfos.Segments {
+		rau, ok := w.readerMap[info.Name]
+		if ok && rau.HasPendingDeletes() {
+			delFile, err := rau.WriteLiveDocs(w.dir)
+			if err != nil {
+				return fmt.Errorf("write deletions for %s: %w", info.Name, err)
+			}
+			if delFile != "" {
+				info.Files = append(info.Files, delFile)
+			}
+		}
+	}
+
+	// 4. Collect all segment files and fsync them
+	var allFiles []string
+	for _, info := range w.segmentInfos.Segments {
+		allFiles = append(allFiles, info.Files...)
+	}
+	if err := w.dir.Sync(allFiles); err != nil {
+		return fmt.Errorf("sync segment files: %w", err)
+	}
+
+	// 5. Write pending_segments_N
+	pendingName, finalName, err := w.segmentInfos.WritePending(w.dir)
+	if err != nil {
+		return err
+	}
+
+	// 6. Fsync the pending file
+	if err := w.dir.Sync([]string{pendingName}); err != nil {
+		return fmt.Errorf("sync %s: %w", pendingName, err)
+	}
+
+	// 7. Atomic rename: pending_segments_N → segments_N
+	if err := w.dir.Rename(pendingName, finalName); err != nil {
+		return fmt.Errorf("rename %s → %s: %w", pendingName, finalName, err)
+	}
+
+	// 8. Fsync directory to make the rename durable
+	return w.dir.SyncMetaData()
+}
+
+// applyPendingDeletes resolves all buffered delete terms against disk segments.
+// Each segment is opened once via ReadersAndUpdates and all pending terms are applied.
+func (w *IndexWriter) applyPendingDeletes() error {
+	if len(w.pendingDeleteTerms) == 0 {
+		return nil
+	}
+
+	for _, info := range w.segmentInfos.Segments {
+		rau := w.getOrCreateRAU(info)
+		reader, err := rau.getReader()
+		if err != nil {
+			return fmt.Errorf("open segment %s for delete: %w", info.Name, err)
+		}
+
+		for _, dt := range w.pendingDeleteTerms {
+			iter := reader.PostingsIterator(dt.Field, dt.Term)
+			for iter.Next() {
+				rau.Delete(iter.DocID())
+			}
+		}
+	}
+
+	w.pendingDeleteTerms = nil
+	return nil
+}
+
+// getOrCreateRAU returns the ReadersAndUpdates for the given segment,
+// creating one if it doesn't exist yet.
+func (w *IndexWriter) getOrCreateRAU(info *SegmentCommitInfo) *ReadersAndUpdates {
+	rau, ok := w.readerMap[info.Name]
+	if !ok {
+		rau = NewReadersAndUpdates(info, w.dir.FilePath(""))
+		w.readerMap[info.Name] = rau
+	}
+	return rau
+}
+
+// nrtSegments returns all segments for near-real-time reading.
+// Like Lucene's IndexWriter.getReader(), the in-memory buffer is flushed
+// to an immutable disk segment first, then pending deletes are resolved.
+// The returned readers form a point-in-time snapshot; subsequent writes
+// to the IndexWriter are not visible through them.
+func (w *IndexWriter) nrtSegments() ([]SegmentReader, error) {
+	// Flush the in-memory buffer so all data is in immutable disk segments.
+	if err := w.Flush(); err != nil {
+		return nil, err
+	}
+
+	// Resolve buffered delete terms against all segments (including newly flushed).
+	if err := w.applyPendingDeletes(); err != nil {
+		return nil, err
+	}
+
+	segs := make([]SegmentReader, 0, len(w.segmentInfos.Segments))
+	for _, info := range w.segmentInfos.Segments {
+		rau := w.getOrCreateRAU(info)
+		sr, err := rau.GetSegmentReader()
+		if err != nil {
+			return nil, err
+		}
+		segs = append(segs, sr)
+	}
+	return segs, nil
+}
+
+// DeleteDocuments buffers a delete-by-term operation.
+// Disk segments are NOT opened here — resolution is deferred to Commit().
+// Only the in-memory buffer is resolved immediately (since it's already in RAM).
+func (w *IndexWriter) DeleteDocuments(field, term string) error {
+	// Buffer the delete term for deferred resolution against disk segments
+	w.pendingDeleteTerms = append(w.pendingDeleteTerms, DeleteTerm{Field: field, Term: term})
+
+	// In-memory buffer: resolve immediately (no disk I/O, already in RAM)
 	if w.buffer.docCount > 0 {
-		return append(w.segments, w.buffer)
-	}
-	return w.segments
-}
-
-// DeleteDocuments marks documents matching the given field/term as deleted.
-func (w *IndexWriter) DeleteDocuments(field, term string) {
-	for _, seg := range w.Segments() {
-		fi, exists := seg.fields[field]
-		if !exists {
-			continue
-		}
-		pl, exists := fi.postings[term]
-		if !exists {
-			continue
-		}
-		for _, posting := range pl.Postings {
-			seg.MarkDeleted(posting.DocID)
+		fi, exists := w.buffer.fields[field]
+		if exists {
+			pl, exists := fi.postings[term]
+			if exists {
+				for _, posting := range pl.Postings {
+					w.buffer.MarkDeleted(posting.DocID)
+				}
+			}
 		}
 	}
+	return nil
 }
 
-func (w *IndexWriter) getOrCreateFieldIndex(seg *Segment, fieldName string) *FieldIndex {
+// Close releases all resources held by the IndexWriter.
+// All RAUs (and their underlying DiskSegments) are closed here.
+func (w *IndexWriter) Close() error {
+	for name, rau := range w.readerMap {
+		rau.Close()
+		delete(w.readerMap, name)
+	}
+	return nil
+}
+
+func (w *IndexWriter) getOrCreateFieldIndex(seg *InMemorySegment, fieldName string) *FieldIndex {
 	fi, exists := seg.fields[fieldName]
 	if !exists {
 		fi = newFieldIndex()

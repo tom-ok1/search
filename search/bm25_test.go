@@ -6,6 +6,7 @@ import (
 	"gosearch/analysis"
 	"gosearch/document"
 	"gosearch/index"
+	"gosearch/store"
 )
 
 func TestBM25IDF(t *testing.T) {
@@ -26,28 +27,37 @@ func TestBM25IDF(t *testing.T) {
 }
 
 func TestBM25Scoring(t *testing.T) {
+	dir, _ := store.NewFSDirectory(t.TempDir())
 	analyzer := analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
 	)
-	idx := index.NewInMemoryIndex(analyzer)
+	writer := index.NewIndexWriter(dir, analyzer, 100)
 
 	// doc0: "fox" appears twice in a short document
 	doc0 := document.NewDocument()
 	doc0.AddField("body", "fox fox", document.FieldTypeText)
-	idx.AddDocument(doc0)
+	writer.AddDocument(doc0)
 
 	// doc1: "fox" appears once in a longer document
 	doc1 := document.NewDocument()
 	doc1.AddField("body", "the quick brown fox jumps over the lazy dog", document.FieldTypeText)
-	idx.AddDocument(doc1)
+	writer.AddDocument(doc1)
 
 	// doc2: does not contain "fox"
 	doc2 := document.NewDocument()
 	doc2.AddField("body", "the lazy dog sleeps all day", document.FieldTypeText)
-	idx.AddDocument(doc2)
+	writer.AddDocument(doc2)
 
-	results := TermSearch(idx, "body", "fox", 10)
+	writer.Flush()
+	reader, err := index.OpenNRTReader(writer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	seg := reader.Leaves()[0].Segment
+
+	results := TermSearch(seg, "body", "fox", 10)
 
 	// Only doc0 and doc1 should match
 	if len(results) != 2 {

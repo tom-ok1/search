@@ -14,6 +14,14 @@ type Directory interface {
 	DeleteFile(name string) error
 	// FileExists reports whether a file exists in the directory.
 	FileExists(name string) bool
+	// FilePath returns the absolute filesystem path for the named file.
+	FilePath(name string) string
+	// Sync fsyncs the given files individually so that their data is durable.
+	Sync(names []string) error
+	// SyncMetaData fsyncs the directory itself so that new file entries are durable.
+	SyncMetaData() error
+	// Rename atomically renames a file within the directory.
+	Rename(source, dest string) error
 }
 
 // IndexOutput is a write stream for index data.
@@ -21,6 +29,12 @@ type IndexOutput interface {
 	io.Writer
 	// WriteVInt writes a variable-length encoded integer.
 	WriteVInt(v int) error
+	// WriteUint16 writes a little-endian uint16.
+	WriteUint16(v uint16) error
+	// WriteUint32 writes a little-endian uint32.
+	WriteUint32(v uint32) error
+	// WriteUint64 writes a little-endian uint64.
+	WriteUint64(v uint64) error
 	Close() error
 }
 
