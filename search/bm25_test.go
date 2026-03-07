@@ -1,6 +1,7 @@
 package search
 
 import (
+	"sort"
 	"testing"
 
 	"gosearch/analysis"
@@ -57,12 +58,17 @@ func TestBM25Scoring(t *testing.T) {
 	defer reader.Close()
 	seg := reader.Leaves()[0].Segment
 
-	results := TermSearch(seg, "body", "fox", 10)
+	results := NewTermQuery("body", "fox").Execute(seg)
 
 	// Only doc0 and doc1 should match
 	if len(results) != 2 {
 		t.Fatalf("expected 2 results, got %d", len(results))
 	}
+
+	// Sort by score descending to verify ranking
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Score > results[j].Score
+	})
 
 	// doc0 should rank higher (short doc with higher TF)
 	if results[0].DocID != 0 {

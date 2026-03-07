@@ -46,7 +46,7 @@ func TestE2EDiskSegmentSearch(t *testing.T) {
 	defer reader.Close()
 
 	searcher := search.NewIndexSearcher(reader)
-	results := searcher.Search("body", "fox", 10)
+	results := searcher.Search(search.NewTermQuery("body", "fox"), 10)
 
 	// "fox" appears in doc0 (seg0) and doc2 (seg1)
 	if len(results) != 2 {
@@ -74,7 +74,7 @@ func TestE2EDiskSegmentSearch(t *testing.T) {
 	}
 	defer nrtReader.Close()
 	nrtSearcher := search.NewIndexSearcher(nrtReader)
-	nrtResults := nrtSearcher.Search("body", "fox", 10)
+	nrtResults := nrtSearcher.Search(search.NewTermQuery("body", "fox"), 10)
 
 	if len(results) != len(nrtResults) {
 		t.Fatalf("result count mismatch: disk=%d, nrt=%d", len(results), len(nrtResults))
