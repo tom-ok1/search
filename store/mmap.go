@@ -156,6 +156,11 @@ func (m *MMapIndexInput) Slice(offset, length int) (*MMapIndexInput, error) {
 	}, nil
 }
 
+// Data returns the raw underlying byte slice.
+func (m *MMapIndexInput) Data() []byte {
+	return m.data
+}
+
 // --- Cleanup ---
 
 // Close unmaps the memory-mapped file (only if this instance owns it).

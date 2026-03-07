@@ -1,8 +1,10 @@
 package index
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"gosearch/fst"
 	"gosearch/store"
 	"os"
 )
@@ -30,6 +32,10 @@ type DiskSegment struct {
 	termIndex map[string]*store.MMapIndexInput // field → .tidx
 	termData  map[string]*store.MMapIndexInput // field → .tdat
 	fieldLens map[string]*store.MMapIndexInput // field → .flen
+	termFSTs  map[string]*fst.FST              // field → FST (term → ordinal)
+
+	// Per-field metadata offset within .tidx (byte offset where term metadata starts)
+	termMetaOffsets map[string]int // field → offset of term_count in .tidx
 
 	// Segment-level mmap'd files
 	stored  *store.MMapIndexInput // .stored
@@ -49,12 +55,14 @@ func OpenDiskSegment(dirPath string, segName string) (*DiskSegment, error) {
 	}
 
 	ds := &DiskSegment{
-		name:      meta.Name,
-		docCount:  meta.DocCount,
-		fieldList: meta.Fields,
-		termIndex: make(map[string]*store.MMapIndexInput),
-		termData:  make(map[string]*store.MMapIndexInput),
-		fieldLens: make(map[string]*store.MMapIndexInput),
+		name:            meta.Name,
+		docCount:        meta.DocCount,
+		fieldList:       meta.Fields,
+		termIndex:       make(map[string]*store.MMapIndexInput),
+		termData:        make(map[string]*store.MMapIndexInput),
+		fieldLens:       make(map[string]*store.MMapIndexInput),
+		termFSTs:        make(map[string]*fst.FST),
+		termMetaOffsets: make(map[string]int),
 	}
 
 	// Mmap per-field files
@@ -65,6 +73,20 @@ func OpenDiskSegment(dirPath string, segName string) (*DiskSegment, error) {
 			return nil, fmt.Errorf("mmap tidx for %s: %w", field, err)
 		}
 		ds.termIndex[field] = tidx
+
+		// Parse FST from .tidx
+		data := tidx.Data()
+		if len(data) >= 4 {
+			fstSize := int(binary.LittleEndian.Uint32(data[0:4]))
+			fstBytes := data[4 : 4+fstSize]
+			termFST, err := fst.FSTFromBytes(fstBytes)
+			if err != nil {
+				ds.Close()
+				return nil, fmt.Errorf("parse FST for %s: %w", field, err)
+			}
+			ds.termFSTs[field] = termFST
+			ds.termMetaOffsets[field] = 4 + fstSize + 4 // skip fst_size + fst_bytes + term_count
+		}
 
 		tdat, err := store.OpenMMap(fmt.Sprintf("%s/%s.%s.tdat", dirPath, segName, field))
 		if err != nil {
@@ -159,14 +181,15 @@ func (ds *DiskSegment) IsDeleted(docID int) bool {
 	return val&(1<<bitIdx) != 0
 }
 
-// DocFreq looks up the term in the .tidx file via binary search and returns doc_freq.
+// DocFreq looks up the term in the FST and returns doc_freq.
 func (ds *DiskSegment) DocFreq(field, term string) int {
 	tidx := ds.termIndex[field]
-	if tidx == nil {
+	termFST := ds.termFSTs[field]
+	if tidx == nil || termFST == nil {
 		return 0
 	}
 
-	_, docFreq, _, _ := ds.lookupTerm(tidx, term)
+	_, docFreq, _, _ := ds.lookupTerm(tidx, termFST, field, term)
 	return docFreq
 }
 
@@ -174,11 +197,12 @@ func (ds *DiskSegment) DocFreq(field, term string) int {
 func (ds *DiskSegment) PostingsIterator(field, term string) PostingsIterator {
 	tidx := ds.termIndex[field]
 	tdat := ds.termData[field]
-	if tidx == nil || tdat == nil {
+	termFST := ds.termFSTs[field]
+	if tidx == nil || tdat == nil || termFST == nil {
 		return EmptyPostingsIterator{}
 	}
 
-	found, docFreq, postingsOffset, postingsLength := ds.lookupTerm(tidx, term)
+	found, docFreq, postingsOffset, postingsLength := ds.lookupTerm(tidx, termFST, field, term)
 	if !found {
 		return EmptyPostingsIterator{}
 	}
@@ -256,85 +280,30 @@ func (ds *DiskSegment) StoredFields(docID int) (map[string]string, error) {
 	return fields, nil
 }
 
-// lookupTerm performs a binary search on the .tidx file for the given term.
+// lookupTerm uses the FST to find a term's ordinal, then reads metadata
+// from the flat array in the .tidx file.
 // Returns (found, docFreq, postingsOffset, postingsLength).
-func (ds *DiskSegment) lookupTerm(tidx *store.MMapIndexInput, term string) (bool, int, uint64, uint32) {
-	// .tidx format:
-	//   [term_count: uint32]
-	//   [offset_table: term_count × uint64]
-	//   [term_entries: ...]
-
-	termCountVal, err := tidx.ReadUint32At(0)
-	if err != nil {
-		return false, 0, 0, 0
-	}
-	termCount := int(termCountVal)
-	if termCount == 0 {
+func (ds *DiskSegment) lookupTerm(tidx *store.MMapIndexInput, termFST *fst.FST, field, term string) (bool, int, uint64, uint32) {
+	ordinal, found := termFST.Get([]byte(term))
+	if !found {
 		return false, 0, 0, 0
 	}
 
-	termBytes := []byte(term)
+	// Read metadata at: metaOffset + ord*16
+	// Each entry: doc_freq(4) + postings_offset(8) + postings_length(4) = 16 bytes
+	metaOffset := ds.termMetaOffsets[field]
+	offset := metaOffset + int(ordinal)*16
 
-	lo, hi := 0, termCount-1
-	for lo <= hi {
-		mid := lo + (hi-lo)/2
-
-		// Read offset of the mid-th term entry from the offset table
-		entryOffset, err := tidx.ReadUint64At(4 + mid*8)
-		if err != nil {
-			return false, 0, 0, 0
-		}
-
-		// Read term at that offset
-		midTermLen, docFreq, postingsOffset, postingsLength, midTerm := ds.readTermEntry(tidx, int(entryOffset))
-		_ = midTermLen
-
-		cmp := compareBytes(midTerm, termBytes)
-		if cmp == 0 {
-			return true, docFreq, postingsOffset, postingsLength
-		} else if cmp < 0 {
-			lo = mid + 1
-		} else {
-			hi = mid - 1
-		}
+	data := tidx.Data()
+	if offset+16 > len(data) {
+		return false, 0, 0, 0
 	}
 
-	return false, 0, 0, 0
-}
+	docFreq := int(binary.LittleEndian.Uint32(data[offset:]))
+	postingsOffset := binary.LittleEndian.Uint64(data[offset+4:])
+	postingsLength := binary.LittleEndian.Uint32(data[offset+12:])
 
-// readTermEntry reads a single term entry from the .tidx file at the given offset.
-// Returns (termLen, docFreq, postingsOffset, postingsLength, termBytes).
-func (ds *DiskSegment) readTermEntry(tidx *store.MMapIndexInput, offset int) (int, int, uint64, uint32, []byte) {
-	tidx.Seek(offset)
-	termLen, _ := tidx.ReadUint16()
-	termBytes, _ := tidx.ReadBytes(int(termLen))
-	docFreqVal, _ := tidx.ReadUint32()
-	postingsOffset, _ := tidx.ReadUint64()
-	postingsLength, _ := tidx.ReadUint32()
-	return int(termLen), int(docFreqVal), postingsOffset, postingsLength, termBytes
-}
-
-// compareBytes compares two byte slices lexicographically.
-func compareBytes(a, b []byte) int {
-	minLen := len(a)
-	if len(b) < minLen {
-		minLen = len(b)
-	}
-	for i := 0; i < minLen; i++ {
-		if a[i] < b[i] {
-			return -1
-		}
-		if a[i] > b[i] {
-			return 1
-		}
-	}
-	if len(a) < len(b) {
-		return -1
-	}
-	if len(a) > len(b) {
-		return 1
-	}
-	return 0
+	return true, docFreq, postingsOffset, postingsLength
 }
 
 // Compile-time check: DiskSegment implements SegmentReader.

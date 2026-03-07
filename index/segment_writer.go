@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"gosearch/fst"
 	"gosearch/store"
 	"sort"
 )
@@ -72,17 +73,16 @@ func WriteSegmentV2(dir store.Directory, seg *InMemorySegment) ([]string, error)
 
 // writeFieldPostingsV2 writes the term index (.tidx) and postings data (.tdat) files.
 //
-// .tidx format:
+// .tidx format (FST-based):
 //
+//	[fst_size: uint32]           — size of serialized FST bytes
+//	[fst_bytes: byte[fst_size]]  — FST mapping term → ordinal
 //	[term_count: uint32]
-//	[offset_table: term_count × uint64]  — byte offset of each term entry within this file
-//	[term_entries (sorted by term):
-//	  term_len: uint16
-//	  term_bytes: []byte
-//	  doc_freq: uint32
-//	  postings_offset: uint64  — byte offset into .tdat
-//	  postings_length: uint32  — byte length in .tdat
-//	]
+//	[term_metadata: term_count × {
+//	    doc_freq:         uint32   (4 bytes)
+//	    postings_offset:  uint64   (8 bytes)
+//	    postings_length:  uint32   (4 bytes)
+//	}]                            — 16 bytes per entry, indexed by ordinal
 //
 // .tdat format:
 //
@@ -116,12 +116,9 @@ func writeFieldPostingsV2(dir store.Directory, segName, fieldName string, fi *Fi
 		// Write delta-encoded postings
 		prevDocID := 0
 		for _, posting := range pl.Postings {
-			// doc_id delta
 			writeVIntToBuffer(tdatBuf, posting.DocID-prevDocID)
 			prevDocID = posting.DocID
-			// freq
 			writeVIntToBuffer(tdatBuf, posting.Freq)
-			// positions (delta-encoded)
 			writeVIntToBuffer(tdatBuf, len(posting.Positions))
 			prevPos := 0
 			for _, pos := range posting.Positions {
@@ -145,34 +142,33 @@ func writeFieldPostingsV2(dir store.Directory, segName, fieldName string, fi *Fi
 	tdatOut.Write(tdatBuf.Bytes())
 	tdatOut.Close()
 
-	// Second pass: build .tidx file in memory, then write
-	tidxBuf := &bytes.Buffer{}
-
-	// Header: term_count
-	writeUint32ToBuffer(tidxBuf, uint32(len(terms)))
-
-	// Reserve space for offset table (will fill in later)
-	offsetTableStart := tidxBuf.Len()
-	for range terms {
-		writeUint64ToBuffer(tidxBuf, 0) // placeholder
-	}
-
-	// Write term entries, recording their offsets
-	termEntryOffsets := make([]uint64, len(terms))
+	// Build FST: term → ordinal
+	fstBuilder := fst.NewBuilder()
 	for i, term := range terms {
-		termEntryOffsets[i] = uint64(tidxBuf.Len())
-		termBytes := []byte(term)
-		writeUint16ToBuffer(tidxBuf, uint16(len(termBytes)))
-		tidxBuf.Write(termBytes)
-		writeUint32ToBuffer(tidxBuf, uint32(termMetas[i].docFreq))
-		writeUint64ToBuffer(tidxBuf, termMetas[i].postingsOffset)
-		writeUint32ToBuffer(tidxBuf, termMetas[i].postingsLength)
+		if err := fstBuilder.Add([]byte(term), uint64(i)); err != nil {
+			return fmt.Errorf("fst build: %w", err)
+		}
+	}
+	fstObj, err := fstBuilder.Finish()
+	if err != nil {
+		return fmt.Errorf("fst finish: %w", err)
 	}
 
-	// Fill in offset table
-	tidxData := tidxBuf.Bytes()
-	for i, offset := range termEntryOffsets {
-		binary.LittleEndian.PutUint64(tidxData[offsetTableStart+i*8:], offset)
+	// Serialize FST to buffer
+	var fstBuf bytes.Buffer
+	if _, err := fstObj.WriteTo(&fstBuf); err != nil {
+		return fmt.Errorf("fst serialize: %w", err)
+	}
+
+	// Build .tidx: [fst_size][fst_bytes][term_count][term_metadata...]
+	tidxBuf := &bytes.Buffer{}
+	writeUint32ToBuffer(tidxBuf, uint32(fstBuf.Len()))
+	tidxBuf.Write(fstBuf.Bytes())
+	writeUint32ToBuffer(tidxBuf, uint32(len(terms)))
+	for _, tm := range termMetas {
+		writeUint32ToBuffer(tidxBuf, uint32(tm.docFreq))
+		writeUint64ToBuffer(tidxBuf, tm.postingsOffset)
+		writeUint32ToBuffer(tidxBuf, tm.postingsLength)
 	}
 
 	// Write .tidx file
@@ -180,7 +176,7 @@ func writeFieldPostingsV2(dir store.Directory, segName, fieldName string, fi *Fi
 	if err != nil {
 		return err
 	}
-	tidxOut.Write(tidxData)
+	tidxOut.Write(tidxBuf.Bytes())
 	tidxOut.Close()
 
 	return nil
