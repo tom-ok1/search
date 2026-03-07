@@ -54,6 +54,19 @@ func (si *SegmentInfos) WritePending(dir store.Directory) (string, string, error
 	return pendingName, finalName, nil
 }
 
+// ReferencedFiles returns the set of all files referenced by the current commit:
+// the segments_N file itself plus all files listed in each SegmentCommitInfo.
+func (si *SegmentInfos) ReferencedFiles() map[string]bool {
+	refs := make(map[string]bool)
+	refs[fmt.Sprintf("segments_%d", si.Generation)] = true
+	for _, info := range si.Segments {
+		for _, f := range info.Files {
+			refs[f] = true
+		}
+	}
+	return refs
+}
+
 // ReadLatestSegmentInfos reads the most recent segments_N file from the directory.
 func ReadLatestSegmentInfos(dir store.Directory) (*SegmentInfos, error) {
 	files, err := dir.ListAll()

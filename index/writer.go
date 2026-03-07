@@ -6,6 +6,7 @@ import (
 	"gosearch/document"
 	"gosearch/store"
 	"sort"
+	"strings"
 )
 
 // DeleteTerm represents a buffered delete-by-term operation.
@@ -52,6 +53,15 @@ func NewIndexWriter(dir store.Directory, analyzer *analysis.Analyzer, bufferSize
 	} else {
 		// No existing state — start fresh.
 		w.segmentInfos = NewSegmentInfos()
+	}
+
+	// Clean up any stale pending_segments_* files from prior crashes.
+	if files, err := dir.ListAll(); err == nil {
+		for _, f := range files {
+			if strings.HasPrefix(f, "pending_segments_") {
+				_ = dir.DeleteFile(f)
+			}
+		}
 	}
 
 	w.buffer = newInMemorySegment(w.nextSegmentName())
@@ -204,7 +214,7 @@ func (w *IndexWriter) Commit() error {
 			if err != nil {
 				return fmt.Errorf("write deletions for %s: %w", info.Name, err)
 			}
-			if delFile != "" {
+			if delFile != "" && !containsString(info.Files, delFile) {
 				info.Files = append(info.Files, delFile)
 			}
 		}
@@ -236,7 +246,14 @@ func (w *IndexWriter) Commit() error {
 	}
 
 	// 8. Fsync directory to make the rename durable
-	return w.dir.SyncMetaData()
+	if err := w.dir.SyncMetaData(); err != nil {
+		return err
+	}
+
+	// 9. Best-effort cleanup of stale files
+	w.deleteStaleFiles()
+
+	return nil
 }
 
 // applyPendingDeletes resolves all buffered delete terms against disk segments.
@@ -334,6 +351,51 @@ func (w *IndexWriter) Close() error {
 		delete(w.readerMap, name)
 	}
 	return nil
+}
+
+// deleteStaleFiles removes old segments_N files, stale pending_segments_* files,
+// and orphaned segment data files not referenced by the current commit.
+// All deletions are best-effort — errors are silently ignored.
+func (w *IndexWriter) deleteStaleFiles() {
+	files, err := w.dir.ListAll()
+	if err != nil {
+		return
+	}
+
+	refs := w.segmentInfos.ReferencedFiles()
+
+	for _, f := range files {
+		switch {
+		case isOldSegmentsFile(f, w.segmentInfos.Generation):
+			_ = w.dir.DeleteFile(f)
+		case strings.HasPrefix(f, "pending_segments_"):
+			_ = w.dir.DeleteFile(f)
+		case strings.HasPrefix(f, "_seg") && !refs[f]:
+			_ = w.dir.DeleteFile(f)
+		}
+	}
+}
+
+// isOldSegmentsFile returns true if f is a segments_N file with generation < current.
+func isOldSegmentsFile(f string, currentGen int64) bool {
+	if !strings.HasPrefix(f, "segments_") {
+		return false
+	}
+	var gen int64
+	if _, err := fmt.Sscanf(f, "segments_%d", &gen); err == nil {
+		return gen < currentGen
+	}
+	return false
+}
+
+// containsString reports whether slice contains s.
+func containsString(slice []string, s string) bool {
+	for _, v := range slice {
+		if v == s {
+			return true
+		}
+	}
+	return false
 }
 
 func (w *IndexWriter) getOrCreateFieldIndex(seg *InMemorySegment, fieldName string) *FieldIndex {
