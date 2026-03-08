@@ -31,7 +31,7 @@ func (it *FSTIterator) Next() bool {
 	if it.done {
 		return false
 	}
-	if len(it.fst.data) == 0 {
+	if it.fst.input.Length() == 0 {
 		it.done = true
 		return false
 	}

@@ -45,3 +45,14 @@ type IndexInput interface {
 	ReadVInt() (int, error)
 	Close() error
 }
+
+// DataInput provides random-access and sequential reads over index data.
+// It is implemented by MMapIndexInput and used by FST for byte-level access.
+type DataInput interface {
+	ReadByte() (byte, error)
+	ReadBytes(n int) ([]byte, error)
+	ReadUvarint() (uint64, error)
+	Seek(pos int)
+	Position() int
+	Length() int
+}

@@ -75,6 +75,16 @@ func (m *MMapIndexInput) ReadVInt() (int, error) {
 	return int(val), nil
 }
 
+// ReadUvarint reads a variable-length encoded uint64 and advances the position.
+func (m *MMapIndexInput) ReadUvarint() (uint64, error) {
+	val, n := binary.Uvarint(m.data[m.pos:])
+	if n <= 0 {
+		return 0, fmt.Errorf("invalid uvarint at pos %d", m.pos)
+	}
+	m.pos += n
+	return val, nil
+}
+
 // ReadUint16 reads a little-endian uint16 and advances the position.
 func (m *MMapIndexInput) ReadUint16() (uint16, error) {
 	if m.pos+2 > m.length {
@@ -154,11 +164,6 @@ func (m *MMapIndexInput) Slice(offset, length int) (*MMapIndexInput, error) {
 		length: length,
 		owner:  false,
 	}, nil
-}
-
-// Data returns the raw underlying byte slice.
-func (m *MMapIndexInput) Data() []byte {
-	return m.data
 }
 
 // --- Cleanup ---

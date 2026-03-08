@@ -124,8 +124,9 @@ func (b *Builder) pushOutput(key []byte, output uint64, prefixLen int) {
 	}
 }
 
-// Finish compiles remaining nodes and returns the FST.
-func (b *Builder) Finish() (*FST, error) {
+// Finish compiles remaining nodes and returns the serialized FST bytes.
+// Format: [startNode: int64][dataLen: uint32][data: bytes]
+func (b *Builder) Finish() ([]byte, error) {
 	if b.count == 0 {
 		return nil, fmt.Errorf("cannot build empty FST")
 	}
@@ -133,10 +134,11 @@ func (b *Builder) Finish() (*FST, error) {
 	b.freezeTail(0)
 	rootAddr := b.compileNode(b.frontier[0])
 
-	return &FST{
-		data:      b.buf,
-		startNode: rootAddr,
-	}, nil
+	out := make([]byte, 12+len(b.buf))
+	binary.LittleEndian.PutUint64(out[0:8], uint64(rootAddr))
+	binary.LittleEndian.PutUint32(out[8:12], uint32(len(b.buf)))
+	copy(out[12:], b.buf)
+	return out, nil
 }
 
 func (b *Builder) freezeTail(downTo int) {

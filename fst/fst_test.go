@@ -1,10 +1,36 @@
 package fst
 
 import (
-	"bytes"
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
+
+	"gosearch/store"
 )
+
+// buildFST is a test helper that finishes the builder and parses the result into an FST.
+func buildFST(t *testing.T, b *Builder) *FST {
+	t.Helper()
+	data, err := b.Finish()
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "fst.bin")
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	input, err := store.OpenMMap(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { input.Close() })
+	f, err := FSTFromInput(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
 
 func TestBasicLookup(t *testing.T) {
 	b := NewBuilder()
@@ -18,10 +44,7 @@ func TestBasicLookup(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	f, err := b.Finish()
-	if err != nil {
-		t.Fatal(err)
-	}
+	f := buildFST(t, b)
 
 	tests := []struct {
 		key    string
@@ -58,10 +81,7 @@ func TestSharedPrefix(t *testing.T) {
 		}
 	}
 
-	f, err := b.Finish()
-	if err != nil {
-		t.Fatal(err)
-	}
+	f := buildFST(t, b)
 
 	for i, w := range words {
 		got, ok := f.Get([]byte(w))
@@ -89,10 +109,7 @@ func TestSingleKey(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	f, err := b.Finish()
-	if err != nil {
-		t.Fatal(err)
-	}
+	f := buildFST(t, b)
 
 	got, ok := f.Get([]byte("hello"))
 	if !ok || got != 42 {
@@ -107,8 +124,6 @@ func TestSingleKey(t *testing.T) {
 
 func TestRoundtrip(t *testing.T) {
 	b := NewBuilder()
-	keys := []string{"alpha", "beta", "gamma", "delta"}
-	// Sort for insertion order
 	sorted := []string{"alpha", "beta", "delta", "gamma"}
 	for i, k := range sorted {
 		if err := b.Add([]byte(k), uint64(i)); err != nil {
@@ -116,26 +131,11 @@ func TestRoundtrip(t *testing.T) {
 		}
 	}
 
-	f, err := b.Finish()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Serialize
-	var buf bytes.Buffer
-	if _, err := f.WriteTo(&buf); err != nil {
-		t.Fatal(err)
-	}
-
-	// Deserialize
-	f2, err := FSTFromBytes(buf.Bytes())
-	if err != nil {
-		t.Fatal(err)
-	}
+	f := buildFST(t, b)
 
 	// Verify
 	for i, k := range sorted {
-		got, ok := f2.Get([]byte(k))
+		got, ok := f.Get([]byte(k))
 		if !ok {
 			t.Errorf("after roundtrip: Get(%q) not found", k)
 			continue
@@ -144,7 +144,6 @@ func TestRoundtrip(t *testing.T) {
 			t.Errorf("after roundtrip: Get(%q)=%d, want %d", k, got, i)
 		}
 	}
-	_ = keys
 }
 
 func TestUnsortedKeyError(t *testing.T) {
@@ -179,10 +178,7 @@ func TestManyKeys(t *testing.T) {
 		}
 	}
 
-	f, err := b.Finish()
-	if err != nil {
-		t.Fatal(err)
-	}
+	f := buildFST(t, b)
 
 	// Verify all keys
 	for i, k := range keys {

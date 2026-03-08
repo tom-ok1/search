@@ -1,7 +1,6 @@
 package index
 
 import (
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"gosearch/fst"
@@ -75,17 +74,24 @@ func OpenDiskSegment(dirPath string, segName string) (*DiskSegment, error) {
 		ds.termIndex[field] = tidx
 
 		// Parse FST from .tidx
-		data := tidx.Data()
-		if len(data) >= 4 {
-			fstSize := int(binary.LittleEndian.Uint32(data[0:4]))
-			fstBytes := data[4 : 4+fstSize]
-			termFST, err := fst.FSTFromBytes(fstBytes)
+		if tidx.Length() >= 4 {
+			fstSize, err := tidx.ReadUint32At(0)
+			if err != nil {
+				ds.Close()
+				return nil, fmt.Errorf("read FST size for %s: %w", field, err)
+			}
+			fstSlice, err := tidx.Slice(4, int(fstSize))
+			if err != nil {
+				ds.Close()
+				return nil, fmt.Errorf("slice FST for %s: %w", field, err)
+			}
+			termFST, err := fst.FSTFromInput(fstSlice)
 			if err != nil {
 				ds.Close()
 				return nil, fmt.Errorf("parse FST for %s: %w", field, err)
 			}
 			ds.termFSTs[field] = termFST
-			ds.termMetaOffsets[field] = 4 + fstSize + 4 // skip fst_size + fst_bytes + term_count
+			ds.termMetaOffsets[field] = 4 + int(fstSize) + 4 // skip fst_size + fst_bytes + term_count
 		}
 
 		tdat, err := store.OpenMMap(fmt.Sprintf("%s/%s.%s.tdat", dirPath, segName, field))
@@ -294,16 +300,24 @@ func (ds *DiskSegment) lookupTerm(tidx *store.MMapIndexInput, termFST *fst.FST, 
 	metaOffset := ds.termMetaOffsets[field]
 	offset := metaOffset + int(ordinal)*16
 
-	data := tidx.Data()
-	if offset+16 > len(data) {
+	if offset+16 > tidx.Length() {
 		return false, 0, 0, 0
 	}
 
-	docFreq := int(binary.LittleEndian.Uint32(data[offset:]))
-	postingsOffset := binary.LittleEndian.Uint64(data[offset+4:])
-	postingsLength := binary.LittleEndian.Uint32(data[offset+12:])
+	docFreq32, err := tidx.ReadUint32At(offset)
+	if err != nil {
+		return false, 0, 0, 0
+	}
+	postingsOffset, err := tidx.ReadUint64At(offset + 4)
+	if err != nil {
+		return false, 0, 0, 0
+	}
+	postingsLength, err := tidx.ReadUint32At(offset + 12)
+	if err != nil {
+		return false, 0, 0, 0
+	}
 
-	return true, docFreq, postingsOffset, postingsLength
+	return true, int(docFreq32), postingsOffset, postingsLength
 }
 
 // Fields returns the list of indexed fields.

@@ -149,21 +149,15 @@ func writeFieldPostingsV2(dir store.Directory, segName, fieldName string, fi *Fi
 			return fmt.Errorf("fst build: %w", err)
 		}
 	}
-	fstObj, err := fstBuilder.Finish()
+	fstBytes, err := fstBuilder.Finish()
 	if err != nil {
 		return fmt.Errorf("fst finish: %w", err)
 	}
 
-	// Serialize FST to buffer
-	var fstBuf bytes.Buffer
-	if _, err := fstObj.WriteTo(&fstBuf); err != nil {
-		return fmt.Errorf("fst serialize: %w", err)
-	}
-
 	// Build .tidx: [fst_size][fst_bytes][term_count][term_metadata...]
 	tidxBuf := &bytes.Buffer{}
-	writeUint32ToBuffer(tidxBuf, uint32(fstBuf.Len()))
-	tidxBuf.Write(fstBuf.Bytes())
+	writeUint32ToBuffer(tidxBuf, uint32(len(fstBytes)))
+	tidxBuf.Write(fstBytes)
 	writeUint32ToBuffer(tidxBuf, uint32(len(terms)))
 	for _, tm := range termMetas {
 		writeUint32ToBuffer(tidxBuf, uint32(tm.docFreq))

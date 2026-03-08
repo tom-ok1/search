@@ -239,19 +239,14 @@ func mergeFieldPostingsToDisk(
 			return fmt.Errorf("fst build: %w", err)
 		}
 	}
-	fstObj, err := fstBuilder.Finish()
+	fstBytes, err := fstBuilder.Finish()
 	if err != nil {
 		return fmt.Errorf("fst finish: %w", err)
 	}
 
-	var fstBuf bytes.Buffer
-	if _, err := fstObj.WriteTo(&fstBuf); err != nil {
-		return fmt.Errorf("fst serialize: %w", err)
-	}
-
 	tidxBuf := &bytes.Buffer{}
-	writeUint32ToBuffer(tidxBuf, uint32(fstBuf.Len()))
-	tidxBuf.Write(fstBuf.Bytes())
+	writeUint32ToBuffer(tidxBuf, uint32(len(fstBytes)))
+	tidxBuf.Write(fstBytes)
 	writeUint32ToBuffer(tidxBuf, uint32(len(termMetas)))
 	for _, tm := range termMetas {
 		writeUint32ToBuffer(tidxBuf, uint32(tm.docFreq))

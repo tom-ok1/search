@@ -16,10 +16,7 @@ func TestFSTIterator(t *testing.T) {
 			t.Fatalf("Add(%q): %v", key, err)
 		}
 	}
-	f, err := builder.Finish()
-	if err != nil {
-		t.Fatalf("Finish: %v", err)
-	}
+	f := buildFST(t, builder)
 
 	// Iterate and collect all entries
 	iter := f.Iterator()
@@ -51,10 +48,7 @@ func TestFSTIteratorSingleKey(t *testing.T) {
 	if err := builder.Add([]byte("hello"), 42); err != nil {
 		t.Fatal(err)
 	}
-	f, err := builder.Finish()
-	if err != nil {
-		t.Fatal(err)
-	}
+	f := buildFST(t, builder)
 
 	iter := f.Iterator()
 	if !iter.Next() {
@@ -81,10 +75,7 @@ func TestFSTIteratorSequentialOutputs(t *testing.T) {
 			t.Fatalf("Add(%q): %v", key, err)
 		}
 	}
-	f, err := builder.Finish()
-	if err != nil {
-		t.Fatal(err)
-	}
+	f := buildFST(t, builder)
 
 	iter := f.Iterator()
 	i := 0
@@ -113,10 +104,7 @@ func TestFSTIteratorSharedPrefixes(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	f, err := builder.Finish()
-	if err != nil {
-		t.Fatal(err)
-	}
+	f := buildFST(t, builder)
 
 	iter := f.Iterator()
 	var gotKeys []string
@@ -141,8 +129,6 @@ func TestFSTIteratorSharedPrefixes(t *testing.T) {
 }
 
 func TestFSTIteratorConsistentWithGet(t *testing.T) {
-	keys := []string{"alpha", "beta", "gamma", "delta"}
-	// Sort keys for FST builder
 	sortedKeys := []string{"alpha", "beta", "delta", "gamma"}
 	outputs := []uint64{100, 200, 300, 400}
 
@@ -152,10 +138,7 @@ func TestFSTIteratorConsistentWithGet(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	f, err := builder.Finish()
-	if err != nil {
-		t.Fatal(err)
-	}
+	f := buildFST(t, builder)
 
 	// Verify iterator results match Get() lookups
 	iter := f.Iterator()
@@ -183,7 +166,6 @@ func TestFSTIteratorConsistentWithGet(t *testing.T) {
 		}
 	}
 
-	_ = keys // unused, just for documentation
 }
 
 func TestFSTIteratorLargeDataset(t *testing.T) {
@@ -196,10 +178,7 @@ func TestFSTIteratorLargeDataset(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	f, err := builder.Finish()
-	if err != nil {
-		t.Fatal(err)
-	}
+	f := buildFST(t, builder)
 
 	iter := f.Iterator()
 	count := 0

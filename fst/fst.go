@@ -1,21 +1,21 @@
 package fst
 
 import (
-	"encoding/binary"
 	"fmt"
-	"io"
+
+	"gosearch/store"
 )
 
 // Arc flag bits
 const (
-	bitFinalArc byte = 0x01 // this is a "final" accept arc (no label, no target)
-	bitLastArc  byte = 0x02 // last arc of this node
+	bitFinalArc  byte = 0x01 // this is a "final" accept arc (no label, no target)
+	bitLastArc   byte = 0x02 // last arc of this node
 	bitHasOutput byte = 0x10 // arc carries an output
 )
 
 // FST is a read-only finite state transducer mapping []byte keys to uint64 outputs.
 type FST struct {
-	data      []byte
+	input     store.DataInput
 	startNode int64
 }
 
@@ -32,23 +32,28 @@ type arcInfo struct {
 func (f *FST) readArcsAt(nodeAddr int64) []arcInfo {
 	var regular []arcInfo
 	var finalArc *arcInfo
-	pos := int(nodeAddr)
-	data := f.data
+	input := f.input
+
+	input.Seek(int(nodeAddr))
 
 	for {
-		if pos >= len(data) {
+		if input.Position() >= input.Length() {
 			break
 		}
 
-		flags := data[pos]
-		pos++
+		flags, err := input.ReadByte()
+		if err != nil {
+			break
+		}
 
 		if flags&bitFinalArc != 0 {
 			var finalOutput uint64
 			if flags&bitHasOutput != 0 {
-				val, n := binary.Uvarint(data[pos:])
+				val, err := input.ReadUvarint()
+				if err != nil {
+					break
+				}
 				finalOutput = val
-				pos += n
 			}
 			finalArc = &arcInfo{isFinal: true, output: finalOutput}
 			if flags&bitLastArc != 0 {
@@ -57,18 +62,24 @@ func (f *FST) readArcsAt(nodeAddr int64) []arcInfo {
 			continue
 		}
 
-		label := data[pos]
-		pos++
+		label, err := input.ReadByte()
+		if err != nil {
+			break
+		}
 
 		var arcOutput uint64
 		if flags&bitHasOutput != 0 {
-			val, n := binary.Uvarint(data[pos:])
+			val, err := input.ReadUvarint()
+			if err != nil {
+				break
+			}
 			arcOutput = val
-			pos += n
 		}
 
-		target, n := binary.Uvarint(data[pos:])
-		pos += n
+		target, err := input.ReadUvarint()
+		if err != nil {
+			break
+		}
 
 		regular = append(regular, arcInfo{
 			label:  label,
@@ -93,7 +104,7 @@ func (f *FST) readArcsAt(nodeAddr int64) []arcInfo {
 // Get performs an exact lookup for the given key.
 // Returns the output value and true if found, or (0, false) if not found.
 func (f *FST) Get(key []byte) (uint64, bool) {
-	if len(f.data) == 0 {
+	if f.input.Length() == 0 {
 		return 0, false
 	}
 
@@ -127,39 +138,31 @@ func (f *FST) Get(key []byte) (uint64, bool) {
 	return 0, false
 }
 
-// WriteTo serializes the FST to the given writer.
+
+// FSTFromInput creates an FST from a MMapIndexInput containing the serialized FST.
 // Format: [startNode: int64][dataLen: uint32][data: bytes]
-func (f *FST) WriteTo(w io.Writer) (int64, error) {
-	var header [12]byte
-	binary.LittleEndian.PutUint64(header[0:8], uint64(f.startNode))
-	binary.LittleEndian.PutUint32(header[8:12], uint32(len(f.data)))
-	n1, err := w.Write(header[:])
+// The input should be positioned at the start and sized to the full serialized FST.
+func FSTFromInput(input *store.MMapIndexInput) (*FST, error) {
+	if input.Length() < 12 {
+		return nil, fmt.Errorf("FST input too short: %d", input.Length())
+	}
+	startNode, err := input.ReadUint64At(0)
 	if err != nil {
-		return int64(n1), err
+		return nil, err
 	}
-	n2, err := w.Write(f.data)
-	return int64(n1 + n2), err
-}
-
-
-// FSTFromBytes creates an FST from raw bytes (as stored in a .tidx file).
-// Format: [startNode: int64][dataLen: uint32][data: bytes]
-func FSTFromBytes(b []byte) (*FST, error) {
-	if len(b) < 12 {
-		return nil, fmt.Errorf("FST bytes too short: %d", len(b))
+	dataLen, err := input.ReadUint32At(8)
+	if err != nil {
+		return nil, err
 	}
-	startNode := int64(binary.LittleEndian.Uint64(b[0:8]))
-	dataLen := int(binary.LittleEndian.Uint32(b[8:12]))
-	if 12+dataLen > len(b) {
-		return nil, fmt.Errorf("FST data truncated: need %d, have %d", 12+dataLen, len(b))
+	if 12+int(dataLen) > input.Length() {
+		return nil, fmt.Errorf("FST data truncated: need %d, have %d", 12+int(dataLen), input.Length())
+	}
+	dataInput, err := input.Slice(12, int(dataLen))
+	if err != nil {
+		return nil, err
 	}
 	return &FST{
-		data:      b[12 : 12+dataLen],
-		startNode: startNode,
+		input:     dataInput,
+		startNode: int64(startNode),
 	}, nil
-}
-
-// SerializedSize returns the total size in bytes when serialized.
-func (f *FST) SerializedSize() int {
-	return 12 + len(f.data) // 8 (startNode) + 4 (dataLen) + data
 }
