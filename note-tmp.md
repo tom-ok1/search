@@ -94,31 +94,10 @@ foxに対して同じことをする
 
 ---
 
-fsDirectory では毎回syscallしてfileからユーザー空間にメモリをマップしているけど、Mmapして参照更新すればsyscallのオーバーヘッドを減らせる
-
----
-
 https://github.com/tom-ok1/search/blob/00374405496fca20e7ae49ab5311cf9c91d45211/search/searcher.go#L22
 ここではsearcherはqueryを使っていないけど、使うべきなので直さないと
-
-https://github.com/tom-ok1/search/blob/00374405496fca20e7ae49ab5311cf9c91d45211/index/writer.go#L12
-ここをDiskSegmentにして、newするときには元のファイルからも読み込む
-またFlushのときにInmemoryもDiskに変換して書き出す
-
-https://github.com/tom-ok1/search/blob/00374405496fca20e7ae49ab5311cf9c91d45211/index/segment.go#L376
-実際LuceneではFSTを使っているのであとで移行したい
-
-https://github.com/tom-ok1/search/blob/00374405496fca20e7ae49ab5311cf9c91d45211/index/segment.go#L245-L256
-毎回、mmap参照して削除をチェックしているけどlivedocはmemory上で管理して、削除のたびにmmapに書き込むようにすれば、削除チェックのオーバーヘッドを減らせるかもしれない、Luceneの実行を参考にしたい
-
-bufferの削除ドキュメントの強制Flushは必要
-
-> さらに IndexWriter には “buffered deletes が閾値に達したら既存セグメントへ適用する” という仕組みもあります（少なくとも 6.x 系の Javadoc に明記）。
-> flush 自体は「メモリ内セグメントを Directory に出すが commit(fsync)はしない」です。
 
 差異2: ReaderPool / ReadersAndUpdatesのライフサイクル
 Lucene: ReaderPool が ReadersAndUpdates をキャッシュし、参照カウントで管理。NRTリーダー・マージ・検索間で共有される。コミット後もプールは維持される。
 
 gosearch: Commit() の最後で readerMap をクリアし、全 DiskSegment のmmapを閉じる。次の読み込み時にまた開き直す必要がある。
-
-- 過去のdirから復帰する実装

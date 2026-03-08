@@ -968,6 +968,179 @@ func TestNewWriterCleansUpStalePendingFiles(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Tests for Merge
+// ---------------------------------------------------------------------------
+
+func TestForceMergeToOneSegment(t *testing.T) {
+	analyzer := analysis.NewAnalyzer(
+		analysis.NewWhitespaceTokenizer(),
+		&analysis.LowerCaseFilter{},
+	)
+	dir, _ := store.NewFSDirectory(t.TempDir())
+	writer := NewIndexWriter(dir, analyzer, 2)
+
+	// Create 3 segments
+	for _, text := range []string{"hello world", "hello go", "world go"} {
+		doc := document.NewDocument()
+		doc.AddField("body", text, document.FieldTypeText)
+		writer.AddDocument(doc)
+	}
+	writer.Flush()
+
+	if len(writer.segmentInfos.Segments) < 2 {
+		t.Fatalf("expected at least 2 segments before merge, got %d", len(writer.segmentInfos.Segments))
+	}
+
+	if err := writer.ForceMerge(1); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(writer.segmentInfos.Segments) != 1 {
+		t.Errorf("expected 1 segment after ForceMerge(1), got %d", len(writer.segmentInfos.Segments))
+	}
+
+	// Verify search results are correct after merge
+	reader, err := OpenNRTReader(writer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+
+	if reader.TotalDocCount() != 3 {
+		t.Errorf("TotalDocCount: got %d, want 3", reader.TotalDocCount())
+	}
+
+	seg := reader.Leaves()[0].Segment
+	if seg.DocFreq("body", "hello") != 2 {
+		t.Errorf("DocFreq 'hello': got %d, want 2", seg.DocFreq("body", "hello"))
+	}
+	if seg.DocFreq("body", "world") != 2 {
+		t.Errorf("DocFreq 'world': got %d, want 2", seg.DocFreq("body", "world"))
+	}
+	if seg.DocFreq("body", "go") != 2 {
+		t.Errorf("DocFreq 'go': got %d, want 2", seg.DocFreq("body", "go"))
+	}
+}
+
+func TestForceMergeWithDeletions(t *testing.T) {
+	analyzer := analysis.NewAnalyzer(
+		analysis.NewWhitespaceTokenizer(),
+		&analysis.LowerCaseFilter{},
+	)
+	dir, _ := store.NewFSDirectory(t.TempDir())
+	writer := NewIndexWriter(dir, analyzer, 2)
+
+	// Add 3 docs across 2 segments
+	doc0 := document.NewDocument()
+	doc0.AddField("id", "1", document.FieldTypeKeyword)
+	doc0.AddField("body", "hello world", document.FieldTypeText)
+	writer.AddDocument(doc0)
+
+	doc1 := document.NewDocument()
+	doc1.AddField("id", "2", document.FieldTypeKeyword)
+	doc1.AddField("body", "hello go", document.FieldTypeText)
+	writer.AddDocument(doc1) // auto-flush
+
+	doc2 := document.NewDocument()
+	doc2.AddField("id", "3", document.FieldTypeKeyword)
+	doc2.AddField("body", "world go", document.FieldTypeText)
+	writer.AddDocument(doc2)
+	writer.Flush()
+
+	// Delete doc with id=1
+	writer.DeleteDocuments("id", "1")
+
+	if err := writer.ForceMerge(1); err != nil {
+		t.Fatal(err)
+	}
+
+	reader, err := OpenNRTReader(writer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+
+	// After merge, deleted doc should be physically removed
+	if reader.TotalDocCount() != 2 {
+		t.Errorf("TotalDocCount after merge: got %d, want 2", reader.TotalDocCount())
+	}
+	if reader.LiveDocCount() != 2 {
+		t.Errorf("LiveDocCount after merge: got %d, want 2", reader.LiveDocCount())
+	}
+}
+
+func TestMaybeMergeWithTieredPolicy(t *testing.T) {
+	analyzer := analysis.NewAnalyzer(
+		analysis.NewWhitespaceTokenizer(),
+		&analysis.LowerCaseFilter{},
+	)
+	dir, _ := store.NewFSDirectory(t.TempDir())
+	writer := NewIndexWriter(dir, analyzer, 1) // flush every doc
+
+	// Create many small segments to trigger merge
+	for i := 0; i < 15; i++ {
+		doc := document.NewDocument()
+		doc.AddField("body", fmt.Sprintf("term%d common", i), document.FieldTypeText)
+		writer.AddDocument(doc) // auto-flush
+	}
+	writer.Flush()
+
+	policy := NewTieredMergePolicy()
+	policy.SegmentsPerTier = 5
+	policy.MaxMergeAtOnce = 5
+
+	segsBefore := len(writer.segmentInfos.Segments)
+
+	if err := writer.MaybeMerge(policy); err != nil {
+		t.Fatal(err)
+	}
+
+	segsAfter := len(writer.segmentInfos.Segments)
+	if segsAfter >= segsBefore {
+		t.Errorf("expected fewer segments after MaybeMerge: before=%d, after=%d",
+			segsBefore, segsAfter)
+	}
+}
+
+func TestForceMergeAndCommit(t *testing.T) {
+	analyzer := analysis.NewAnalyzer(
+		analysis.NewWhitespaceTokenizer(),
+		&analysis.LowerCaseFilter{},
+	)
+	dir, _ := store.NewFSDirectory(t.TempDir())
+	writer := NewIndexWriter(dir, analyzer, 2)
+
+	for _, text := range []string{"hello world", "hello go", "world go"} {
+		doc := document.NewDocument()
+		doc.AddField("body", text, document.FieldTypeText)
+		writer.AddDocument(doc)
+	}
+	writer.Flush()
+
+	if err := writer.ForceMerge(1); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	writer.Close()
+
+	// Reopen and verify
+	reader, err := OpenDirectoryReader(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+
+	if reader.TotalDocCount() != 3 {
+		t.Errorf("TotalDocCount after commit: got %d, want 3", reader.TotalDocCount())
+	}
+	if len(reader.Leaves()) != 1 {
+		t.Errorf("expected 1 segment after ForceMerge+Commit, got %d", len(reader.Leaves()))
+	}
+}
+
 func TestCommitPreservesCurrentSegmentFiles(t *testing.T) {
 	analyzer := analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),

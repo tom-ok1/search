@@ -128,7 +128,7 @@ func TestRoundtrip(t *testing.T) {
 	}
 
 	// Deserialize
-	f2, err := ReadFST(&buf)
+	f2, err := FSTFromBytes(buf.Bytes())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,20 +142,6 @@ func TestRoundtrip(t *testing.T) {
 		}
 		if got != uint64(i) {
 			t.Errorf("after roundtrip: Get(%q)=%d, want %d", k, got, i)
-		}
-	}
-
-	// Also test FSTFromBytes
-	var buf2 bytes.Buffer
-	f.WriteTo(&buf2) //nolint:errcheck
-	f3, err := FSTFromBytes(buf2.Bytes())
-	if err != nil {
-		t.Fatal(err)
-	}
-	for i, k := range sorted {
-		got, ok := f3.Get([]byte(k))
-		if !ok || got != uint64(i) {
-			t.Errorf("FSTFromBytes: Get(%q)=(%d, %v), want (%d, true)", k, got, ok, i)
 		}
 	}
 	_ = keys

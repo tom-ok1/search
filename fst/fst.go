@@ -19,6 +19,77 @@ type FST struct {
 	startNode int64
 }
 
+// arcInfo describes a single arc in a node.
+type arcInfo struct {
+	label   byte
+	output  uint64
+	target  int64
+	isFinal bool
+}
+
+// readArcsAt reads all arcs at the given node address.
+// Final arcs are placed first so that iterators emit shorter keys before longer ones.
+func (f *FST) readArcsAt(nodeAddr int64) []arcInfo {
+	var regular []arcInfo
+	var finalArc *arcInfo
+	pos := int(nodeAddr)
+	data := f.data
+
+	for {
+		if pos >= len(data) {
+			break
+		}
+
+		flags := data[pos]
+		pos++
+
+		if flags&bitFinalArc != 0 {
+			var finalOutput uint64
+			if flags&bitHasOutput != 0 {
+				val, n := binary.Uvarint(data[pos:])
+				finalOutput = val
+				pos += n
+			}
+			finalArc = &arcInfo{isFinal: true, output: finalOutput}
+			if flags&bitLastArc != 0 {
+				break
+			}
+			continue
+		}
+
+		label := data[pos]
+		pos++
+
+		var arcOutput uint64
+		if flags&bitHasOutput != 0 {
+			val, n := binary.Uvarint(data[pos:])
+			arcOutput = val
+			pos += n
+		}
+
+		target, n := binary.Uvarint(data[pos:])
+		pos += n
+
+		regular = append(regular, arcInfo{
+			label:  label,
+			output: arcOutput,
+			target: int64(target),
+		})
+
+		if flags&bitLastArc != 0 {
+			break
+		}
+	}
+
+	// Final arc first, then regular arcs in label order
+	var arcs []arcInfo
+	if finalArc != nil {
+		arcs = append(arcs, *finalArc)
+	}
+	arcs = append(arcs, regular...)
+	return arcs
+}
+
 // Get performs an exact lookup for the given key.
 // Returns the output value and true if found, or (0, false) if not found.
 func (f *FST) Get(key []byte) (uint64, bool) {
@@ -30,111 +101,30 @@ func (f *FST) Get(key []byte) (uint64, bool) {
 	nodeAddr := f.startNode
 
 	for _, b := range key {
-		found, arcOutput, target, _ := f.findArc(nodeAddr, b)
+		arcs := f.readArcsAt(nodeAddr)
+		found := false
+		for _, arc := range arcs {
+			if !arc.isFinal && arc.label == b {
+				output = outputAdd(output, arc.output)
+				nodeAddr = arc.target
+				found = true
+				break
+			}
+		}
 		if !found {
 			return 0, false
 		}
-		output = outputAdd(output, arcOutput)
-		nodeAddr = target
 	}
 
 	// Check if current node is final (has a final arc)
-	finalOutput, isFinal := f.findFinalArc(nodeAddr)
-	if !isFinal {
-		return 0, false
-	}
-	output = outputAdd(output, finalOutput)
-	return output, true
-}
-
-// findArc scans the arcs at nodeAddr for the given label.
-// Returns (found, output, targetAddr, isFinal).
-func (f *FST) findArc(nodeAddr int64, label byte) (bool, uint64, int64, bool) {
-	pos := int(nodeAddr)
-
-	for {
-		if pos >= len(f.data) {
-			return false, 0, 0, false
-		}
-
-		flags := f.data[pos]
-		pos++
-
-		if flags&bitFinalArc != 0 {
-			// Final arc — skip output if present, then check if last
-			if flags&bitHasOutput != 0 {
-				_, n := binary.Uvarint(f.data[pos:])
-				pos += n
-			}
-			if flags&bitLastArc != 0 {
-				return false, 0, 0, false
-			}
-			continue
-		}
-
-		arcLabel := f.data[pos]
-		pos++
-
-		var arcOutput uint64
-		if flags&bitHasOutput != 0 {
-			val, n := binary.Uvarint(f.data[pos:])
-			arcOutput = val
-			pos += n
-		}
-
-		// Read target address
-		target, n := binary.Uvarint(f.data[pos:])
-		pos += n
-
-		if arcLabel == label {
-			return true, arcOutput, int64(target), false
-		}
-
-		if flags&bitLastArc != 0 {
-			return false, 0, 0, false
+	arcs := f.readArcsAt(nodeAddr)
+	for _, arc := range arcs {
+		if arc.isFinal {
+			output = outputAdd(output, arc.output)
+			return output, true
 		}
 	}
-}
-
-// findFinalArc checks if the node at nodeAddr has a final arc.
-// Returns (finalOutput, isFinal).
-func (f *FST) findFinalArc(nodeAddr int64) (uint64, bool) {
-	pos := int(nodeAddr)
-
-	for {
-		if pos >= len(f.data) {
-			return 0, false
-		}
-
-		flags := f.data[pos]
-		pos++
-
-		if flags&bitFinalArc != 0 {
-			var finalOutput uint64
-			if flags&bitHasOutput != 0 {
-				val, _ := binary.Uvarint(f.data[pos:])
-				finalOutput = val
-			}
-			return finalOutput, true
-		}
-
-		// Skip label
-		pos++
-
-		// Skip output
-		if flags&bitHasOutput != 0 {
-			_, n := binary.Uvarint(f.data[pos:])
-			pos += n
-		}
-
-		// Skip target
-		_, n := binary.Uvarint(f.data[pos:])
-		pos += n
-
-		if flags&bitLastArc != 0 {
-			return 0, false
-		}
-	}
+	return 0, false
 }
 
 // WriteTo serializes the FST to the given writer.
@@ -151,25 +141,6 @@ func (f *FST) WriteTo(w io.Writer) (int64, error) {
 	return int64(n1 + n2), err
 }
 
-// ReadFST deserializes an FST from the given reader.
-func ReadFST(r io.Reader) (*FST, error) {
-	var header [12]byte
-	if _, err := io.ReadFull(r, header[:]); err != nil {
-		return nil, fmt.Errorf("read FST header: %w", err)
-	}
-	startNode := int64(binary.LittleEndian.Uint64(header[0:8]))
-	dataLen := binary.LittleEndian.Uint32(header[8:12])
-
-	data := make([]byte, dataLen)
-	if _, err := io.ReadFull(r, data); err != nil {
-		return nil, fmt.Errorf("read FST data: %w", err)
-	}
-
-	return &FST{
-		data:      data,
-		startNode: startNode,
-	}, nil
-}
 
 // FSTFromBytes creates an FST from raw bytes (as stored in a .tidx file).
 // Format: [startNode: int64][dataLen: uint32][data: bytes]

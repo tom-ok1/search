@@ -1,0 +1,219 @@
+package fst
+
+import (
+	"fmt"
+	"testing"
+)
+
+func TestFSTIterator(t *testing.T) {
+	// Build an FST with sorted keys and distinct outputs
+	keys := []string{"ant", "app", "apple", "bat", "car"}
+	outputs := []uint64{1, 2, 3, 4, 5}
+
+	builder := NewBuilder()
+	for i, key := range keys {
+		if err := builder.Add([]byte(key), outputs[i]); err != nil {
+			t.Fatalf("Add(%q): %v", key, err)
+		}
+	}
+	f, err := builder.Finish()
+	if err != nil {
+		t.Fatalf("Finish: %v", err)
+	}
+
+	// Iterate and collect all entries
+	iter := f.Iterator()
+	var gotKeys []string
+	var gotOutputs []uint64
+	for iter.Next() {
+		gotKeys = append(gotKeys, string(iter.Key()))
+		gotOutputs = append(gotOutputs, iter.Value())
+	}
+
+	// Verify count
+	if len(gotKeys) != len(keys) {
+		t.Fatalf("got %d keys, want %d", len(gotKeys), len(keys))
+	}
+
+	// Verify order and values
+	for i := range keys {
+		if gotKeys[i] != keys[i] {
+			t.Errorf("key[%d] = %q, want %q", i, gotKeys[i], keys[i])
+		}
+		if gotOutputs[i] != outputs[i] {
+			t.Errorf("output[%d] = %d, want %d", i, gotOutputs[i], outputs[i])
+		}
+	}
+}
+
+func TestFSTIteratorSingleKey(t *testing.T) {
+	builder := NewBuilder()
+	if err := builder.Add([]byte("hello"), 42); err != nil {
+		t.Fatal(err)
+	}
+	f, err := builder.Finish()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	iter := f.Iterator()
+	if !iter.Next() {
+		t.Fatal("expected at least one entry")
+	}
+	if got := string(iter.Key()); got != "hello" {
+		t.Errorf("key = %q, want %q", got, "hello")
+	}
+	if got := iter.Value(); got != 42 {
+		t.Errorf("value = %d, want %d", got, 42)
+	}
+	if iter.Next() {
+		t.Error("expected no more entries")
+	}
+}
+
+func TestFSTIteratorSequentialOutputs(t *testing.T) {
+	// This mirrors the typical usage: ordinal-based outputs (0, 1, 2, ...)
+	keys := []string{"a", "b", "c", "d", "e"}
+
+	builder := NewBuilder()
+	for i, key := range keys {
+		if err := builder.Add([]byte(key), uint64(i)); err != nil {
+			t.Fatalf("Add(%q): %v", key, err)
+		}
+	}
+	f, err := builder.Finish()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	iter := f.Iterator()
+	i := 0
+	for iter.Next() {
+		if got := string(iter.Key()); got != keys[i] {
+			t.Errorf("key[%d] = %q, want %q", i, got, keys[i])
+		}
+		if got := iter.Value(); got != uint64(i) {
+			t.Errorf("output[%d] = %d, want %d", i, got, i)
+		}
+		i++
+	}
+	if i != len(keys) {
+		t.Errorf("iterated %d keys, want %d", i, len(keys))
+	}
+}
+
+func TestFSTIteratorSharedPrefixes(t *testing.T) {
+	// Keys with heavy prefix sharing
+	keys := []string{"test", "testa", "testb", "testing", "tests"}
+	outputs := []uint64{10, 20, 30, 40, 50}
+
+	builder := NewBuilder()
+	for i, key := range keys {
+		if err := builder.Add([]byte(key), outputs[i]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f, err := builder.Finish()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	iter := f.Iterator()
+	var gotKeys []string
+	var gotOutputs []uint64
+	for iter.Next() {
+		gotKeys = append(gotKeys, string(iter.Key()))
+		gotOutputs = append(gotOutputs, iter.Value())
+	}
+
+	if len(gotKeys) != len(keys) {
+		t.Fatalf("got %d keys, want %d\ngotKeys: %v", len(gotKeys), len(keys), gotKeys)
+	}
+
+	for i := range keys {
+		if gotKeys[i] != keys[i] {
+			t.Errorf("key[%d] = %q, want %q", i, gotKeys[i], keys[i])
+		}
+		if gotOutputs[i] != outputs[i] {
+			t.Errorf("output[%d] = %d, want %d", i, gotOutputs[i], outputs[i])
+		}
+	}
+}
+
+func TestFSTIteratorConsistentWithGet(t *testing.T) {
+	keys := []string{"alpha", "beta", "gamma", "delta"}
+	// Sort keys for FST builder
+	sortedKeys := []string{"alpha", "beta", "delta", "gamma"}
+	outputs := []uint64{100, 200, 300, 400}
+
+	builder := NewBuilder()
+	for i, key := range sortedKeys {
+		if err := builder.Add([]byte(key), outputs[i]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f, err := builder.Finish()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify iterator results match Get() lookups
+	iter := f.Iterator()
+	for iter.Next() {
+		key := iter.Key()
+		iterVal := iter.Value()
+		getVal, found := f.Get(key)
+		if !found {
+			t.Errorf("Get(%q) not found, but iterator yielded it", key)
+			continue
+		}
+		if getVal != iterVal {
+			t.Errorf("Get(%q) = %d, iterator = %d", key, getVal, iterVal)
+		}
+	}
+
+	// Also verify Get for known keys
+	for i, key := range sortedKeys {
+		val, found := f.Get([]byte(key))
+		if !found {
+			t.Errorf("Get(%q) not found", key)
+		}
+		if val != outputs[i] {
+			t.Errorf("Get(%q) = %d, want %d", key, val, outputs[i])
+		}
+	}
+
+	_ = keys // unused, just for documentation
+}
+
+func TestFSTIteratorLargeDataset(t *testing.T) {
+	// Build FST with many keys to stress-test the iterator
+	n := 1000
+	builder := NewBuilder()
+	for i := 0; i < n; i++ {
+		key := fmt.Sprintf("key_%05d", i)
+		if err := builder.Add([]byte(key), uint64(i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f, err := builder.Finish()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	iter := f.Iterator()
+	count := 0
+	for iter.Next() {
+		expected := fmt.Sprintf("key_%05d", count)
+		if got := string(iter.Key()); got != expected {
+			t.Errorf("key[%d] = %q, want %q", count, got, expected)
+		}
+		if got := iter.Value(); got != uint64(count) {
+			t.Errorf("output[%d] = %d, want %d", count, got, count)
+		}
+		count++
+	}
+	if count != n {
+		t.Errorf("iterated %d keys, want %d", count, n)
+	}
+}

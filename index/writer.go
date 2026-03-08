@@ -343,6 +343,97 @@ func (w *IndexWriter) DeleteDocuments(field, term string) error {
 	return nil
 }
 
+// MaybeMerge runs the given merge policy and executes any suggested merges.
+func (w *IndexWriter) MaybeMerge(policy MergePolicy) error {
+	candidates := policy.FindMerges(w.segmentInfos.Segments)
+	for _, candidate := range candidates {
+		if err := w.executeMerge(candidate); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ForceMerge merges all segments into at most maxSegments segments.
+func (w *IndexWriter) ForceMerge(maxSegments int) error {
+	if err := w.Flush(); err != nil {
+		return err
+	}
+	if err := w.applyPendingDeletes(); err != nil {
+		return err
+	}
+
+	for len(w.segmentInfos.Segments) > maxSegments {
+		candidate := MergeCandidate{
+			Segments: make([]*SegmentCommitInfo, len(w.segmentInfos.Segments)),
+		}
+		copy(candidate.Segments, w.segmentInfos.Segments)
+		if err := w.executeMerge(candidate); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// executeMerge performs a single merge operation.
+func (w *IndexWriter) executeMerge(candidate MergeCandidate) error {
+	if len(candidate.Segments) < 2 {
+		return nil
+	}
+
+	// Build MergeInputs from RAUs
+	inputs := make([]MergeInput, len(candidate.Segments))
+	for i, info := range candidate.Segments {
+		rau := w.getOrCreateRAU(info)
+		reader, err := rau.getReader()
+		if err != nil {
+			return fmt.Errorf("open segment %s for merge: %w", info.Name, err)
+		}
+		pd := rau.pendingDeletes
+		inputs[i] = MergeInput{
+			Segment:   reader,
+			IsDeleted: pd.IsDeleted,
+		}
+	}
+
+	// Merge and write directly to disk (streaming).
+	newName := w.nextSegmentName()
+	result, err := MergeSegmentsToDisk(w.dir, inputs, newName)
+	if err != nil {
+		return fmt.Errorf("merge segments: %w", err)
+	}
+
+	newInfo := &SegmentCommitInfo{
+		Name:   newName,
+		MaxDoc: result.DocCount,
+		Fields: result.Fields,
+		Files:  result.Files,
+	}
+
+	// Remove merged segments from segmentInfos and close their RAUs
+	mergedNames := make(map[string]bool)
+	for _, info := range candidate.Segments {
+		mergedNames[info.Name] = true
+	}
+
+	var remaining []*SegmentCommitInfo
+	for _, info := range w.segmentInfos.Segments {
+		if mergedNames[info.Name] {
+			if rau, ok := w.readerMap[info.Name]; ok {
+				rau.Close()
+				delete(w.readerMap, info.Name)
+			}
+			continue
+		}
+		remaining = append(remaining, info)
+	}
+	remaining = append(remaining, newInfo)
+	w.segmentInfos.Segments = remaining
+	w.segmentInfos.Version++
+
+	return nil
+}
+
 // Close releases all resources held by the IndexWriter.
 // All RAUs (and their underlying DiskSegments) are closed here.
 func (w *IndexWriter) Close() error {
