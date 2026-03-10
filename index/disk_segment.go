@@ -8,17 +8,6 @@ import (
 	"os"
 )
 
-// SegmentMeta holds segment metadata persisted as JSON.
-type SegmentMeta struct {
-	Name     string   `json:"name"`
-	DocCount int      `json:"doc_count"`
-	Fields   []string `json:"fields"`
-}
-
-// ---------------------------------------------------------------------------
-// DiskSegment (mmap-based)
-// ---------------------------------------------------------------------------
-
 // DiskSegment is a mmap-based lazy-loading SegmentReader.
 // Only lightweight metadata is held in memory; all data is accessed
 // via mmap'd files and decoded on demand.
@@ -326,45 +315,6 @@ func (ds *DiskSegment) lookupTerm(tidx *store.MMapIndexInput, termFST *fst.FST, 
 // Fields returns the list of indexed fields.
 func (ds *DiskSegment) Fields() []string {
 	return ds.fieldList
-}
-
-// TermIterator iterates over all terms in a single field of a DiskSegment.
-type TermIterator struct {
-	fstIter *fst.FSTIterator
-	term    string
-	ordinal int
-}
-
-// TermIterator returns an iterator over all terms for the given field.
-// Returns nil if the field does not exist.
-func (ds *DiskSegment) TermIterator(field string) *TermIterator {
-	termFST := ds.termFSTs[field]
-	if termFST == nil {
-		return nil
-	}
-	return &TermIterator{
-		fstIter: termFST.Iterator(),
-	}
-}
-
-// Next advances to the next term. Returns false when exhausted.
-func (it *TermIterator) Next() bool {
-	if it.fstIter.Next() {
-		it.term = string(it.fstIter.Key())
-		it.ordinal = int(it.fstIter.Value())
-		return true
-	}
-	return false
-}
-
-// Term returns the current term string.
-func (it *TermIterator) Term() string {
-	return it.term
-}
-
-// Ordinal returns the current term's ordinal (FST output).
-func (it *TermIterator) Ordinal() int {
-	return it.ordinal
 }
 
 // Compile-time check: DiskSegment implements SegmentReader.
