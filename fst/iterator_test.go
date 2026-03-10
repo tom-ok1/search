@@ -10,7 +10,7 @@ func TestFSTIterator(t *testing.T) {
 	keys := []string{"ant", "app", "apple", "bat", "car"}
 	outputs := []uint64{1, 2, 3, 4, 5}
 
-	builder := NewBuilder()
+	builder := newTestBuilder()
 	for i, key := range keys {
 		if err := builder.Add([]byte(key), outputs[i]); err != nil {
 			t.Fatalf("Add(%q): %v", key, err)
@@ -44,7 +44,7 @@ func TestFSTIterator(t *testing.T) {
 }
 
 func TestFSTIteratorSingleKey(t *testing.T) {
-	builder := NewBuilder()
+	builder := newTestBuilder()
 	if err := builder.Add([]byte("hello"), 42); err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +69,7 @@ func TestFSTIteratorSequentialOutputs(t *testing.T) {
 	// This mirrors the typical usage: ordinal-based outputs (0, 1, 2, ...)
 	keys := []string{"a", "b", "c", "d", "e"}
 
-	builder := NewBuilder()
+	builder := newTestBuilder()
 	for i, key := range keys {
 		if err := builder.Add([]byte(key), uint64(i)); err != nil {
 			t.Fatalf("Add(%q): %v", key, err)
@@ -98,7 +98,7 @@ func TestFSTIteratorSharedPrefixes(t *testing.T) {
 	keys := []string{"test", "testa", "testb", "testing", "tests"}
 	outputs := []uint64{10, 20, 30, 40, 50}
 
-	builder := NewBuilder()
+	builder := newTestBuilder()
 	for i, key := range keys {
 		if err := builder.Add([]byte(key), outputs[i]); err != nil {
 			t.Fatal(err)
@@ -132,7 +132,7 @@ func TestFSTIteratorConsistentWithGet(t *testing.T) {
 	sortedKeys := []string{"alpha", "beta", "delta", "gamma"}
 	outputs := []uint64{100, 200, 300, 400}
 
-	builder := NewBuilder()
+	builder := newTestBuilder()
 	for i, key := range sortedKeys {
 		if err := builder.Add([]byte(key), outputs[i]); err != nil {
 			t.Fatal(err)
@@ -171,7 +171,7 @@ func TestFSTIteratorConsistentWithGet(t *testing.T) {
 func TestFSTIteratorLargeDataset(t *testing.T) {
 	// Build FST with many keys to stress-test the iterator
 	n := 1000
-	builder := NewBuilder()
+	builder := newTestBuilder()
 	for i := 0; i < n; i++ {
 		key := fmt.Sprintf("key_%05d", i)
 		if err := builder.Add([]byte(key), uint64(i)); err != nil {

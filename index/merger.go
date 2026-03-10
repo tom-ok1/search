@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 
+	"gosearch/fst"
 	"gosearch/store"
 )
 
@@ -108,6 +109,7 @@ func MergeSegmentsToDisk(dir store.Directory, inputs []MergeInput, newName strin
 		}
 		files = append(files,
 			fmt.Sprintf("%s.%s.tidx", newName, field),
+			fmt.Sprintf("%s.%s.tfst", newName, field),
 			fmt.Sprintf("%s.%s.tdat", newName, field),
 		)
 	}
@@ -155,13 +157,27 @@ func mergeFieldPostingsToDisk(
 	}
 	heap.Init(&h)
 
-	// Open .tdat file for streaming writes.
+	// Open .tdat and .tidx files for streaming writes.
 	tdatOut, err := dir.CreateOutput(fmt.Sprintf("%s.%s.tdat", segName, field))
 	if err != nil {
 		return err
 	}
+	tidxOut, err := dir.CreateOutput(fmt.Sprintf("%s.%s.tidx", segName, field))
+	if err != nil {
+		tdatOut.Close()
+		return err
+	}
 
-	var metas []termMeta
+	// Open .tfst for streaming FST writes.
+	tfstOut, err := dir.CreateOutput(fmt.Sprintf("%s.%s.tfst", segName, field))
+	if err != nil {
+		tdatOut.Close()
+		tidxOut.Close()
+		return err
+	}
+
+	fstBuilder := fst.NewBuilderWithWriter(tfstOut)
+	var ordinal uint64
 	var globalOffset uint64
 	var postings []Posting
 	termBuf := &bytes.Buffer{}
@@ -213,18 +229,31 @@ func mergeFieldPostingsToDisk(
 		length := uint32(termBuf.Len())
 		tdatOut.Write(termBuf.Bytes())
 
-		metas = append(metas, termMeta{
-			term:           currentTerm,
-			docFreq:        len(postings),
-			postingsOffset: globalOffset,
-			postingsLength: length,
-		})
+		// Stream metadata to .tidx
+		tidxOut.WriteUint32(uint32(len(postings)))
+		tidxOut.WriteUint64(globalOffset)
+		tidxOut.WriteUint32(length)
+
+		if err := fstBuilder.Add([]byte(currentTerm), ordinal); err != nil {
+			tdatOut.Close()
+			tidxOut.Close()
+			tfstOut.Close()
+			return fmt.Errorf("fst build: %w", err)
+		}
+		ordinal++
 		globalOffset += uint64(length)
 	}
 
 	tdatOut.Close()
+	tidxOut.Close()
 
-	return writeTermIndex(dir, segName, field, metas)
+	// Finish writes the trailer to .tfst.
+	if err := fstBuilder.Finish(); err != nil {
+		tfstOut.Close()
+		return fmt.Errorf("fst finish: %w", err)
+	}
+	tfstOut.Close()
+	return nil
 }
 
 // termHeapEntry holds a term iterator for one segment in the k-way merge.

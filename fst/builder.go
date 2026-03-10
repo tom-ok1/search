@@ -1,18 +1,60 @@
 package fst
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
+	"io"
 )
+
+const defaultNodeMapLimit = 100000
 
 // Builder constructs an FST incrementally from keys added in sorted order.
 // This follows the algorithm from Mihov & Maurel, as used in Lucene's FSTCompiler.
+// Compiled node bytes are streamed directly to the provided io.Writer.
 type Builder struct {
 	frontier []*uncompiledNode
-	buf      []byte // compiled node bytes (nodes appended sequentially)
+	w        io.Writer
+	written  int64 // bytes written to w so far
 	lastKey  []byte
-	nodeMap  map[uint64]int64 // hash → address for suffix sharing
+	cache    nodeCache
 	count    int
+	scratch  [1]byte // reusable buffer for emitByte to avoid allocation
+}
+
+// nodeCache is a fixed-capacity FIFO cache mapping node hashes to compiled addresses.
+// When full, the oldest entry is evicted via a ring buffer of keys.
+type nodeCache struct {
+	m      map[uint64]int64
+	keys   []uint64 // ring buffer tracking insertion order
+	cursor int
+	limit  int
+}
+
+func newNodeCache(limit int) nodeCache {
+	return nodeCache{
+		m:     make(map[uint64]int64),
+		keys:  make([]uint64, limit),
+		limit: limit,
+	}
+}
+
+func (c *nodeCache) get(h uint64) (int64, bool) {
+	addr, ok := c.m[h]
+	return addr, ok
+}
+
+func (c *nodeCache) put(h uint64, addr int64) {
+	if _, exists := c.m[h]; exists {
+		c.m[h] = addr
+		return
+	}
+	if len(c.m) >= c.limit {
+		delete(c.m, c.keys[c.cursor])
+	}
+	c.m[h] = addr
+	c.keys[c.cursor] = h
+	c.cursor = (c.cursor + 1) % c.limit
 }
 
 type uncompiledNode struct {
@@ -48,10 +90,12 @@ func (n *uncompiledNode) clear() {
 	n.finalOutput = noOutput
 }
 
-// NewBuilder creates a new FST builder.
-func NewBuilder() *Builder {
+// NewBuilderWithWriter creates an FST builder that streams compiled node bytes
+// directly to w. This avoids holding the entire FST data buffer in memory.
+func NewBuilderWithWriter(w io.Writer) *Builder {
 	b := &Builder{
-		nodeMap: make(map[uint64]int64),
+		w:     w,
+		cache: newNodeCache(defaultNodeMapLimit),
 	}
 	b.frontier = append(b.frontier, newUncompiledNode())
 	return b
@@ -60,7 +104,7 @@ func NewBuilder() *Builder {
 // Add adds a key-value pair to the FST. Keys must be added in strictly sorted order.
 func (b *Builder) Add(key []byte, output uint64) error {
 	if b.count > 0 {
-		if compareBytes(key, b.lastKey) <= 0 {
+		if bytes.Compare(key, b.lastKey) <= 0 {
 			return fmt.Errorf("keys must be added in sorted order: %q <= %q", key, b.lastKey)
 		}
 	}
@@ -95,7 +139,7 @@ func (b *Builder) Add(key []byte, output uint64) error {
 }
 
 func (b *Builder) pushOutput(key []byte, output uint64, prefixLen int) {
-	for i := 0; i < prefixLen; i++ {
+	for i := range prefixLen {
 		arcIdx := b.frontier[i].numArcs - 1
 		existingOutput := b.frontier[i].outputs[arcIdx]
 
@@ -107,7 +151,7 @@ func (b *Builder) pushOutput(key []byte, output uint64, prefixLen int) {
 
 		if wordSuffix != noOutput {
 			next := b.frontier[i+1]
-			for j := 0; j < next.numArcs; j++ {
+			for j := range next.numArcs {
 				next.outputs[j] = outputAdd(next.outputs[j], wordSuffix)
 			}
 			if next.isFinal {
@@ -124,21 +168,24 @@ func (b *Builder) pushOutput(key []byte, output uint64, prefixLen int) {
 	}
 }
 
-// Finish compiles remaining nodes and returns the serialized FST bytes.
-// Format: [startNode: int64][dataLen: uint32][data: bytes]
-func (b *Builder) Finish() ([]byte, error) {
+// Finish compiles remaining nodes and writes the trailer to the writer.
+//
+// Trailer format: [data: bytes][startNode: int64][dataLen: uint32]
+func (b *Builder) Finish() error {
 	if b.count == 0 {
-		return nil, fmt.Errorf("cannot build empty FST")
+		return fmt.Errorf("cannot build empty FST")
 	}
 
 	b.freezeTail(0)
 	rootAddr := b.compileNode(b.frontier[0])
 
-	out := make([]byte, 12+len(b.buf))
-	binary.LittleEndian.PutUint64(out[0:8], uint64(rootAddr))
-	binary.LittleEndian.PutUint32(out[8:12], uint32(len(b.buf)))
-	copy(out[12:], b.buf)
-	return out, nil
+	var trailer [12]byte
+	binary.LittleEndian.PutUint64(trailer[0:8], uint64(rootAddr))
+	binary.LittleEndian.PutUint32(trailer[8:12], uint32(b.written))
+	if _, err := b.w.Write(trailer[:]); err != nil {
+		return fmt.Errorf("fst write trailer: %w", err)
+	}
+	return nil
 }
 
 func (b *Builder) freezeTail(downTo int) {
@@ -157,18 +204,19 @@ func (b *Builder) freezeTail(downTo int) {
 
 func (b *Builder) compileNode(node *uncompiledNode) int64 {
 	h := b.hashNode(node)
-	if addr, ok := b.nodeMap[h]; ok {
+	if addr, ok := b.cache.get(h); ok {
 		return addr
 	}
 
 	addr := b.writeNode(node)
-	b.nodeMap[h] = addr
+	b.cache.put(h, addr)
+
 	return addr
 }
 
 func (b *Builder) hashNode(node *uncompiledNode) uint64 {
 	var h uint64 = 17
-	for i := 0; i < node.numArcs; i++ {
+	for i := range node.numArcs {
 		h = h*31 + uint64(node.labels[i])
 		h = h*31 + node.outputs[i]
 		h = h*31 + uint64(node.targets[i])
@@ -180,28 +228,17 @@ func (b *Builder) hashNode(node *uncompiledNode) uint64 {
 	return h
 }
 
-// writeNode serializes a node to b.buf and returns the node's address
-// (the byte offset of the first arc).
-//
-// Arc format:
-//
-//	flags: 1 byte
-//	label: 1 byte (absent for final arcs)
-//	output: varint (only if BIT_HAS_OUTPUT)
-//	target: varint (only if regular arc and not BIT_STOP_NODE)
-//
-// For a node with arcs and isFinal, we write all regular arcs first,
-// then a final arc with BIT_FINAL_ARC | BIT_LAST_ARC.
+// writeNode serializes a node to the writer and returns the node's address.
 func (b *Builder) writeNode(node *uncompiledNode) int64 {
-	nodeStart := int64(len(b.buf))
+	nodeStart := b.written
 
 	totalArcs := node.numArcs
 	if node.isFinal {
-		totalArcs++ // +1 for the final arc
+		totalArcs++
 	}
 
 	arcIdx := 0
-	for i := 0; i < node.numArcs; i++ {
+	for i := range node.numArcs {
 		var flags byte
 		arcIdx++
 		if arcIdx == totalArcs {
@@ -212,15 +249,14 @@ func (b *Builder) writeNode(node *uncompiledNode) int64 {
 			flags |= bitHasOutput
 		}
 
-		b.buf = append(b.buf, flags)
-		b.buf = append(b.buf, node.labels[i])
+		b.emitByte(flags)
+		b.emitByte(node.labels[i])
 
 		if flags&bitHasOutput != 0 {
-			b.appendUvarint(node.outputs[i])
+			b.emitUvarint(node.outputs[i])
 		}
 
-		// Write target address
-		b.appendUvarint(uint64(node.targets[i]))
+		b.emitUvarint(uint64(node.targets[i]))
 	}
 
 	if node.isFinal {
@@ -228,35 +264,24 @@ func (b *Builder) writeNode(node *uncompiledNode) int64 {
 		if node.finalOutput != noOutput {
 			flags |= bitHasOutput
 		}
-		b.buf = append(b.buf, flags)
+		b.emitByte(flags)
 		if flags&bitHasOutput != 0 {
-			b.appendUvarint(node.finalOutput)
+			b.emitUvarint(node.finalOutput)
 		}
 	}
 
 	return nodeStart
 }
 
-func (b *Builder) appendUvarint(v uint64) {
-	var buf [binary.MaxVarintLen64]byte
-	n := binary.PutUvarint(buf[:], v)
-	b.buf = append(b.buf, buf[:n]...)
+func (b *Builder) emitByte(v byte) {
+	b.scratch[0] = v
+	b.w.Write(b.scratch[:])
+	b.written++
 }
 
-func compareBytes(a, b []byte) int {
-	for i := 0; i < len(a) && i < len(b); i++ {
-		if a[i] < b[i] {
-			return -1
-		}
-		if a[i] > b[i] {
-			return 1
-		}
-	}
-	if len(a) < len(b) {
-		return -1
-	}
-	if len(a) > len(b) {
-		return 1
-	}
-	return 0
+func (b *Builder) emitUvarint(v uint64) {
+	var buf [binary.MaxVarintLen64]byte
+	n := binary.PutUvarint(buf[:], v)
+	b.w.Write(buf[:n])
+	b.written += int64(n)
 }

@@ -15,7 +15,8 @@ import (
 //
 // Files written per segment:
 //   - {seg}.meta          — JSON metadata with format_version=2
-//   - {seg}.{field}.tidx  — sorted term index with offset table
+//   - {seg}.{field}.tidx  — term metadata array (16 bytes per term)
+//   - {seg}.{field}.tfst  — FST mapping term → ordinal
 //   - {seg}.{field}.tdat  — delta-encoded postings data
 //   - {seg}.{field}.flen  — fixed-width field lengths
 //   - {seg}.stored        — stored fields with doc offset table
@@ -38,7 +39,7 @@ func WriteSegmentV2(dir store.Directory, seg *InMemorySegment) ([]string, error)
 	}
 	files = append(files, metaFileName)
 
-	// 2. Write postings (tidx + tdat) for each field
+	// 2. Write postings (tidx + tfst + tdat) for each field
 	for _, fieldName := range meta.Fields {
 		fi := seg.fields[fieldName]
 		if err := writeFieldPostingsV2(dir, seg.name, fieldName, fi); err != nil {
@@ -46,6 +47,7 @@ func WriteSegmentV2(dir store.Directory, seg *InMemorySegment) ([]string, error)
 		}
 		files = append(files,
 			fmt.Sprintf("%s.%s.tidx", seg.name, fieldName),
+			fmt.Sprintf("%s.%s.tfst", seg.name, fieldName),
 			fmt.Sprintf("%s.%s.tdat", seg.name, fieldName),
 		)
 	}
@@ -66,14 +68,6 @@ func WriteSegmentV2(dir store.Directory, seg *InMemorySegment) ([]string, error)
 	}
 
 	return files, nil
-}
-
-// termMeta holds per-term metadata used when writing .tidx files.
-type termMeta struct {
-	term           string
-	docFreq        int
-	postingsOffset uint64
-	postingsLength uint32
 }
 
 // writePostingsToBuffer encodes a slice of postings using delta-encoding and
@@ -107,55 +101,6 @@ func writeSegmentMeta(dir store.Directory, meta SegmentMeta) (string, error) {
 	out.Write(metaBytes)
 	out.Close()
 	return fileName, nil
-}
-
-// writeTermIndexFile writes the .tdat file from the postings buffer and then
-// builds and writes the .tidx file from term metadata.
-func writeTermIndexFile(dir store.Directory, segName, field string, tdatBuf *bytes.Buffer, metas []termMeta) error {
-	// Write .tdat file.
-	tdatOut, err := dir.CreateOutput(fmt.Sprintf("%s.%s.tdat", segName, field))
-	if err != nil {
-		return err
-	}
-	tdatOut.Write(tdatBuf.Bytes())
-	tdatOut.Close()
-
-	return writeTermIndex(dir, segName, field, metas)
-}
-
-// writeTermIndex builds the FST and writes the .tidx file from term metadata.
-func writeTermIndex(dir store.Directory, segName, field string, metas []termMeta) error {
-	// Build FST: term → ordinal.
-	fstBuilder := fst.NewBuilder()
-	for i, tm := range metas {
-		if err := fstBuilder.Add([]byte(tm.term), uint64(i)); err != nil {
-			return fmt.Errorf("fst build: %w", err)
-		}
-	}
-	fstBytes, err := fstBuilder.Finish()
-	if err != nil {
-		return fmt.Errorf("fst finish: %w", err)
-	}
-
-	// Build .tidx: [fst_size][fst_bytes][term_count][term_metadata...].
-	tidxBuf := &bytes.Buffer{}
-	writeUint32ToBuffer(tidxBuf, uint32(len(fstBytes)))
-	tidxBuf.Write(fstBytes)
-	writeUint32ToBuffer(tidxBuf, uint32(len(metas)))
-	for _, tm := range metas {
-		writeUint32ToBuffer(tidxBuf, uint32(tm.docFreq))
-		writeUint64ToBuffer(tidxBuf, tm.postingsOffset)
-		writeUint32ToBuffer(tidxBuf, tm.postingsLength)
-	}
-
-	tidxOut, err := dir.CreateOutput(fmt.Sprintf("%s.%s.tidx", segName, field))
-	if err != nil {
-		return err
-	}
-	tidxOut.Write(tidxBuf.Bytes())
-	tidxOut.Close()
-
-	return nil
 }
 
 // writeStoredFieldsFromMap writes stored fields using the trailer format.
@@ -209,18 +154,19 @@ func writeStoredFieldsEntry(out store.IndexOutput, fields map[string]string, scr
 	return uint64(scratch.Len())
 }
 
-// writeFieldPostingsV2 writes the term index (.tidx) and postings data (.tdat) files.
+// writeFieldPostingsV2 writes per-field postings and term index files.
 //
-// .tidx format (FST-based):
+// .tidx format (flat metadata array, term count inferred from file size):
 //
-//	[fst_size: uint32]           — size of serialized FST bytes
-//	[fst_bytes: byte[fst_size]]  — FST mapping term → ordinal
-//	[term_count: uint32]
-//	[term_metadata: term_count × {
+//	[term_metadata: N × {
 //	    doc_freq:         uint32   (4 bytes)
 //	    postings_offset:  uint64   (8 bytes)
 //	    postings_length:  uint32   (4 bytes)
 //	}]                            — 16 bytes per entry, indexed by ordinal
+//
+// .tfst format (raw FST bytes):
+//
+//	[fst_bytes]                   — FST mapping term → ordinal
 //
 // .tdat format:
 //
@@ -238,20 +184,52 @@ func writeFieldPostingsV2(dir store.Directory, segName, fieldName string, fi *Fi
 	sort.Strings(terms)
 
 	tdatBuf := &bytes.Buffer{}
-	metas := make([]termMeta, len(terms))
+	tidxOut, err := dir.CreateOutput(fmt.Sprintf("%s.%s.tidx", segName, fieldName))
+	if err != nil {
+		return err
+	}
+
+	// Stream FST bytes directly to .tfst file.
+	tfstOut, err := dir.CreateOutput(fmt.Sprintf("%s.%s.tfst", segName, fieldName))
+	if err != nil {
+		tidxOut.Close()
+		return err
+	}
+	fstBuilder := fst.NewBuilderWithWriter(tfstOut)
 
 	for i, term := range terms {
 		pl := fi.postings[term]
 		startOffset, length := writePostingsToBuffer(tdatBuf, pl.Postings)
-		metas[i] = termMeta{
-			term:           term,
-			docFreq:        len(pl.Postings),
-			postingsOffset: startOffset,
-			postingsLength: length,
+
+		// Stream metadata to .tidx
+		tidxOut.WriteUint32(uint32(len(pl.Postings)))
+		tidxOut.WriteUint64(startOffset)
+		tidxOut.WriteUint32(length)
+
+		if err := fstBuilder.Add([]byte(term), uint64(i)); err != nil {
+			tidxOut.Close()
+			tfstOut.Close()
+			return fmt.Errorf("fst build: %w", err)
 		}
 	}
+	tidxOut.Close()
 
-	return writeTermIndexFile(dir, segName, fieldName, tdatBuf, metas)
+	// Write .tdat
+	tdatOut, err := dir.CreateOutput(fmt.Sprintf("%s.%s.tdat", segName, fieldName))
+	if err != nil {
+		tfstOut.Close()
+		return err
+	}
+	tdatOut.Write(tdatBuf.Bytes())
+	tdatOut.Close()
+
+	// Finish writes the trailer to .tfst.
+	if err := fstBuilder.Finish(); err != nil {
+		tfstOut.Close()
+		return fmt.Errorf("fst finish: %w", err)
+	}
+	tfstOut.Close()
+	return nil
 }
 
 // writeStoredFieldsV2 writes stored fields with a doc offset table.
@@ -290,22 +268,4 @@ func writeVIntToBuffer(buf *bytes.Buffer, v int) {
 	var b [binary.MaxVarintLen64]byte
 	n := binary.PutUvarint(b[:], uint64(v))
 	buf.Write(b[:n])
-}
-
-func writeUint16ToBuffer(buf *bytes.Buffer, v uint16) {
-	var b [2]byte
-	binary.LittleEndian.PutUint16(b[:], v)
-	buf.Write(b[:])
-}
-
-func writeUint32ToBuffer(buf *bytes.Buffer, v uint32) {
-	var b [4]byte
-	binary.LittleEndian.PutUint32(b[:], v)
-	buf.Write(b[:])
-}
-
-func writeUint64ToBuffer(buf *bytes.Buffer, v uint64) {
-	var b [8]byte
-	binary.LittleEndian.PutUint64(b[:], v)
-	buf.Write(b[:])
 }

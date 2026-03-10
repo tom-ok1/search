@@ -140,24 +140,27 @@ func (f *FST) Get(key []byte) (uint64, bool) {
 
 
 // FSTFromInput creates an FST from a MMapIndexInput containing the serialized FST.
-// Format: [startNode: int64][dataLen: uint32][data: bytes]
-// The input should be positioned at the start and sized to the full serialized FST.
+//
+// Trailer format: [data: bytes][startNode: int64][dataLen: uint32]
+// The trailer (12 bytes) is at the end of the file.
 func FSTFromInput(input *store.MMapIndexInput) (*FST, error) {
-	if input.Length() < 12 {
-		return nil, fmt.Errorf("FST input too short: %d", input.Length())
+	totalLen := input.Length()
+	if totalLen < 12 {
+		return nil, fmt.Errorf("FST input too short: %d", totalLen)
 	}
-	startNode, err := input.ReadUint64At(0)
+	// Read trailer from end of file.
+	dataLen, err := input.ReadUint32At(totalLen - 4)
 	if err != nil {
 		return nil, err
 	}
-	dataLen, err := input.ReadUint32At(8)
+	startNode, err := input.ReadUint64At(totalLen - 12)
 	if err != nil {
 		return nil, err
 	}
-	if 12+int(dataLen) > input.Length() {
-		return nil, fmt.Errorf("FST data truncated: need %d, have %d", 12+int(dataLen), input.Length())
+	if int(dataLen)+12 > totalLen {
+		return nil, fmt.Errorf("FST data truncated: need %d, have %d", int(dataLen)+12, totalLen)
 	}
-	dataInput, err := input.Slice(12, int(dataLen))
+	dataInput, err := input.Slice(0, int(dataLen))
 	if err != nil {
 		return nil, err
 	}

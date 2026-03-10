@@ -48,6 +48,7 @@ func TestWriteSegmentV2(t *testing.T) {
 	expectedFiles := []string{
 		seg.Name() + ".meta",
 		seg.Name() + ".title.tidx",
+		seg.Name() + ".title.tfst",
 		seg.Name() + ".title.tdat",
 		seg.Name() + ".title.flen",
 		seg.Name() + ".stored",

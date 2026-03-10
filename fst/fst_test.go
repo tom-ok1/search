@@ -1,6 +1,7 @@
 package fst
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,10 +13,10 @@ import (
 // buildFST is a test helper that finishes the builder and parses the result into an FST.
 func buildFST(t *testing.T, b *Builder) *FST {
 	t.Helper()
-	data, err := b.Finish()
-	if err != nil {
+	if err := b.Finish(); err != nil {
 		t.Fatal(err)
 	}
+	data := b.w.(*bytes.Buffer).Bytes()
 	path := filepath.Join(t.TempDir(), "fst.bin")
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		t.Fatal(err)
@@ -32,8 +33,13 @@ func buildFST(t *testing.T, b *Builder) *FST {
 	return f
 }
 
+// newTestBuilder creates a Builder backed by a bytes.Buffer for testing.
+func newTestBuilder() *Builder {
+	return NewBuilderWithWriter(&bytes.Buffer{})
+}
+
 func TestBasicLookup(t *testing.T) {
-	b := NewBuilder()
+	b := newTestBuilder()
 	if err := b.Add([]byte("cat"), 0); err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +79,7 @@ func TestBasicLookup(t *testing.T) {
 }
 
 func TestSharedPrefix(t *testing.T) {
-	b := NewBuilder()
+	b := newTestBuilder()
 	words := []string{"bar", "bars", "baz", "foo", "foobar"}
 	for i, w := range words {
 		if err := b.Add([]byte(w), uint64(i*10)); err != nil {
@@ -104,7 +110,7 @@ func TestSharedPrefix(t *testing.T) {
 }
 
 func TestSingleKey(t *testing.T) {
-	b := NewBuilder()
+	b := newTestBuilder()
 	if err := b.Add([]byte("hello"), 42); err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +129,7 @@ func TestSingleKey(t *testing.T) {
 }
 
 func TestRoundtrip(t *testing.T) {
-	b := NewBuilder()
+	b := newTestBuilder()
 	sorted := []string{"alpha", "beta", "delta", "gamma"}
 	for i, k := range sorted {
 		if err := b.Add([]byte(k), uint64(i)); err != nil {
@@ -147,7 +153,7 @@ func TestRoundtrip(t *testing.T) {
 }
 
 func TestUnsortedKeyError(t *testing.T) {
-	b := NewBuilder()
+	b := newTestBuilder()
 	b.Add([]byte("b"), 0)
 	err := b.Add([]byte("a"), 1)
 	if err == nil {
@@ -156,15 +162,15 @@ func TestUnsortedKeyError(t *testing.T) {
 }
 
 func TestEmptyFSTError(t *testing.T) {
-	b := NewBuilder()
-	_, err := b.Finish()
+	b := newTestBuilder()
+	err := b.Finish()
 	if err == nil {
 		t.Error("expected error for empty FST")
 	}
 }
 
 func TestManyKeys(t *testing.T) {
-	b := NewBuilder()
+	b := newTestBuilder()
 	n := 1000
 	// Generate sorted keys: "term0000", "term0001", ...
 	keys := make([]string, n)
