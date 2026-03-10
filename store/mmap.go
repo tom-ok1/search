@@ -117,6 +117,14 @@ func (m *MMapIndexInput) ReadUint64() (uint64, error) {
 
 // --- Random access methods ---
 
+// ReadByteAt reads a single byte at the given offset without changing position.
+func (m *MMapIndexInput) ReadByteAt(offset int) (byte, error) {
+	if offset < 0 || offset >= m.length {
+		return 0, fmt.Errorf("read past end of mmap: offset=%d, length=%d", offset, m.length)
+	}
+	return m.data[offset], nil
+}
+
 // ReadUint32At reads a little-endian uint32 at the given byte offset without changing position.
 func (m *MMapIndexInput) ReadUint32At(offset int) (uint32, error) {
 	if offset+4 > m.length {
@@ -135,8 +143,11 @@ func (m *MMapIndexInput) ReadUint64At(offset int) (uint64, error) {
 
 // --- Position control ---
 
-// Seek sets the sequential read position.
+// Seek sets the sequential read position. Panics if pos is negative or beyond length.
 func (m *MMapIndexInput) Seek(pos int) {
+	if pos < 0 || pos > m.length {
+		panic(fmt.Sprintf("mmap: seek position %d out of range [0, %d]", pos, m.length))
+	}
 	m.pos = pos
 }
 
@@ -155,7 +166,7 @@ func (m *MMapIndexInput) Length() int {
 // Slice creates a sub-view of this MMapIndexInput without copying data.
 // The returned slice does not own the underlying mmap.
 func (m *MMapIndexInput) Slice(offset, length int) (*MMapIndexInput, error) {
-	if offset+length > m.length {
+	if offset < 0 || length < 0 || offset+length > m.length {
 		return nil, fmt.Errorf("slice out of bounds: offset=%d, length=%d, total=%d", offset, length, m.length)
 	}
 	return &MMapIndexInput{
@@ -164,6 +175,17 @@ func (m *MMapIndexInput) Slice(offset, length int) (*MMapIndexInput, error) {
 		length: length,
 		owner:  false,
 	}, nil
+}
+
+// Clone creates a new MMapIndexInput sharing the same underlying data
+// but with an independent read position. The clone does not own the mmap.
+func (m *MMapIndexInput) Clone() DataInput {
+	return &MMapIndexInput{
+		data:   m.data,
+		pos:    0,
+		length: m.length,
+		owner:  false,
+	}
 }
 
 // --- Cleanup ---

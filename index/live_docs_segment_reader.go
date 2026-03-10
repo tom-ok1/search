@@ -23,7 +23,14 @@ func (r *LiveDocsSegmentReader) LiveDocCount() int {
 }
 
 func (r *LiveDocsSegmentReader) DocFreq(field, term string) int {
-	return r.inner.DocFreq(field, term)
+	count := 0
+	iter := r.inner.PostingsIterator(field, term)
+	for iter.Next() {
+		if !r.liveDocs.Get(iter.DocID()) {
+			count++
+		}
+	}
+	return count
 }
 
 func (r *LiveDocsSegmentReader) FieldLength(field string, docID int) int {
@@ -31,7 +38,13 @@ func (r *LiveDocsSegmentReader) FieldLength(field string, docID int) int {
 }
 
 func (r *LiveDocsSegmentReader) TotalFieldLength(field string) int {
-	return r.inner.TotalFieldLength(field)
+	total := 0
+	for i := 0; i < r.inner.DocCount(); i++ {
+		if !r.liveDocs.Get(i) {
+			total += r.inner.FieldLength(field, i)
+		}
+	}
+	return total
 }
 
 func (r *LiveDocsSegmentReader) StoredFields(docID int) (map[string]string, error) {

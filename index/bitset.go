@@ -1,6 +1,9 @@
 package index
 
-import "math/bits"
+import (
+	"fmt"
+	"math/bits"
+)
 
 // Bitset is a fixed-size bit array, equivalent to Lucene's FixedBitSet.
 // Bit layout matches the .del file format: byte[i/8] & (1 << (i%8)).
@@ -24,13 +27,19 @@ func BitsetFromBytes(data []byte, size int) *Bitset {
 	return &Bitset{bits: b, size: size}
 }
 
-// Set sets the bit at position i.
+// Set sets the bit at position i. Panics if i is out of range.
 func (b *Bitset) Set(i int) {
+	if i < 0 || i >= b.size {
+		panic(fmt.Sprintf("bitset: index %d out of range [0, %d)", i, b.size))
+	}
 	b.bits[i/8] |= 1 << uint(i%8)
 }
 
-// Get reports whether bit i is set.
+// Get reports whether bit i is set. Returns false if i is out of range.
 func (b *Bitset) Get(i int) bool {
+	if i < 0 || i >= b.size {
+		return false
+	}
 	return b.bits[i/8]&(1<<uint(i%8)) != 0
 }
 

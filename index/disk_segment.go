@@ -165,8 +165,7 @@ func (ds *DiskSegment) IsDeleted(docID int) bool {
 	if byteIdx >= ds.deleted.Length() {
 		return false
 	}
-	ds.deleted.Seek(byteIdx)
-	val, err := ds.deleted.ReadByte()
+	val, err := ds.deleted.ReadByteAt(byteIdx)
 	if err != nil {
 		return false
 	}
@@ -270,10 +269,22 @@ func (ds *DiskSegment) StoredFields(docID int) (map[string]string, error) {
 
 	fields := make(map[string]string, fieldCount)
 	for i := 0; i < fieldCount; i++ {
-		nameLen, _ := ds.stored.ReadVInt()
-		nameBytes, _ := ds.stored.ReadBytes(nameLen)
-		valueLen, _ := ds.stored.ReadVInt()
-		valueBytes, _ := ds.stored.ReadBytes(valueLen)
+		nameLen, err := ds.stored.ReadVInt()
+		if err != nil {
+			return nil, fmt.Errorf("read field name length: %w", err)
+		}
+		nameBytes, err := ds.stored.ReadBytes(nameLen)
+		if err != nil {
+			return nil, fmt.Errorf("read field name: %w", err)
+		}
+		valueLen, err := ds.stored.ReadVInt()
+		if err != nil {
+			return nil, fmt.Errorf("read field value length: %w", err)
+		}
+		valueBytes, err := ds.stored.ReadBytes(valueLen)
+		if err != nil {
+			return nil, fmt.Errorf("read field value: %w", err)
+		}
 		fields[string(nameBytes)] = string(valueBytes)
 	}
 	return fields, nil

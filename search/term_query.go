@@ -19,7 +19,7 @@ func (q *TermQuery) Execute(seg index.SegmentReader) []DocScore {
 	}
 
 	scorer := NewBM25Scorer()
-	docCount := seg.DocCount()
+	docCount := seg.LiveDocCount()
 	idf := scorer.IDF(docCount, docFreq)
 
 	totalFieldLen := seg.TotalFieldLength(q.Field)

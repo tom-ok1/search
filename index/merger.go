@@ -57,7 +57,12 @@ func MergeSegmentsToDisk(dir store.Directory, inputs []MergeInput, newName strin
 				return nil, err
 			}
 			storedOffsets = append(storedOffsets, storedPos)
-			storedPos += writeStoredFieldsEntry(storedOut, sf, scratch)
+			n, err := writeStoredFieldsEntry(storedOut, sf, scratch)
+			if err != nil {
+				storedOut.Close()
+				return nil, fmt.Errorf("write stored fields: %w", err)
+			}
+			storedPos += n
 
 			newDocID++
 		}
@@ -66,9 +71,15 @@ func MergeSegmentsToDisk(dir store.Directory, inputs []MergeInput, newName strin
 
 	// Write trailer: offset table + doc_count.
 	for _, offset := range storedOffsets {
-		storedOut.WriteUint64(offset)
+		if err := storedOut.WriteUint64(offset); err != nil {
+			storedOut.Close()
+			return nil, fmt.Errorf("write stored offset: %w", err)
+		}
 	}
-	storedOut.WriteUint32(uint32(docCount))
+	if err := storedOut.WriteUint32(uint32(docCount)); err != nil {
+		storedOut.Close()
+		return nil, fmt.Errorf("write stored doc count: %w", err)
+	}
 	storedOut.Close()
 
 	allFields := collectAllFields(inputs)
@@ -162,19 +173,20 @@ func mergeFieldPostingsToDisk(
 	if err != nil {
 		return err
 	}
+	defer tdatOut.Close()
+
 	tidxOut, err := dir.CreateOutput(fmt.Sprintf("%s.%s.tidx", segName, field))
 	if err != nil {
-		tdatOut.Close()
 		return err
 	}
+	defer tidxOut.Close()
 
 	// Open .tfst for streaming FST writes.
 	tfstOut, err := dir.CreateOutput(fmt.Sprintf("%s.%s.tfst", segName, field))
 	if err != nil {
-		tdatOut.Close()
-		tidxOut.Close()
 		return err
 	}
+	defer tfstOut.Close()
 
 	fstBuilder := fst.NewBuilderWithWriter(tfstOut)
 	var ordinal uint64
@@ -227,32 +239,32 @@ func mergeFieldPostingsToDisk(
 		termBuf.Reset()
 		writePostingsToBuffer(termBuf, postings)
 		length := uint32(termBuf.Len())
-		tdatOut.Write(termBuf.Bytes())
+		if _, err := tdatOut.Write(termBuf.Bytes()); err != nil {
+			return fmt.Errorf("write tdat: %w", err)
+		}
 
 		// Stream metadata to .tidx
-		tidxOut.WriteUint32(uint32(len(postings)))
-		tidxOut.WriteUint64(globalOffset)
-		tidxOut.WriteUint32(length)
+		if err := tidxOut.WriteUint32(uint32(len(postings))); err != nil {
+			return fmt.Errorf("write tidx: %w", err)
+		}
+		if err := tidxOut.WriteUint64(globalOffset); err != nil {
+			return fmt.Errorf("write tidx: %w", err)
+		}
+		if err := tidxOut.WriteUint32(length); err != nil {
+			return fmt.Errorf("write tidx: %w", err)
+		}
 
 		if err := fstBuilder.Add([]byte(currentTerm), ordinal); err != nil {
-			tdatOut.Close()
-			tidxOut.Close()
-			tfstOut.Close()
 			return fmt.Errorf("fst build: %w", err)
 		}
 		ordinal++
 		globalOffset += uint64(length)
 	}
 
-	tdatOut.Close()
-	tidxOut.Close()
-
 	// Finish writes the trailer to .tfst.
 	if err := fstBuilder.Finish(); err != nil {
-		tfstOut.Close()
 		return fmt.Errorf("fst finish: %w", err)
 	}
-	tfstOut.Close()
 	return nil
 }
 

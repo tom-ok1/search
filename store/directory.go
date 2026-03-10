@@ -55,4 +55,5 @@ type DataInput interface {
 	Seek(pos int)
 	Position() int
 	Length() int
+	Clone() DataInput
 }

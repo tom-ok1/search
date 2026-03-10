@@ -2,6 +2,7 @@ package search
 
 import (
 	"slices"
+	"sort"
 
 	"gosearch/index"
 )
@@ -35,7 +36,7 @@ func (q *PhraseQuery) Execute(seg index.SegmentReader) []DocScore {
 	commonDocs := findCommonDocs(postingsLists)
 
 	scorer := NewBM25Scorer()
-	docCount := seg.DocCount()
+	docCount := seg.LiveDocCount()
 
 	totalFieldLen := seg.TotalFieldLength(q.Field)
 	avgDocLen := 0.0
@@ -130,6 +131,7 @@ func findCommonDocs(lists []*index.PostingsList) []int {
 	for docID := range docSet {
 		result = append(result, docID)
 	}
+	sort.Ints(result)
 	return result
 }
 

@@ -34,6 +34,9 @@ func (s *BM25Scorer) IDF(docCount, docFreq int) float64 {
 // avgDocLen: average token count across all documents
 // idf: precomputed IDF value
 func (s *BM25Scorer) Score(tf float64, docLen float64, avgDocLen float64, idf float64) float64 {
+	if avgDocLen == 0 {
+		avgDocLen = 1
+	}
 	tfNorm := (tf * (s.K1 + 1)) / (tf + s.K1*(1-s.B+s.B*docLen/avgDocLen))
 	return idf * tfNorm
 }

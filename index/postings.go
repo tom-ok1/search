@@ -101,14 +101,27 @@ func (it *DiskPostingsIterator) Next() bool {
 	it.prevDocID = it.docID
 
 	// Read frequency
-	it.freq, _ = it.input.ReadVInt()
+	freq, err := it.input.ReadVInt()
+	if err != nil {
+		it.remaining = 0
+		return false
+	}
+	it.freq = freq
 
 	// Read positions (delta-encoded)
-	posCount, _ := it.input.ReadVInt()
+	posCount, err := it.input.ReadVInt()
+	if err != nil {
+		it.remaining = 0
+		return false
+	}
 	it.positions = make([]int, posCount)
 	prevPos := 0
 	for i := 0; i < posCount; i++ {
-		posDelta, _ := it.input.ReadVInt()
+		posDelta, err := it.input.ReadVInt()
+		if err != nil {
+			it.remaining = 0
+			return false
+		}
 		it.positions[i] = prevPos + posDelta
 		prevPos = it.positions[i]
 	}

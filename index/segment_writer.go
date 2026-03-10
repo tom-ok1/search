@@ -97,9 +97,18 @@ func writeSegmentMeta(dir store.Directory, meta SegmentMeta) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	metaBytes, _ := json.Marshal(meta)
-	out.Write(metaBytes)
-	out.Close()
+	metaBytes, err := json.Marshal(meta)
+	if err != nil {
+		out.Close()
+		return "", fmt.Errorf("marshal meta: %w", err)
+	}
+	if _, err := out.Write(metaBytes); err != nil {
+		out.Close()
+		return "", fmt.Errorf("write meta: %w", err)
+	}
+	if err := out.Close(); err != nil {
+		return "", fmt.Errorf("close meta: %w", err)
+	}
 	return fileName, nil
 }
 
@@ -124,14 +133,22 @@ func writeStoredFieldsFromMap(dir store.Directory, segName string, docCount int,
 	for docID := 0; docID < docCount; docID++ {
 		offsets[docID] = pos
 		fields := storedFields[docID]
-		pos += writeStoredFieldsEntry(out, fields, scratch)
+		n, err := writeStoredFieldsEntry(out, fields, scratch)
+		if err != nil {
+			return fmt.Errorf("write stored fields for doc %d: %w", docID, err)
+		}
+		pos += n
 	}
 
 	// Trailer: offset table + doc_count.
 	for _, offset := range offsets {
-		out.WriteUint64(offset)
+		if err := out.WriteUint64(offset); err != nil {
+			return fmt.Errorf("write stored offset: %w", err)
+		}
 	}
-	out.WriteUint32(uint32(docCount))
+	if err := out.WriteUint32(uint32(docCount)); err != nil {
+		return fmt.Errorf("write stored doc count: %w", err)
+	}
 
 	return nil
 }
@@ -139,7 +156,7 @@ func writeStoredFieldsFromMap(dir store.Directory, segName string, docCount int,
 // writeStoredFieldsEntry writes a single document's stored fields to out
 // using the provided scratch buffer, and returns the number of bytes written.
 // The caller must provide a non-nil scratch buffer; it will be Reset before use.
-func writeStoredFieldsEntry(out store.IndexOutput, fields map[string]string, scratch *bytes.Buffer) uint64 {
+func writeStoredFieldsEntry(out store.IndexOutput, fields map[string]string, scratch *bytes.Buffer) (uint64, error) {
 	scratch.Reset()
 	writeVIntToBuffer(scratch, len(fields))
 	for name, value := range fields {
@@ -150,8 +167,10 @@ func writeStoredFieldsEntry(out store.IndexOutput, fields map[string]string, scr
 		writeVIntToBuffer(scratch, len(valueBytes))
 		scratch.Write(valueBytes)
 	}
-	out.Write(scratch.Bytes())
-	return uint64(scratch.Len())
+	if _, err := out.Write(scratch.Bytes()); err != nil {
+		return 0, err
+	}
+	return uint64(scratch.Len()), nil
 }
 
 // writeFieldPostingsV2 writes per-field postings and term index files.
@@ -188,13 +207,15 @@ func writeFieldPostingsV2(dir store.Directory, segName, fieldName string, fi *Fi
 	if err != nil {
 		return err
 	}
+	defer tidxOut.Close()
 
 	// Stream FST bytes directly to .tfst file.
 	tfstOut, err := dir.CreateOutput(fmt.Sprintf("%s.%s.tfst", segName, fieldName))
 	if err != nil {
-		tidxOut.Close()
 		return err
 	}
+	defer tfstOut.Close()
+
 	fstBuilder := fst.NewBuilderWithWriter(tfstOut)
 
 	for i, term := range terms {
@@ -202,33 +223,36 @@ func writeFieldPostingsV2(dir store.Directory, segName, fieldName string, fi *Fi
 		startOffset, length := writePostingsToBuffer(tdatBuf, pl.Postings)
 
 		// Stream metadata to .tidx
-		tidxOut.WriteUint32(uint32(len(pl.Postings)))
-		tidxOut.WriteUint64(startOffset)
-		tidxOut.WriteUint32(length)
+		if err := tidxOut.WriteUint32(uint32(len(pl.Postings))); err != nil {
+			return fmt.Errorf("write tidx: %w", err)
+		}
+		if err := tidxOut.WriteUint64(startOffset); err != nil {
+			return fmt.Errorf("write tidx: %w", err)
+		}
+		if err := tidxOut.WriteUint32(length); err != nil {
+			return fmt.Errorf("write tidx: %w", err)
+		}
 
 		if err := fstBuilder.Add([]byte(term), uint64(i)); err != nil {
-			tidxOut.Close()
-			tfstOut.Close()
 			return fmt.Errorf("fst build: %w", err)
 		}
 	}
-	tidxOut.Close()
 
 	// Write .tdat
 	tdatOut, err := dir.CreateOutput(fmt.Sprintf("%s.%s.tdat", segName, fieldName))
 	if err != nil {
-		tfstOut.Close()
 		return err
 	}
-	tdatOut.Write(tdatBuf.Bytes())
-	tdatOut.Close()
+	defer tdatOut.Close()
+
+	if _, err := tdatOut.Write(tdatBuf.Bytes()); err != nil {
+		return fmt.Errorf("write tdat: %w", err)
+	}
 
 	// Finish writes the trailer to .tfst.
 	if err := fstBuilder.Finish(); err != nil {
-		tfstOut.Close()
 		return fmt.Errorf("fst finish: %w", err)
 	}
-	tfstOut.Close()
 	return nil
 }
 
@@ -250,13 +274,17 @@ func writeFieldLengthsV2(dir store.Directory, segName, fieldName string, lengths
 	}
 	defer out.Close()
 
-	out.WriteUint32(uint32(docCount))
+	if err := out.WriteUint32(uint32(docCount)); err != nil {
+		return fmt.Errorf("write flen doc count: %w", err)
+	}
 	for i := 0; i < docCount; i++ {
 		l := 0
 		if i < len(lengths) {
 			l = lengths[i]
 		}
-		out.WriteUint32(uint32(l))
+		if err := out.WriteUint32(uint32(l)); err != nil {
+			return fmt.Errorf("write flen: %w", err)
+		}
 	}
 
 	return nil
