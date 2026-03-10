@@ -31,6 +31,11 @@ func (rau *ReadersAndUpdates) Delete(docID int) bool {
 	return rau.pendingDeletes.Delete(docID)
 }
 
+// IsDeleted reports whether the given docID has been deleted.
+func (rau *ReadersAndUpdates) IsDeleted(docID int) bool {
+	return rau.pendingDeletes.IsDeleted(docID)
+}
+
 // getReader lazily opens the DiskSegment and initializes PendingDeletes
 // from any existing .del file on first access.
 func (rau *ReadersAndUpdates) getReader() (*DiskSegment, error) {

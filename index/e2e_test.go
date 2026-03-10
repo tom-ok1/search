@@ -124,27 +124,28 @@ func TestE2EDiskSegmentQueryExecution(t *testing.T) {
 	}
 	defer reader.Close()
 
-	diskSeg := reader.Leaves()[0].Segment
+	var diskReaders []index.SegmentReader
+	for _, leaf := range reader.Leaves() {
+		diskReaders = append(diskReaders, leaf.Segment)
+	}
+	diskSearcher := search.NewIndexSearcher(index.NewIndexReader(diskReaders))
 
 	// TermQuery
-	tq := search.NewTermQuery("body", "fox")
-	tqResults := tq.Execute(diskSeg)
+	tqResults := diskSearcher.Search(search.NewTermQuery("body", "fox"), 10)
 	if len(tqResults) != 3 {
 		t.Errorf("TermQuery 'fox': expected 3 results, got %d", len(tqResults))
 	}
 
 	// PhraseQuery "brown fox"
-	pq := search.NewPhraseQuery("body", "brown", "fox")
-	pqResults := pq.Execute(diskSeg)
+	pqResults := diskSearcher.Search(search.NewPhraseQuery("body", "brown", "fox"), 10)
 	if len(pqResults) != 2 {
 		t.Errorf("PhraseQuery 'brown fox': expected 2 results, got %d", len(pqResults))
 	}
 
 	// BooleanQuery: "brown" AND NOT "dog"
-	bq := search.NewBooleanQuery().
+	bqResults := diskSearcher.Search(search.NewBooleanQuery().
 		Add(search.NewTermQuery("body", "brown"), search.OccurMust).
-		Add(search.NewTermQuery("body", "dog"), search.OccurMustNot)
-	bqResults := bq.Execute(diskSeg)
+		Add(search.NewTermQuery("body", "dog"), search.OccurMustNot), 10)
 	if len(bqResults) != 2 {
 		t.Errorf("BooleanQuery 'brown AND NOT dog': expected 2 results, got %d", len(bqResults))
 	}
@@ -155,7 +156,7 @@ func TestE2EDiskSegmentQueryExecution(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer nrtReader.Close()
-	nrtSeg := nrtReader.Leaves()[0].Segment
+	nrtSearcher := search.NewIndexSearcher(nrtReader)
 
 	for _, tc := range []struct {
 		name  string
@@ -167,8 +168,8 @@ func TestE2EDiskSegmentQueryExecution(t *testing.T) {
 			Add(search.NewTermQuery("body", "brown"), search.OccurMust).
 			Add(search.NewTermQuery("body", "dog"), search.OccurMustNot)},
 	} {
-		nrtResults := tc.query.Execute(nrtSeg)
-		diskResults := tc.query.Execute(diskSeg)
+		nrtResults := nrtSearcher.Search(tc.query, 10)
+		diskResults := diskSearcher.Search(tc.query, 10)
 
 		if len(nrtResults) != len(diskResults) {
 			t.Errorf("%s: result count mismatch: nrt=%d, disk=%d",
@@ -176,7 +177,6 @@ func TestE2EDiskSegmentQueryExecution(t *testing.T) {
 			continue
 		}
 
-		// Sort by DocID for deterministic comparison (map iteration order may differ)
 		sort.Slice(nrtResults, func(i, j int) bool { return nrtResults[i].DocID < nrtResults[j].DocID })
 		sort.Slice(diskResults, func(i, j int) bool { return diskResults[i].DocID < diskResults[j].DocID })
 

@@ -79,12 +79,12 @@ func TestWriteSegmentV2(t *testing.T) {
 		t.Errorf("flen file size: expected %d, got %d", expectedFlenSize, len(flenData))
 	}
 
-	// Verify stored fields file structure
+	// Verify stored fields file structure (trailer format)
 	storedPath := dir.FilePath(seg.Name() + ".stored")
 	storedData, _ := os.ReadFile(storedPath)
-	// Should start with: uint32(docCount=3) + 3 × uint64(offsets)
-	storedHeaderSize := 4 + 3*8
-	if len(storedData) < storedHeaderSize {
+	// Should end with: 3 × uint64(offsets) + uint32(docCount=3)
+	storedTrailerSize := 3*8 + 4
+	if len(storedData) < storedTrailerSize {
 		t.Fatalf("stored file too small: %d bytes", len(storedData))
 	}
 }

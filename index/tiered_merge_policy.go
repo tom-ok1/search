@@ -42,12 +42,20 @@ func (p *TieredMergePolicy) FindMerges(infos []*SegmentCommitInfo) []MergeCandid
 		return nil
 	}
 
-	// Slide a window of MaxMergeAtOnce segments and find the best scoring merge
+	// Slide a window of up to MaxMergeAtOnce segments and find the best scoring merge.
+	windowSize := p.MaxMergeAtOnce
+	if windowSize > len(eligible) {
+		windowSize = len(eligible)
+	}
+	if windowSize < 2 {
+		return nil
+	}
+
 	bestScore := -1.0
 	bestStart := -1
 
-	for start := 0; start+p.MaxMergeAtOnce <= len(eligible); start++ {
-		window := eligible[start : start+p.MaxMergeAtOnce]
+	for start := 0; start+windowSize <= len(eligible); start++ {
+		window := eligible[start : start+windowSize]
 		score := p.scoreMerge(window)
 		if score > bestScore {
 			bestScore = score
@@ -55,28 +63,11 @@ func (p *TieredMergePolicy) FindMerges(infos []*SegmentCommitInfo) []MergeCandid
 		}
 	}
 
-	// If we couldn't find a full window, try the remaining tail
-	if bestStart == -1 && len(eligible) > p.SegmentsPerTier {
-		window := eligible[len(eligible)-p.MaxMergeAtOnce:]
-		if len(window) < 2 {
-			return nil
-		}
-		bestStart = len(eligible) - len(window)
-	}
-
 	if bestStart < 0 {
 		return nil
 	}
 
-	end := bestStart + p.MaxMergeAtOnce
-	if end > len(eligible) {
-		end = len(eligible)
-	}
-	window := eligible[bestStart:end]
-	if len(window) < 2 {
-		return nil
-	}
-
+	window := eligible[bestStart : bestStart+windowSize]
 	return []MergeCandidate{{Segments: window}}
 }
 

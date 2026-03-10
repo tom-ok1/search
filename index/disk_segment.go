@@ -258,13 +258,20 @@ func (ds *DiskSegment) TotalFieldLength(field string) int {
 }
 
 // StoredFields reads stored fields for a single document from the mmap'd .stored file. O(1) seek.
+//
+// Trailer format:
+//
+//	[data: per-doc VInt-encoded fields]
+//	[offset_table: doc_count × uint64]
+//	[doc_count: uint32]
 func (ds *DiskSegment) StoredFields(docID int) (map[string]string, error) {
 	if ds.stored == nil || docID >= ds.docCount {
 		return nil, nil
 	}
 
-	// Format: [doc_count: uint32][offset_table: doc_count × uint64][data...]
-	offset, err := ds.stored.ReadUint64At(4 + docID*8)
+	// Offset table starts at: fileLen - 4 (doc_count) - docCount*8 (offsets).
+	tableStart := ds.stored.Length() - 4 - ds.docCount*8
+	offset, err := ds.stored.ReadUint64At(tableStart + docID*8)
 	if err != nil {
 		return nil, fmt.Errorf("read stored offset: %w", err)
 	}

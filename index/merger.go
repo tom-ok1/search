@@ -3,12 +3,10 @@ package index
 import (
 	"bytes"
 	"container/heap"
-	"encoding/json"
 	"fmt"
-	"gosearch/fst"
-	"encoding/binary"
-	"gosearch/store"
 	"sort"
+
+	"gosearch/store"
 )
 
 // MergeInput represents a single segment to be merged along with its deletion state.
@@ -28,37 +26,49 @@ type MergeResult struct {
 // directly to disk, streaming postings per term to avoid holding all
 // postings in memory at once.
 func MergeSegmentsToDisk(dir store.Directory, inputs []MergeInput, newName string) (*MergeResult, error) {
-	// Phase 1: Build docID mapping and collect stored fields + field lengths.
-	type docMapping struct {
-		inputIdx int
-		oldDocID int
+	// Phase 1: Build docID mapping and stream stored fields to disk.
+	// remaps[i] maps old docID → new docID for input i (-1 means deleted).
+	remaps := make([][]int, len(inputs))
+
+	storedOut, err := dir.CreateOutput(newName + ".stored")
+	if err != nil {
+		return nil, err
 	}
-	var mappings []docMapping
-	remaps := make([]map[int]int, len(inputs))
 
 	newDocID := 0
-	storedFields := make(map[int]map[string]string)
+	var storedOffsets []uint64
+	var storedPos uint64
+	scratch := &bytes.Buffer{}
+
 	for i, input := range inputs {
-		remaps[i] = make(map[int]int)
-		for oldDoc := 0; oldDoc < input.Segment.DocCount(); oldDoc++ {
+		n := input.Segment.DocCount()
+		remaps[i] = make([]int, n)
+		for oldDoc := 0; oldDoc < n; oldDoc++ {
 			if input.IsDeleted(oldDoc) {
+				remaps[i][oldDoc] = -1
 				continue
 			}
 			remaps[i][oldDoc] = newDocID
-			mappings = append(mappings, docMapping{inputIdx: i, oldDocID: oldDoc})
 
 			sf, err := input.Segment.StoredFields(oldDoc)
 			if err != nil {
+				storedOut.Close()
 				return nil, err
 			}
-			if len(sf) > 0 {
-				storedFields[newDocID] = sf
-			}
+			storedOffsets = append(storedOffsets, storedPos)
+			storedPos += writeStoredFieldsEntry(storedOut, sf, scratch)
 
 			newDocID++
 		}
 	}
 	docCount := newDocID
+
+	// Write trailer: offset table + doc_count.
+	for _, offset := range storedOffsets {
+		storedOut.WriteUint64(offset)
+	}
+	storedOut.WriteUint32(uint32(docCount))
+	storedOut.Close()
 
 	allFields := collectAllFields(inputs)
 
@@ -66,9 +76,14 @@ func MergeSegmentsToDisk(dir store.Directory, inputs []MergeInput, newName strin
 	fieldLengths := make(map[string][]int)
 	for _, field := range allFields {
 		lengths := make([]int, docCount)
-		for _, m := range mappings {
-			newID := remaps[m.inputIdx][m.oldDocID]
-			lengths[newID] = inputs[m.inputIdx].Segment.FieldLength(field, m.oldDocID)
+		for i, input := range inputs {
+			for oldDoc := 0; oldDoc < input.Segment.DocCount(); oldDoc++ {
+				newID := remaps[i][oldDoc]
+				if newID < 0 {
+					continue
+				}
+				lengths[newID] = input.Segment.FieldLength(field, oldDoc)
+			}
 		}
 		fieldLengths[field] = lengths
 	}
@@ -76,19 +91,14 @@ func MergeSegmentsToDisk(dir store.Directory, inputs []MergeInput, newName strin
 	var files []string
 
 	// Write metadata.
-	meta := SegmentMeta{
+	metaFileName, err := writeSegmentMeta(dir, SegmentMeta{
 		Name:     newName,
 		DocCount: docCount,
 		Fields:   allFields,
-	}
-	metaFileName := newName + ".meta"
-	metaOut, err := dir.CreateOutput(metaFileName)
+	})
 	if err != nil {
 		return nil, err
 	}
-	metaBytes, _ := json.Marshal(meta)
-	metaOut.Write(metaBytes)
-	metaOut.Close()
 	files = append(files, metaFileName)
 
 	// Phase 3: Merge postings using k-way merge and stream to disk.
@@ -102,10 +112,7 @@ func MergeSegmentsToDisk(dir store.Directory, inputs []MergeInput, newName strin
 		)
 	}
 
-	// Phase 4: Write stored fields.
-	if err := writeMergedStoredFields(dir, newName, docCount, storedFields); err != nil {
-		return nil, err
-	}
+	// Stored fields already written during Phase 1.
 	files = append(files, newName+".stored")
 
 	// Phase 5: Write field lengths.
@@ -124,13 +131,12 @@ func MergeSegmentsToDisk(dir store.Directory, inputs []MergeInput, newName strin
 }
 
 // mergeFieldPostingsToDisk performs k-way merge for a single field and writes
-// .tdat and .tidx directly to disk. Only the current term's postings are held
-// in memory; completed postings are written and discarded immediately.
+// .tdat and .tidx directly to disk.
 func mergeFieldPostingsToDisk(
 	dir store.Directory,
 	segName, field string,
 	inputs []MergeInput,
-	remaps []map[int]int,
+	remaps [][]int,
 ) error {
 	// Initialize the heap with one entry per segment that has this field.
 	var h termHeap
@@ -149,33 +155,33 @@ func mergeFieldPostingsToDisk(
 	}
 	heap.Init(&h)
 
-	// Stream postings to .tdat buffer, collecting term metadata.
-	type termMeta struct {
-		term           string
-		docFreq        int
-		postingsOffset uint64
-		postingsLength uint32
+	// Open .tdat file for streaming writes.
+	tdatOut, err := dir.CreateOutput(fmt.Sprintf("%s.%s.tdat", segName, field))
+	if err != nil {
+		return err
 	}
-	var termMetas []termMeta
-	tdatBuf := &bytes.Buffer{}
+
+	var metas []termMeta
+	var globalOffset uint64
+	var postings []Posting
+	termBuf := &bytes.Buffer{}
 
 	for h.Len() > 0 {
 		currentTerm := h[0].term
 
 		// Collect postings from all segments that have this term.
-		var postings []Posting
+		postings = postings[:0]
 		for h.Len() > 0 && h[0].term == currentTerm {
 			entry := h[0]
 			i := entry.inputIdx
-			input := inputs[i]
 
-			pi := input.Segment.PostingsIterator(field, currentTerm)
+			pi := inputs[i].Segment.PostingsIterator(field, currentTerm)
 			for pi.Next() {
 				oldDoc := pi.DocID()
-				if input.IsDeleted(oldDoc) {
+				newID := remaps[i][oldDoc]
+				if newID < 0 {
 					continue
 				}
-				newID := remaps[i][oldDoc]
 				positions := make([]int, len(pi.Positions()))
 				copy(positions, pi.Positions())
 				postings = append(postings, Posting{
@@ -201,112 +207,24 @@ func mergeFieldPostingsToDisk(
 			return postings[i].DocID < postings[j].DocID
 		})
 
-		// Write postings to .tdat buffer and record metadata.
-		startOffset := uint64(tdatBuf.Len())
-		prevDocID := 0
-		for _, posting := range postings {
-			writeVIntToBuffer(tdatBuf, posting.DocID-prevDocID)
-			prevDocID = posting.DocID
-			writeVIntToBuffer(tdatBuf, posting.Freq)
-			writeVIntToBuffer(tdatBuf, len(posting.Positions))
-			prevPos := 0
-			for _, pos := range posting.Positions {
-				writeVIntToBuffer(tdatBuf, pos-prevPos)
-				prevPos = pos
-			}
-		}
+		// Write postings to a small per-term buffer, then flush to disk.
+		termBuf.Reset()
+		writePostingsToBuffer(termBuf, postings)
+		length := uint32(termBuf.Len())
+		tdatOut.Write(termBuf.Bytes())
 
-		termMetas = append(termMetas, termMeta{
+		metas = append(metas, termMeta{
 			term:           currentTerm,
 			docFreq:        len(postings),
-			postingsOffset: startOffset,
-			postingsLength: uint32(uint64(tdatBuf.Len()) - startOffset),
+			postingsOffset: globalOffset,
+			postingsLength: length,
 		})
+		globalOffset += uint64(length)
 	}
 
-	// Write .tdat file.
-	tdatOut, err := dir.CreateOutput(fmt.Sprintf("%s.%s.tdat", segName, field))
-	if err != nil {
-		return err
-	}
-	tdatOut.Write(tdatBuf.Bytes())
 	tdatOut.Close()
 
-	// Build FST and .tidx from collected term metadata.
-	fstBuilder := fst.NewBuilder()
-	for i, tm := range termMetas {
-		if err := fstBuilder.Add([]byte(tm.term), uint64(i)); err != nil {
-			return fmt.Errorf("fst build: %w", err)
-		}
-	}
-	fstBytes, err := fstBuilder.Finish()
-	if err != nil {
-		return fmt.Errorf("fst finish: %w", err)
-	}
-
-	tidxBuf := &bytes.Buffer{}
-	writeUint32ToBuffer(tidxBuf, uint32(len(fstBytes)))
-	tidxBuf.Write(fstBytes)
-	writeUint32ToBuffer(tidxBuf, uint32(len(termMetas)))
-	for _, tm := range termMetas {
-		writeUint32ToBuffer(tidxBuf, uint32(tm.docFreq))
-		writeUint64ToBuffer(tidxBuf, tm.postingsOffset)
-		writeUint32ToBuffer(tidxBuf, tm.postingsLength)
-	}
-
-	tidxOut, err := dir.CreateOutput(fmt.Sprintf("%s.%s.tidx", segName, field))
-	if err != nil {
-		return err
-	}
-	tidxOut.Write(tidxBuf.Bytes())
-	tidxOut.Close()
-
-	return nil
-}
-
-// writeMergedStoredFields writes stored fields directly from the merge result.
-func writeMergedStoredFields(dir store.Directory, segName string, docCount int, storedFields map[int]map[string]string) error {
-	buf := &bytes.Buffer{}
-
-	writeUint32ToBuffer(buf, uint32(docCount))
-
-	// Reserve space for offset table.
-	offsetTableStart := buf.Len()
-	for i := 0; i < docCount; i++ {
-		writeUint64ToBuffer(buf, 0)
-	}
-
-	data := buf.Bytes()
-	docOffsets := make([]uint64, docCount)
-
-	storedBuf := &bytes.Buffer{}
-	for docID := 0; docID < docCount; docID++ {
-		docOffsets[docID] = uint64(len(data) + storedBuf.Len())
-		fields := storedFields[docID]
-		writeVIntToBuffer(storedBuf, len(fields))
-		for name, value := range fields {
-			nameBytes := []byte(name)
-			writeVIntToBuffer(storedBuf, len(nameBytes))
-			storedBuf.Write(nameBytes)
-			valueBytes := []byte(value)
-			writeVIntToBuffer(storedBuf, len(valueBytes))
-			storedBuf.Write(valueBytes)
-		}
-	}
-
-	for i, offset := range docOffsets {
-		binary.LittleEndian.PutUint64(data[offsetTableStart+i*8:], offset)
-	}
-
-	out, err := dir.CreateOutput(segName + ".stored")
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-	out.Write(data)
-	out.Write(storedBuf.Bytes())
-
-	return nil
+	return writeTermIndex(dir, segName, field, metas)
 }
 
 // termHeapEntry holds a term iterator for one segment in the k-way merge.

@@ -2,11 +2,12 @@ package index
 
 import (
 	"fmt"
+	"sort"
+	"strings"
+
 	"gosearch/analysis"
 	"gosearch/document"
 	"gosearch/store"
-	"sort"
-	"strings"
 )
 
 // DeleteTerm represents a buffered delete-by-term operation.
@@ -188,6 +189,11 @@ func (w *IndexWriter) Flush() error {
 	w.segmentInfos.Segments = append(w.segmentInfos.Segments, info)
 	w.segmentInfos.Version++
 
+	// Apply pending deletes to all existing disk segments
+	if err := w.applyPendingDeletes(); err != nil {
+		return err
+	}
+
 	// Reset buffer — old buffer is now GC'd
 	w.buffer = newInMemorySegment(w.nextSegmentName())
 	return nil
@@ -356,6 +362,9 @@ func (w *IndexWriter) MaybeMerge(policy MergePolicy) error {
 
 // ForceMerge merges all segments into at most maxSegments segments.
 func (w *IndexWriter) ForceMerge(maxSegments int) error {
+	if maxSegments < 1 {
+		maxSegments = 1
+	}
 	if err := w.Flush(); err != nil {
 		return err
 	}
@@ -389,10 +398,9 @@ func (w *IndexWriter) executeMerge(candidate MergeCandidate) error {
 		if err != nil {
 			return fmt.Errorf("open segment %s for merge: %w", info.Name, err)
 		}
-		pd := rau.pendingDeletes
 		inputs[i] = MergeInput{
 			Segment:   reader,
-			IsDeleted: pd.IsDeleted,
+			IsDeleted: rau.IsDeleted,
 		}
 	}
 
