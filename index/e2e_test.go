@@ -12,17 +12,39 @@ import (
 	"gosearch/store"
 )
 
-func TestE2EDiskSegmentSearch(t *testing.T) {
-	tmpDir := t.TempDir()
-	dir, _ := store.NewFSDirectory(tmpDir)
-
+func newTestWriter(t *testing.T, bufferSize int) (*index.IndexWriter, store.Directory) {
+	t.Helper()
+	dir, _ := store.NewFSDirectory(t.TempDir())
 	analyzer := analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
 	)
+	return index.NewIndexWriter(dir, analyzer, bufferSize), dir
+}
 
+func addTextDoc(t *testing.T, writer *index.IndexWriter, field, text string) {
+	t.Helper()
+	doc := document.NewDocument()
+	doc.AddField(field, text, document.FieldTypeText)
+	writer.AddDocument(doc)
+}
+
+func commitAndOpenReader(t *testing.T, writer *index.IndexWriter, dir store.Directory) *index.IndexReader {
+	t.Helper()
+	if err := writer.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := index.OpenDirectoryReader(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { reader.Close() })
+	return reader
+}
+
+func TestE2EDiskSegmentSearch(t *testing.T) {
 	// Create two segments via auto-flush (bufferSize=2)
-	writer := index.NewIndexWriter(dir, analyzer, 2)
+	writer, dir := newTestWriter(t, 2)
 	doc0 := document.NewDocument()
 	doc0.AddField("body", "the quick brown fox", document.FieldTypeText)
 	writer.AddDocument(doc0)
@@ -91,38 +113,570 @@ func TestE2EDiskSegmentSearch(t *testing.T) {
 	}
 }
 
+func TestE2EDeleteAndSearch(t *testing.T) {
+	writer, dir := newTestWriter(t, 100)
+	for _, text := range []string{
+		"the quick brown fox",   // doc0
+		"the lazy brown dog",    // doc1
+		"brown fox jumps over",  // doc2
+		"the quick red fox",     // doc3
+	} {
+		addTextDoc(t, writer, "body", text)
+	}
+
+	// Delete all documents containing "dog" (doc1)
+	writer.DeleteDocuments("body", "dog")
+
+	reader := commitAndOpenReader(t, writer, dir)
+	searcher := search.NewIndexSearcher(reader)
+
+	// "brown" appears in doc0, doc1, doc2; doc1 is deleted → 2 results
+	results := searcher.Search(search.NewTermQuery("body", "brown"), 10)
+	if len(results) != 2 {
+		t.Errorf("expected 2 results after deletion, got %d", len(results))
+	}
+	for _, r := range results {
+		if r.Fields["body"] == "the lazy brown dog" {
+			t.Errorf("deleted document should not appear in results")
+		}
+	}
+}
+
+func TestE2EDeleteAllDocsInSegment(t *testing.T) {
+	// bufferSize=2 forces two segments: seg0=[doc0,doc1], seg1=[doc2,doc3]
+	writer, dir := newTestWriter(t, 2)
+
+	addTextDoc(t, writer, "body", "alpha beta")
+	addTextDoc(t, writer, "body", "alpha gamma")   // auto-flush → seg0
+	addTextDoc(t, writer, "body", "delta epsilon")
+	addTextDoc(t, writer, "body", "delta zeta")     // auto-flush → seg1
+
+	// Delete all docs in seg0 by deleting "alpha"
+	writer.DeleteDocuments("body", "alpha")
+
+	reader := commitAndOpenReader(t, writer, dir)
+	searcher := search.NewIndexSearcher(reader)
+
+	// "alpha" docs are deleted, should return nothing
+	results := searcher.Search(search.NewTermQuery("body", "alpha"), 10)
+	if len(results) != 0 {
+		t.Errorf("expected 0 results for deleted term, got %d", len(results))
+	}
+
+	// "delta" docs still exist
+	results = searcher.Search(search.NewTermQuery("body", "delta"), 10)
+	if len(results) != 2 {
+		t.Errorf("expected 2 results for surviving docs, got %d", len(results))
+	}
+}
+
+func TestE2EPhraseQueryNonConsecutiveTerms(t *testing.T) {
+	writer, dir := newTestWriter(t, 100)
+
+	// "quick" and "fox" both appear but are NOT consecutive
+	addTextDoc(t, writer, "body", "the quick brown fox")
+	// "brown fox" IS consecutive
+	addTextDoc(t, writer, "body", "brown fox jumps")
+
+	reader := commitAndOpenReader(t, writer, dir)
+	searcher := search.NewIndexSearcher(reader)
+
+	// "quick fox" should NOT match — terms are not consecutive
+	results := searcher.Search(search.NewPhraseQuery("body", "quick", "fox"), 10)
+	if len(results) != 0 {
+		t.Errorf("expected 0 results for non-consecutive phrase 'quick fox', got %d", len(results))
+	}
+
+	// "quick brown" SHOULD match doc0
+	results = searcher.Search(search.NewPhraseQuery("body", "quick", "brown"), 10)
+	if len(results) != 1 {
+		t.Errorf("expected 1 result for consecutive phrase 'quick brown', got %d", len(results))
+	}
+
+	// "brown fox" should match both docs
+	results = searcher.Search(search.NewPhraseQuery("body", "brown", "fox"), 10)
+	if len(results) != 2 {
+		t.Errorf("expected 2 results for phrase 'brown fox', got %d", len(results))
+	}
+}
+
+func TestE2EPhraseQueryRepeatedTerms(t *testing.T) {
+	writer, dir := newTestWriter(t, 100)
+
+	// "foo foo foo" — repeated consecutive terms
+	addTextDoc(t, writer, "body", "foo foo foo bar")
+	// "foo bar foo" — foo appears but not "foo foo"
+	addTextDoc(t, writer, "body", "foo bar foo")
+
+	reader := commitAndOpenReader(t, writer, dir)
+	searcher := search.NewIndexSearcher(reader)
+
+	// "foo foo" should match doc0 only (positions 0,1 or 1,2)
+	results := searcher.Search(search.NewPhraseQuery("body", "foo", "foo"), 10)
+	if len(results) != 1 {
+		t.Errorf("expected 1 result for phrase 'foo foo', got %d", len(results))
+	}
+
+	// Three-term phrase "foo foo foo" should also match doc0
+	results = searcher.Search(search.NewPhraseQuery("body", "foo", "foo", "foo"), 10)
+	if len(results) != 1 {
+		t.Errorf("expected 1 result for phrase 'foo foo foo', got %d", len(results))
+	}
+}
+
+func TestE2EBooleanQueryOnlyMustNot(t *testing.T) {
+	writer, dir := newTestWriter(t, 100)
+	addTextDoc(t, writer, "body", "hello world")
+
+	reader := commitAndOpenReader(t, writer, dir)
+	searcher := search.NewIndexSearcher(reader)
+
+	// BooleanQuery with ONLY MustNot — no positive clauses means no candidates
+	results := searcher.Search(search.NewBooleanQuery().
+		Add(search.NewTermQuery("body", "hello"), search.OccurMustNot), 10)
+	if len(results) != 0 {
+		t.Errorf("expected 0 results for only-must-not query, got %d", len(results))
+	}
+}
+
+func TestE2EBooleanQueryAllShould(t *testing.T) {
+	writer, dir := newTestWriter(t, 100)
+	for _, text := range []string{
+		"alpha beta",    // doc0 — matches both
+		"alpha gamma",   // doc1 — matches one
+		"delta epsilon", // doc2 — matches neither
+	} {
+		addTextDoc(t, writer, "body", text)
+	}
+
+	reader := commitAndOpenReader(t, writer, dir)
+	searcher := search.NewIndexSearcher(reader)
+
+	// All SHOULD = OR semantics: matches doc0 and doc1
+	results := searcher.Search(search.NewBooleanQuery().
+		Add(search.NewTermQuery("body", "alpha"), search.OccurShould).
+		Add(search.NewTermQuery("body", "beta"), search.OccurShould), 10)
+	if len(results) != 2 {
+		t.Errorf("expected 2 results for all-should query, got %d", len(results))
+	}
+
+	// doc0 should score higher (matches both SHOULD clauses)
+	if len(results) >= 2 && results[0].Score <= results[1].Score {
+		t.Errorf("doc matching both SHOULD clauses should score higher: got %f <= %f",
+			results[0].Score, results[1].Score)
+	}
+}
+
+func TestE2ESearchNonExistentTerm(t *testing.T) {
+	writer, dir := newTestWriter(t, 100)
+	addTextDoc(t, writer, "body", "hello world")
+
+	reader := commitAndOpenReader(t, writer, dir)
+	searcher := search.NewIndexSearcher(reader)
+
+	// Term that doesn't exist at all
+	results := searcher.Search(search.NewTermQuery("body", "nonexistent"), 10)
+	if len(results) != 0 {
+		t.Errorf("expected 0 results for nonexistent term, got %d", len(results))
+	}
+
+	// Field that doesn't exist
+	results = searcher.Search(search.NewTermQuery("title", "hello"), 10)
+	if len(results) != 0 {
+		t.Errorf("expected 0 results for nonexistent field, got %d", len(results))
+	}
+
+	// Phrase query with one nonexistent term
+	results = searcher.Search(search.NewPhraseQuery("body", "hello", "nonexistent"), 10)
+	if len(results) != 0 {
+		t.Errorf("expected 0 results for phrase with nonexistent term, got %d", len(results))
+	}
+}
+
+func TestE2EForceMergeWithDeletions(t *testing.T) {
+	// bufferSize=2 forces multiple segments
+	writer, dir := newTestWriter(t, 2)
+
+	addTextDoc(t, writer, "body", "alpha beta gamma")
+	addTextDoc(t, writer, "body", "alpha delta")     // → seg0
+	addTextDoc(t, writer, "body", "beta epsilon")
+	addTextDoc(t, writer, "body", "gamma zeta alpha") // → seg1
+
+	// Delete doc1 ("alpha delta") before merge
+	writer.DeleteDocuments("body", "delta")
+
+	if err := writer.ForceMerge(1); err != nil {
+		t.Fatal(err)
+	}
+
+	reader := commitAndOpenReader(t, writer, dir)
+	searcher := search.NewIndexSearcher(reader)
+
+	// "alpha" should match doc0 and doc3 only (doc1 was deleted before merge)
+	results := searcher.Search(search.NewTermQuery("body", "alpha"), 10)
+	if len(results) != 2 {
+		t.Errorf("expected 2 results for 'alpha' after merge+delete, got %d", len(results))
+	}
+
+	// Verify deleted doc is truly gone from stored fields
+	for _, r := range results {
+		if r.Fields["body"] == "alpha delta" {
+			t.Errorf("deleted document 'alpha delta' should not appear after merge")
+		}
+	}
+
+	// Verify all docs are now in a single segment
+	leaves := reader.Leaves()
+	if len(leaves) != 1 {
+		t.Errorf("expected 1 segment after ForceMerge(1), got %d", len(leaves))
+	}
+}
+
+func TestE2ETopKLimiting(t *testing.T) {
+	writer, dir := newTestWriter(t, 100)
+
+	// Create 10 documents all containing "common"
+	for range 10 {
+		addTextDoc(t, writer, "body", "common word here")
+	}
+
+	reader := commitAndOpenReader(t, writer, dir)
+	searcher := search.NewIndexSearcher(reader)
+
+	// topK=3 should limit to 3 results
+	results := searcher.Search(search.NewTermQuery("body", "common"), 3)
+	if len(results) != 3 {
+		t.Errorf("expected 3 results with topK=3, got %d", len(results))
+	}
+
+	// topK=1 should return exactly 1
+	results = searcher.Search(search.NewTermQuery("body", "common"), 1)
+	if len(results) != 1 {
+		t.Errorf("expected 1 result with topK=1, got %d", len(results))
+	}
+}
+
+func TestE2ENRTReaderSnapshotIsolation(t *testing.T) {
+	writer, _ := newTestWriter(t, 100)
+
+	addTextDoc(t, writer, "body", "snapshot test alpha")
+
+	// Open NRT reader — captures point-in-time snapshot
+	nrtReader, err := index.OpenNRTReader(writer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nrtReader.Close()
+
+	// Add more documents AFTER opening NRT reader
+	addTextDoc(t, writer, "body", "snapshot test beta")
+
+	nrtSearcher := search.NewIndexSearcher(nrtReader)
+
+	// NRT reader should NOT see doc1 (added after snapshot)
+	results := nrtSearcher.Search(search.NewTermQuery("body", "beta"), 10)
+	if len(results) != 0 {
+		t.Errorf("NRT reader should not see documents added after snapshot, got %d results", len(results))
+	}
+
+	// NRT reader SHOULD see doc0
+	results = nrtSearcher.Search(search.NewTermQuery("body", "alpha"), 10)
+	if len(results) != 1 {
+		t.Errorf("NRT reader should see pre-snapshot documents, expected 1, got %d", len(results))
+	}
+
+	// Open a NEW NRT reader — should see both documents
+	nrtReader2, err := index.OpenNRTReader(writer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nrtReader2.Close()
+
+	nrtSearcher2 := search.NewIndexSearcher(nrtReader2)
+	results = nrtSearcher2.Search(search.NewTermQuery("body", "test"), 10)
+	if len(results) != 2 {
+		t.Errorf("new NRT reader should see all documents, expected 2, got %d", len(results))
+	}
+}
+
+func TestE2EScoreOrdering(t *testing.T) {
+	writer, dir := newTestWriter(t, 100)
+
+	// doc0: "fox" appears once in a 4-token doc
+	addTextDoc(t, writer, "body", "the quick brown fox")
+	// doc1: "fox" appears 3 times in a 4-token doc (higher TF)
+	addTextDoc(t, writer, "body", "fox fox fox dog")
+
+	reader := commitAndOpenReader(t, writer, dir)
+	searcher := search.NewIndexSearcher(reader)
+	results := searcher.Search(search.NewTermQuery("body", "fox"), 10)
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(results))
+	}
+
+	// Results should be in descending score order
+	if results[0].Score < results[1].Score {
+		t.Errorf("results should be in descending score order: %f < %f",
+			results[0].Score, results[1].Score)
+	}
+
+	// doc1 (fox fox fox) should score higher than doc0 (one fox)
+	if results[0].Fields["body"] != "fox fox fox dog" {
+		t.Errorf("expected highest scoring doc to be 'fox fox fox dog', got '%s'",
+			results[0].Fields["body"])
+	}
+}
+
+func TestE2EMultiFieldDocument(t *testing.T) {
+	writer, dir := newTestWriter(t, 100)
+
+	doc := document.NewDocument()
+	doc.AddField("title", "Quick Fox", document.FieldTypeText)
+	doc.AddField("body", "the lazy brown dog", document.FieldTypeText)
+	writer.AddDocument(doc)
+
+	doc2 := document.NewDocument()
+	doc2.AddField("title", "Lazy Dog", document.FieldTypeText)
+	doc2.AddField("body", "the quick brown fox", document.FieldTypeText)
+	writer.AddDocument(doc2)
+
+	reader := commitAndOpenReader(t, writer, dir)
+	searcher := search.NewIndexSearcher(reader)
+
+	// Search "title" field for "fox" — should match doc0 only
+	results := searcher.Search(search.NewTermQuery("title", "fox"), 10)
+	if len(results) != 1 {
+		t.Errorf("expected 1 result searching title for 'fox', got %d", len(results))
+	}
+
+	// Search "body" field for "fox" — should match doc2 only
+	results = searcher.Search(search.NewTermQuery("body", "fox"), 10)
+	if len(results) != 1 {
+		t.Errorf("expected 1 result searching body for 'fox', got %d", len(results))
+	}
+
+	// Boolean: title:fox AND body:dog — should match nothing
+	// (doc0 has title:fox but body:dog, doc2 has body:fox but title:dog)
+	// Wait: doc0 has title:"Quick Fox" and body:"the lazy brown dog"
+	// So title:fox AND body:dog → doc0 matches both!
+	results = searcher.Search(search.NewBooleanQuery().
+		Add(search.NewTermQuery("title", "fox"), search.OccurMust).
+		Add(search.NewTermQuery("body", "dog"), search.OccurMust), 10)
+	if len(results) != 1 {
+		t.Errorf("expected 1 result for cross-field boolean query, got %d", len(results))
+	}
+
+	// Verify stored fields from multiple fields are accessible
+	if len(results) == 1 {
+		if results[0].Fields["title"] == "" || results[0].Fields["body"] == "" {
+			t.Errorf("expected both title and body stored fields, got title=%q body=%q",
+				results[0].Fields["title"], results[0].Fields["body"])
+		}
+	}
+}
+
+func TestE2EKeywordField(t *testing.T) {
+	writer, dir := newTestWriter(t, 100)
+
+	doc := document.NewDocument()
+	doc.AddField("body", "some text here", document.FieldTypeText)
+	doc.AddField("status", "ACTIVE", document.FieldTypeKeyword)
+	writer.AddDocument(doc)
+
+	doc2 := document.NewDocument()
+	doc2.AddField("body", "other text here", document.FieldTypeText)
+	doc2.AddField("status", "INACTIVE", document.FieldTypeKeyword)
+	writer.AddDocument(doc2)
+
+	reader := commitAndOpenReader(t, writer, dir)
+	searcher := search.NewIndexSearcher(reader)
+
+	// Keyword field: exact match (not analyzed, so case-sensitive)
+	results := searcher.Search(search.NewTermQuery("status", "ACTIVE"), 10)
+	if len(results) != 1 {
+		t.Errorf("expected 1 result for keyword exact match, got %d", len(results))
+	}
+
+	// Lowercase should NOT match keyword field (not analyzed)
+	results = searcher.Search(search.NewTermQuery("status", "active"), 10)
+	if len(results) != 0 {
+		t.Errorf("expected 0 results for lowercase keyword (not analyzed), got %d", len(results))
+	}
+
+	// Boolean: body:text AND status:ACTIVE
+	results = searcher.Search(search.NewBooleanQuery().
+		Add(search.NewTermQuery("body", "text"), search.OccurMust).
+		Add(search.NewTermQuery("status", "ACTIVE"), search.OccurMust), 10)
+	if len(results) != 1 {
+		t.Errorf("expected 1 result for text+keyword boolean, got %d", len(results))
+	}
+}
+
+func TestE2EThreeTermPhraseQuery(t *testing.T) {
+	writer, dir := newTestWriter(t, 100)
+
+	addTextDoc(t, writer, "body", "the quick brown fox jumps")
+	addTextDoc(t, writer, "body", "quick brown dog")
+	addTextDoc(t, writer, "body", "the brown fox quick")
+
+	reader := commitAndOpenReader(t, writer, dir)
+	searcher := search.NewIndexSearcher(reader)
+
+	// "quick brown fox" — 3-term phrase, should match doc0 only
+	results := searcher.Search(search.NewPhraseQuery("body", "quick", "brown", "fox"), 10)
+	if len(results) != 1 {
+		t.Errorf("expected 1 result for 3-term phrase 'quick brown fox', got %d", len(results))
+	}
+	if len(results) == 1 && results[0].Fields["body"] != "the quick brown fox jumps" {
+		t.Errorf("wrong doc matched: %s", results[0].Fields["body"])
+	}
+}
+
+func TestE2EMultiSegmentPhraseQuery(t *testing.T) {
+	// bufferSize=1 forces each doc into its own segment
+	writer, dir := newTestWriter(t, 1)
+
+	addTextDoc(t, writer, "body", "brown fox jumps high") // → seg0
+	addTextDoc(t, writer, "body", "the brown fox")        // → seg1
+	addTextDoc(t, writer, "body", "fox brown reversed")   // → seg2
+
+	reader := commitAndOpenReader(t, writer, dir)
+	searcher := search.NewIndexSearcher(reader)
+
+	// "brown fox" should match seg0 and seg1 but not seg2 (reversed)
+	results := searcher.Search(search.NewPhraseQuery("body", "brown", "fox"), 10)
+	if len(results) != 2 {
+		t.Errorf("expected 2 results for phrase 'brown fox' across segments, got %d", len(results))
+	}
+
+	// Verify NRT gives same results
+	nrtReader, err := index.OpenNRTReader(writer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nrtReader.Close()
+
+	nrtSearcher := search.NewIndexSearcher(nrtReader)
+	nrtResults := nrtSearcher.Search(search.NewPhraseQuery("body", "brown", "fox"), 10)
+	if len(nrtResults) != len(results) {
+		t.Errorf("NRT vs disk mismatch: nrt=%d disk=%d", len(nrtResults), len(results))
+	}
+}
+
+func TestE2EHighTermFrequencyScoring(t *testing.T) {
+	writer, dir := newTestWriter(t, 100)
+
+	// doc0: "fox" appears once
+	addTextDoc(t, writer, "body", "fox")
+	// doc1: "fox" repeated many times — should score higher due to TF
+	addTextDoc(t, writer, "body", "fox fox fox fox fox fox fox fox fox fox")
+
+	reader := commitAndOpenReader(t, writer, dir)
+	searcher := search.NewIndexSearcher(reader)
+	results := searcher.Search(search.NewTermQuery("body", "fox"), 10)
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(results))
+	}
+
+	// All scores should be positive and finite
+	for _, r := range results {
+		if r.Score <= 0 || math.IsNaN(r.Score) || math.IsInf(r.Score, 0) {
+			t.Errorf("invalid score %f for docID %d", r.Score, r.DocID)
+		}
+	}
+}
+
+func TestE2EDeleteThenMergeThenSearch(t *testing.T) {
+	// 3 segments of 2 docs each
+	writer, dir := newTestWriter(t, 2)
+
+	for _, text := range []string{
+		"alpha beta",    // doc0 — seg0
+		"alpha gamma",   // doc1 — seg0
+		"beta delta",    // doc2 — seg1
+		"gamma epsilon", // doc3 — seg1
+		"alpha zeta",    // doc4 — seg2
+		"beta eta",      // doc5 — seg2
+	} {
+		addTextDoc(t, writer, "body", text)
+	}
+
+	// Delete "alpha" docs (doc0, doc1, doc4)
+	writer.DeleteDocuments("body", "alpha")
+
+	// Force merge into 1 segment
+	if err := writer.ForceMerge(1); err != nil {
+		t.Fatal(err)
+	}
+
+	reader := commitAndOpenReader(t, writer, dir)
+	searcher := search.NewIndexSearcher(reader)
+
+	// Only doc2, doc3, doc5 should survive
+	results := searcher.Search(search.NewTermQuery("body", "beta"), 10)
+	if len(results) != 2 {
+		t.Errorf("expected 2 results for 'beta' after delete+merge, got %d", len(results))
+	}
+
+	results = searcher.Search(search.NewTermQuery("body", "alpha"), 10)
+	if len(results) != 0 {
+		t.Errorf("expected 0 results for 'alpha' (all deleted), got %d", len(results))
+	}
+
+	// Total live docs should be 3
+	if reader.LiveDocCount() != 3 {
+		t.Errorf("expected 3 live docs after merge, got %d", reader.LiveDocCount())
+	}
+}
+
+func TestE2EBooleanQueryMustWithShould(t *testing.T) {
+	writer, dir := newTestWriter(t, 100)
+
+	for _, text := range []string{
+		"alpha beta gamma",  // doc0 — matches MUST and SHOULD
+		"alpha delta",       // doc1 — matches MUST only
+		"beta gamma",        // doc2 — matches SHOULD only, not MUST
+	} {
+		addTextDoc(t, writer, "body", text)
+	}
+
+	reader := commitAndOpenReader(t, writer, dir)
+	searcher := search.NewIndexSearcher(reader)
+
+	// MUST "alpha" + SHOULD "beta": both doc0 and doc1 match (MUST required),
+	// but doc0 should score higher (boosted by SHOULD match)
+	results := searcher.Search(search.NewBooleanQuery().
+		Add(search.NewTermQuery("body", "alpha"), search.OccurMust).
+		Add(search.NewTermQuery("body", "beta"), search.OccurShould), 10)
+
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results for MUST+SHOULD, got %d", len(results))
+	}
+
+	// doc0 (matches both MUST and SHOULD) should rank higher
+	if results[0].Fields["body"] != "alpha beta gamma" {
+		t.Errorf("expected doc matching MUST+SHOULD to rank first, got '%s'",
+			results[0].Fields["body"])
+	}
+	if results[0].Score <= results[1].Score {
+		t.Errorf("MUST+SHOULD doc should score higher: %f <= %f",
+			results[0].Score, results[1].Score)
+	}
+}
+
 func TestE2EDiskSegmentQueryExecution(t *testing.T) {
-	tmpDir := t.TempDir()
-	dir, _ := store.NewFSDirectory(tmpDir)
-
-	analyzer := analysis.NewAnalyzer(
-		analysis.NewWhitespaceTokenizer(),
-		&analysis.LowerCaseFilter{},
-	)
-
-	writer := index.NewIndexWriter(dir, analyzer, 100)
-	docs := []string{
+	writer, dir := newTestWriter(t, 100)
+	for _, text := range []string{
 		"the quick brown fox",
 		"the lazy brown dog",
 		"the quick red fox jumps",
 		"brown fox brown fox",
-	}
-	for _, text := range docs {
-		doc := document.NewDocument()
-		doc.AddField("body", text, document.FieldTypeText)
-		writer.AddDocument(doc)
-	}
-
-	if err := writer.Commit(); err != nil {
-		t.Fatal(err)
+	} {
+		addTextDoc(t, writer, "body", text)
 	}
 
 	// Open from disk
-	reader, err := index.OpenDirectoryReader(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer reader.Close()
+	reader := commitAndOpenReader(t, writer, dir)
 
 	var diskReaders []index.SegmentReader
 	for _, leaf := range reader.Leaves() {
