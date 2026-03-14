@@ -2,6 +2,19 @@
 
 本ドキュメントでは、gosearch の検索パイプラインと Apache Lucene (Java) の設計を比較し、主要な差分と修正方針を整理する。
 
+> **Last Updated**: 2026-03-14
+>
+> ## ステータスサマリー
+>
+> | 差分 | ステータス | 備考 |
+> |------|-----------|------|
+> | 差分1: Weight/Scorer パターン | ❌ 未対応 | 最大の改善ポイント |
+> | 差分2: Collector 統一インターフェース | ✅ 対応済 | |
+> | 差分3: StoredFields 遅延取得 | ✅ 対応済 | |
+> | 差分4: FieldComparator 分離 | ✅ 対応済 | |
+> | 差分5: ScoreMode | ⚠️ 部分対応 | 定義済だが Query に伝播していない |
+> | 差分6: CollectorManager | ❌ 未対応 | 低優先度 |
+
 ## 参照ソース
 
 ### gosearch (Go)
@@ -158,142 +171,91 @@ type DocIdSetIterator interface {
 
 ---
 
-## 差分2: Collector に共通インターフェースがない
+## 差分2: Collector に共通インターフェースがない → ✅ 対応済
 
-### 現状 (gosearch)
+### 現状 (gosearch) - 対応済
 
-`TopKCollector` と `TopFieldCollector` はまったく別の型で、共通インターフェースを持たない。
-
-```go
-// search/collector.go:20
-func (c *TopKCollector) Collect(result SearchResult)
-
-// search/top_field_collector.go:67
-func (c *TopFieldCollector) Collect(localDocID int, score float64, globalDocID int)
-```
-
-シグネチャが異なるため、`IndexSearcher` に2つの search メソッドが必要:
+Lucene に倣い、`Collector` と `LeafCollector` の統一インターフェースが実装済み。
 
 ```go
-// search/searcher.go:23
-func (s *IndexSearcher) Search(q Query, topK int) []SearchResult
-
-// search/searcher.go:47
-func (s *IndexSearcher) SearchWithSort(q Query, topK int, sort *Sort) []SearchResult
-```
-
-2つのメソッドの内部ループはほぼ同じ構造だが、Collector の API が違うために重複している。
-
-### Lucene の設計
-
-```java
-// Collector.java:46-58
-public interface Collector {
-    LeafCollector getLeafCollector(LeafReaderContext context) throws IOException;
-    ScoreMode scoreMode();
-}
-
-// LeafCollector.java:64-85
-public interface LeafCollector {
-    void setScorer(Scorable scorer) throws IOException;
-    void collect(int doc) throws IOException;
-}
-```
-
-- **Collector** がトップレベルのインターフェース
-- **LeafCollector** がセグメント単位で `collect(int doc)` を受ける
-- `TopScoreDocCollector` も `TopFieldCollector` も同じ `Collector` インターフェースを実装
-- `IndexSearcher.search(Query, Collector)` が**1つ**で済む
-
-参照: `lucene/.../Collector.java:46-64`, `lucene/.../LeafCollector.java:64-85`
-
-### 影響
-
-| 項目 | 説明 |
-|------|------|
-| 検索メソッドの重複 | `Search()` と `SearchWithSort()` のループがほぼ同一 |
-| 拡張性 | 新しい collect 方式 (例: グルーピング、ファセット) を追加するたびに新しい search メソッドが必要 |
-| deleted docs 処理 | 本来 Scorer/BulkScorer が `liveDocs` を使って内部処理すべきだが、Searcher のループに漏れている (`search/searcher.go:29-31`, `search/searcher.go:53-55`) |
-
-### 修正方針
-
-```go
+// search/top_score_doc_collector.go:14-18
 type Collector interface {
-    GetLeafCollector(leaf LeafReaderContext) LeafCollector
+    GetLeafCollector(ctx index.LeafReaderContext) LeafCollector
     ScoreMode() ScoreMode
+    Results() []SearchResult
 }
 
+// search/leaf_collector.go:4-6
 type LeafCollector interface {
-    SetScorer(scorer Scorable)
-    Collect(doc int)
+    Collect(docID int, score float64)
 }
+```
 
-// IndexSearcher は1つの search メソッドに統一
-func (s *IndexSearcher) Search(q Query, collector Collector) {
-    weight := q.CreateWeight(s, collector.ScoreMode())
+`TopKCollector` と `TopFieldCollector` は同一の `Collector` インターフェースを実装し、
+`IndexSearcher.Search()` は**1つのメソッド**に統一されている:
+
+```go
+// search/searcher.go:24-40
+func (s *IndexSearcher) Search(q Query, c Collector) []SearchResult {
     for _, leaf := range s.reader.Leaves() {
-        leafCollector := collector.GetLeafCollector(leaf)
-        scorer := weight.Scorer(leaf)
-        liveDocs := leaf.Segment.LiveDocs()
-        for doc := scorer.Iterator().NextDoc(); doc != NO_MORE_DOCS; doc = scorer.Iterator().NextDoc() {
-            if liveDocs != nil && !liveDocs.Get(doc) {
+        lc := c.GetLeafCollector(leaf)
+        for _, ds := range q.Execute(leaf.Segment) {
+            if leaf.Segment.IsDeleted(ds.DocID) {
                 continue
             }
-            leafCollector.Collect(doc)
+            lc.Collect(ds.DocID, ds.Score)
         }
     }
+    results := c.Results()
+    for i := range results {
+        results[i].Fields = s.reader.GetStoredFields(results[i].DocID)
+    }
+    return results
 }
 ```
+
+### Lucene との差異
+
+| 項目 | Lucene | gosearch | 状態 |
+|------|--------|----------|------|
+| Collector/LeafCollector 分離 | ✓ | ✓ | 対応済 |
+| ScoreMode | ✓ | ✓ (定義済) | 対応済 |
+| Search メソッド統一 | ✓ | ✓ | 対応済 |
+| LeafCollector.SetScorer | ✓ | ✗ (score は引数で渡す) | 設計差異 |
+
+### 残課題
+
+- `LeafCollector.Collect(docID, score)` で score を引数渡ししているが、Lucene は `SetScorer(Scorable)` で遅延取得
+- Weight/Scorer 導入時 (差分1) に `SetScorer` パターンへ移行可能
 
 ---
 
-## 差分3: StoredFields の取得タイミング
+## 差分3: StoredFields の取得タイミング → ✅ 対応済
 
-### 現状 (gosearch)
+### 現状 (gosearch) - 対応済
 
-```go
-// search/searcher.go:33
-stored, _ := leaf.Segment.StoredFields(ds.DocID)
-```
-
-`Search()` の collect ループ内で、top-K に入るかどうかに関係なく**全マッチ**に対して `StoredFields()` を呼んでいる。
-`SearchWithSort()` ではこの問題はないが、結果に `Fields` が含まれない。
-
-### Lucene の設計
-
-collect 時には docID のみを扱い、StoredFields は**結果確定後**に必要なドキュメントだけ取得する。
-
-```java
-// LeafCollector.java:84-85 のコメント:
-// NOTE: This is called in an inner search loop. For good search performance,
-// implementations of this method should not call StoredFields.document on every hit.
-```
-
-### 影響
-
-top-K = 10 でマッチが 10,000 件あった場合、9,990 回の不要なディスク I/O が発生する。
-
-### 修正方針
-
-Collect ループでは docID とスコアのみを扱い、`Results()` で最終的な top-K が確定した後に StoredFields を取得する。
+StoredFields は collect ループ後、**結果確定後**に取得するよう修正済み:
 
 ```go
-// 結果確定後に取得
-func (s *IndexSearcher) storedFieldsFor(results []ScoreDoc) []SearchResult {
-    out := make([]SearchResult, len(results))
-    for i, sd := range results {
-        // globalDocID → leaf + localDocID に逆引き
-        leaf, localDoc := s.reader.ResolveDocID(sd.Doc)
-        stored, _ := leaf.Segment.StoredFields(localDoc)
-        out[i] = SearchResult{
-            DocID:  sd.Doc,
-            Score:  sd.Score,
-            Fields: stored,
-        }
-    }
-    return out
+// search/searcher.go:35-38
+results := c.Results()
+for i := range results {
+    results[i].Fields = s.reader.GetStoredFields(results[i].DocID)
 }
+return results
 ```
+
+collect ループ (`search/searcher.go:25-32`) では `docID` と `score` のみを扱い、
+StoredFields の取得は最終的な top-K 結果に対してのみ行われる。
+
+### Lucene との一致
+
+Lucene の設計方針:
+> NOTE: This is called in an inner search loop. For good search performance,
+> implementations of this method should not call StoredFields.document on every hit.
+> — LeafCollector.java:84-85
+
+gosearch も同じ方針で実装済み。
 
 ---
 
