@@ -55,6 +55,14 @@ func (r *LiveDocsSegmentReader) PostingsIterator(field, term string) PostingsIte
 	return r.inner.PostingsIterator(field, term)
 }
 
+func (r *LiveDocsSegmentReader) NumericDocValues(field string) NumericDocValues {
+	return r.inner.NumericDocValues(field)
+}
+
+func (r *LiveDocsSegmentReader) SortedDocValues(field string) SortedDocValues {
+	return r.inner.SortedDocValues(field)
+}
+
 func (r *LiveDocsSegmentReader) Close() error {
 	return nil
 }

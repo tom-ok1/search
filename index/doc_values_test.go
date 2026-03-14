@@ -1,0 +1,527 @@
+package index
+
+import (
+	"testing"
+
+	"gosearch/analysis"
+	"gosearch/document"
+	"gosearch/store"
+)
+
+func TestNumericDocValuesRoundTrip(t *testing.T) {
+	dir := createTempDir(t)
+
+	writer := NewIndexWriter(dir, analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{}), 100)
+
+	// Add documents with numeric doc values
+	for _, price := range []int64{100, 250, 50, 300, 75} {
+		doc := document.NewDocument()
+		doc.AddField("title", "product", document.FieldTypeText)
+		doc.AddNumericDocValuesField("price", price)
+		if err := writer.AddDocument(doc); err != nil {
+			t.Fatalf("AddDocument: %v", err)
+		}
+	}
+
+	if err := writer.Commit(); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+
+	// Open reader and verify
+	reader, err := OpenDirectoryReader(dir)
+	if err != nil {
+		t.Fatalf("OpenDirectoryReader: %v", err)
+	}
+
+	leaves := reader.Leaves()
+	if len(leaves) != 1 {
+		t.Fatalf("expected 1 leaf, got %d", len(leaves))
+	}
+
+	seg := leaves[0].Segment
+	ndv := seg.NumericDocValues("price")
+	if ndv == nil {
+		t.Fatal("expected non-nil NumericDocValues for price")
+	}
+
+	expected := []int64{100, 250, 50, 300, 75}
+	for i, want := range expected {
+		got, err := ndv.Get(i)
+		if err != nil {
+			t.Fatalf("Get(%d): %v", i, err)
+		}
+		if got != want {
+			t.Errorf("Get(%d) = %d, want %d", i, got, want)
+		}
+	}
+
+	// Field without DV should return nil
+	if seg.NumericDocValues("nonexistent") != nil {
+		t.Error("expected nil for nonexistent field")
+	}
+
+	writer.Close()
+}
+
+func TestSortedDocValuesRoundTrip(t *testing.T) {
+	dir := createTempDir(t)
+
+	writer := NewIndexWriter(dir, analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{}), 100)
+
+	categories := []string{"electronics", "books", "electronics", "clothing", "books"}
+	for _, cat := range categories {
+		doc := document.NewDocument()
+		doc.AddField("title", "item", document.FieldTypeText)
+		doc.AddSortedDocValuesField("category", cat)
+		if err := writer.AddDocument(doc); err != nil {
+			t.Fatalf("AddDocument: %v", err)
+		}
+	}
+
+	if err := writer.Commit(); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+
+	reader, err := OpenDirectoryReader(dir)
+	if err != nil {
+		t.Fatalf("OpenDirectoryReader: %v", err)
+	}
+
+	seg := reader.Leaves()[0].Segment
+	sdv := seg.SortedDocValues("category")
+	if sdv == nil {
+		t.Fatal("expected non-nil SortedDocValues for category")
+	}
+
+	// Should have 3 unique values: books, clothing, electronics (sorted)
+	if sdv.ValueCount() != 3 {
+		t.Fatalf("ValueCount() = %d, want 3", sdv.ValueCount())
+	}
+
+	// Verify ordinal-to-value mapping (sorted order)
+	expectedDict := []string{"books", "clothing", "electronics"}
+	for i, want := range expectedDict {
+		got, err := sdv.LookupOrd(i)
+		if err != nil {
+			t.Fatalf("LookupOrd(%d): %v", i, err)
+		}
+		if string(got) != want {
+			t.Errorf("LookupOrd(%d) = %q, want %q", i, got, want)
+		}
+	}
+
+	// Verify per-document ordinals
+	expectedOrds := []int{2, 0, 2, 1, 0} // electronics=2, books=0, clothing=1
+	for i, wantOrd := range expectedOrds {
+		gotOrd, err := sdv.OrdValue(i)
+		if err != nil {
+			t.Fatalf("OrdValue(%d): %v", i, err)
+		}
+		if gotOrd != wantOrd {
+			t.Errorf("OrdValue(%d) = %d, want %d", i, gotOrd, wantOrd)
+		}
+	}
+
+	writer.Close()
+}
+
+func TestDocValuesMerge(t *testing.T) {
+	dir := createTempDir(t)
+
+	// Use buffer size 2 to force multiple segments
+	writer := NewIndexWriter(dir, analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{}), 2)
+
+	// Add 4 documents across 2 segments
+	prices := []int64{100, 200, 300, 400}
+	cats := []string{"a", "b", "c", "a"}
+	for i := range prices {
+		doc := document.NewDocument()
+		doc.AddField("title", "item", document.FieldTypeText)
+		doc.AddNumericDocValuesField("price", prices[i])
+		doc.AddSortedDocValuesField("cat", cats[i])
+		if err := writer.AddDocument(doc); err != nil {
+			t.Fatalf("AddDocument: %v", err)
+		}
+	}
+
+	if err := writer.Commit(); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+
+	// Should have 2 segments now
+	reader1, err := OpenDirectoryReader(dir)
+	if err != nil {
+		t.Fatalf("OpenDirectoryReader: %v", err)
+	}
+	if len(reader1.Leaves()) != 2 {
+		t.Fatalf("expected 2 leaves before merge, got %d", len(reader1.Leaves()))
+	}
+
+	// Force merge into 1 segment
+	if err := writer.ForceMerge(1); err != nil {
+		t.Fatalf("ForceMerge: %v", err)
+	}
+	if err := writer.Commit(); err != nil {
+		t.Fatalf("Commit after merge: %v", err)
+	}
+
+	reader2, err := OpenDirectoryReader(dir)
+	if err != nil {
+		t.Fatalf("OpenDirectoryReader after merge: %v", err)
+	}
+	if len(reader2.Leaves()) != 1 {
+		t.Fatalf("expected 1 leaf after merge, got %d", len(reader2.Leaves()))
+	}
+
+	seg := reader2.Leaves()[0].Segment
+
+	// Verify numeric DV survived merge
+	ndv := seg.NumericDocValues("price")
+	if ndv == nil {
+		t.Fatal("expected non-nil NumericDocValues after merge")
+	}
+	for i, want := range prices {
+		got, err := ndv.Get(i)
+		if err != nil {
+			t.Fatalf("Get(%d): %v", i, err)
+		}
+		if got != want {
+			t.Errorf("numeric DV Get(%d) = %d, want %d", i, got, want)
+		}
+	}
+
+	// Verify sorted DV survived merge
+	sdv := seg.SortedDocValues("cat")
+	if sdv == nil {
+		t.Fatal("expected non-nil SortedDocValues after merge")
+	}
+	for i, wantCat := range cats {
+		ord, err := sdv.OrdValue(i)
+		if err != nil {
+			t.Fatalf("OrdValue(%d): %v", i, err)
+		}
+		val, err := sdv.LookupOrd(ord)
+		if err != nil {
+			t.Fatalf("LookupOrd(%d): %v", ord, err)
+		}
+		if string(val) != wantCat {
+			t.Errorf("sorted DV doc %d = %q, want %q", i, val, wantCat)
+		}
+	}
+
+	writer.Close()
+}
+
+func TestDocValuesMergeWithDeletions(t *testing.T) {
+	dir := createTempDir(t)
+
+	// Buffer size 2 to force 2 segments
+	writer := NewIndexWriter(dir, analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{}), 2)
+
+	// Add 4 docs: doc0(id=a,price=100), doc1(id=b,price=200), doc2(id=c,price=300), doc3(id=d,price=400)
+	ids := []string{"a", "b", "c", "d"}
+	prices := []int64{100, 200, 300, 400}
+	cats := []string{"x", "y", "x", "z"}
+	for i := range ids {
+		doc := document.NewDocument()
+		doc.AddField("id", ids[i], document.FieldTypeKeyword)
+		doc.AddField("body", "item", document.FieldTypeText)
+		doc.AddNumericDocValuesField("price", prices[i])
+		doc.AddSortedDocValuesField("cat", cats[i])
+		if err := writer.AddDocument(doc); err != nil {
+			t.Fatalf("AddDocument: %v", err)
+		}
+	}
+
+	if err := writer.Commit(); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+
+	// Delete doc1 (id=b, price=200) and doc2 (id=c, price=300)
+	if err := writer.DeleteDocuments("id", "b"); err != nil {
+		t.Fatalf("DeleteDocuments: %v", err)
+	}
+	if err := writer.DeleteDocuments("id", "c"); err != nil {
+		t.Fatalf("DeleteDocuments: %v", err)
+	}
+	if err := writer.Commit(); err != nil {
+		t.Fatalf("Commit deletes: %v", err)
+	}
+
+	// Force merge
+	if err := writer.ForceMerge(1); err != nil {
+		t.Fatalf("ForceMerge: %v", err)
+	}
+	if err := writer.Commit(); err != nil {
+		t.Fatalf("Commit after merge: %v", err)
+	}
+
+	reader, err := OpenDirectoryReader(dir)
+	if err != nil {
+		t.Fatalf("OpenDirectoryReader: %v", err)
+	}
+	if len(reader.Leaves()) != 1 {
+		t.Fatalf("expected 1 leaf, got %d", len(reader.Leaves()))
+	}
+
+	seg := reader.Leaves()[0].Segment
+	// Only 2 docs should survive: doc0 (price=100, cat=x) and doc3 (price=400, cat=z)
+	if seg.DocCount() != 2 {
+		t.Fatalf("expected 2 docs after merge with deletions, got %d", seg.DocCount())
+	}
+
+	ndv := seg.NumericDocValues("price")
+	if ndv == nil {
+		t.Fatal("expected non-nil NumericDocValues after merge")
+	}
+
+	// Surviving docs remapped to 0,1: prices should be 100, 400
+	expectedPrices := []int64{100, 400}
+	for i, want := range expectedPrices {
+		got, err := ndv.Get(i)
+		if err != nil {
+			t.Fatalf("Get(%d): %v", i, err)
+		}
+		if got != want {
+			t.Errorf("numeric DV Get(%d) = %d, want %d", i, got, want)
+		}
+	}
+
+	sdv := seg.SortedDocValues("cat")
+	if sdv == nil {
+		t.Fatal("expected non-nil SortedDocValues after merge")
+	}
+
+	expectedCats := []string{"x", "z"}
+	for i, wantCat := range expectedCats {
+		ord, err := sdv.OrdValue(i)
+		if err != nil {
+			t.Fatalf("OrdValue(%d): %v", i, err)
+		}
+		val, err := sdv.LookupOrd(ord)
+		if err != nil {
+			t.Fatalf("LookupOrd(%d): %v", ord, err)
+		}
+		if string(val) != wantCat {
+			t.Errorf("sorted DV doc %d = %q, want %q", i, val, wantCat)
+		}
+	}
+
+	writer.Close()
+}
+
+func TestSortedDocValuesWithMissingValues(t *testing.T) {
+	dir := createTempDir(t)
+
+	writer := NewIndexWriter(dir, analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{}), 100)
+
+	// Doc0 has category, doc1 does not, doc2 has category
+	doc0 := document.NewDocument()
+	doc0.AddField("body", "hello", document.FieldTypeText)
+	doc0.AddSortedDocValuesField("category", "alpha")
+	writer.AddDocument(doc0)
+
+	doc1 := document.NewDocument()
+	doc1.AddField("body", "world", document.FieldTypeText)
+	// No sorted DV field
+	writer.AddDocument(doc1)
+
+	doc2 := document.NewDocument()
+	doc2.AddField("body", "test", document.FieldTypeText)
+	doc2.AddSortedDocValuesField("category", "beta")
+	writer.AddDocument(doc2)
+
+	if err := writer.Commit(); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+
+	reader, err := OpenDirectoryReader(dir)
+	if err != nil {
+		t.Fatalf("OpenDirectoryReader: %v", err)
+	}
+
+	seg := reader.Leaves()[0].Segment
+	sdv := seg.SortedDocValues("category")
+	if sdv == nil {
+		t.Fatal("expected non-nil SortedDocValues")
+	}
+
+	// Doc0 should have a valid ordinal
+	ord0, err := sdv.OrdValue(0)
+	if err != nil {
+		t.Fatalf("OrdValue(0): %v", err)
+	}
+	if ord0 < 0 {
+		t.Errorf("expected valid ordinal for doc0, got %d", ord0)
+	}
+	val0, err := sdv.LookupOrd(ord0)
+	if err != nil {
+		t.Fatalf("LookupOrd(%d): %v", ord0, err)
+	}
+	if string(val0) != "alpha" {
+		t.Errorf("doc0 category = %q, want %q", val0, "alpha")
+	}
+
+	// Doc1 should have ordinal -1 (missing)
+	ord1, err := sdv.OrdValue(1)
+	if err != nil {
+		t.Fatalf("OrdValue(1): %v", err)
+	}
+	if ord1 != -1 {
+		t.Errorf("expected ordinal -1 for missing doc, got %d", ord1)
+	}
+
+	// Doc2 should have a valid ordinal
+	ord2, err := sdv.OrdValue(2)
+	if err != nil {
+		t.Fatalf("OrdValue(2): %v", err)
+	}
+	val2, err := sdv.LookupOrd(ord2)
+	if err != nil {
+		t.Fatalf("LookupOrd(%d): %v", ord2, err)
+	}
+	if string(val2) != "beta" {
+		t.Errorf("doc2 category = %q, want %q", val2, "beta")
+	}
+
+	writer.Close()
+}
+
+func TestNumericDocValuesZeroValue(t *testing.T) {
+	dir := createTempDir(t)
+
+	writer := NewIndexWriter(dir, analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{}), 100)
+
+	// Explicitly add a numeric DV field with value 0
+	doc := document.NewDocument()
+	doc.AddField("body", "item", document.FieldTypeText)
+	doc.AddNumericDocValuesField("price", 0)
+	writer.AddDocument(doc)
+
+	// Add a doc with non-zero value for comparison
+	doc2 := document.NewDocument()
+	doc2.AddField("body", "item2", document.FieldTypeText)
+	doc2.AddNumericDocValuesField("price", 42)
+	writer.AddDocument(doc2)
+
+	if err := writer.Commit(); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+
+	reader, err := OpenDirectoryReader(dir)
+	if err != nil {
+		t.Fatalf("OpenDirectoryReader: %v", err)
+	}
+
+	seg := reader.Leaves()[0].Segment
+	ndv := seg.NumericDocValues("price")
+	if ndv == nil {
+		t.Fatal("expected non-nil NumericDocValues")
+	}
+
+	// Doc0 has explicit value 0
+	v0, err := ndv.Get(0)
+	if err != nil {
+		t.Fatalf("Get(0): %v", err)
+	}
+	if v0 != 0 {
+		t.Errorf("Get(0) = %d, want 0", v0)
+	}
+
+	// Doc1 has value 42
+	v1, err := ndv.Get(1)
+	if err != nil {
+		t.Fatalf("Get(1): %v", err)
+	}
+	if v1 != 42 {
+		t.Errorf("Get(1) = %d, want 42", v1)
+	}
+
+	writer.Close()
+}
+
+func TestSortedDocValuesMerge(t *testing.T) {
+	dir := createTempDir(t)
+
+	// Buffer size 2 to force multiple segments.
+	writer := NewIndexWriter(dir, analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{}), 2)
+
+	// 6 docs across 3 segments, with overlapping and unique values.
+	cats := []string{"cherry", "apple", "banana", "apple", "date", "cherry"}
+	for _, cat := range cats {
+		doc := document.NewDocument()
+		doc.AddField("body", "item", document.FieldTypeText)
+		doc.AddSortedDocValuesField("cat", cat)
+		if err := writer.AddDocument(doc); err != nil {
+			t.Fatalf("AddDocument: %v", err)
+		}
+	}
+
+	if err := writer.Commit(); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+
+	// Force merge into 1 segment.
+	if err := writer.ForceMerge(1); err != nil {
+		t.Fatalf("ForceMerge: %v", err)
+	}
+	if err := writer.Commit(); err != nil {
+		t.Fatalf("Commit after merge: %v", err)
+	}
+
+	reader, err := OpenDirectoryReader(dir)
+	if err != nil {
+		t.Fatalf("OpenDirectoryReader: %v", err)
+	}
+	if len(reader.Leaves()) != 1 {
+		t.Fatalf("expected 1 leaf after merge, got %d", len(reader.Leaves()))
+	}
+
+	seg := reader.Leaves()[0].Segment
+	sdv := seg.SortedDocValues("cat")
+	if sdv == nil {
+		t.Fatal("expected non-nil SortedDocValues after merge")
+	}
+
+	// Verify each doc maps to the correct category.
+	for i, wantCat := range cats {
+		ord, err := sdv.OrdValue(i)
+		if err != nil {
+			t.Fatalf("OrdValue(%d): %v", i, err)
+		}
+		val, err := sdv.LookupOrd(ord)
+		if err != nil {
+			t.Fatalf("LookupOrd(%d): %v", ord, err)
+		}
+		if string(val) != wantCat {
+			t.Errorf("doc %d = %q, want %q", i, val, wantCat)
+		}
+	}
+
+	// Verify dictionary is sorted and deduplicated.
+	expectedDict := []string{"apple", "banana", "cherry", "date"}
+	if sdv.ValueCount() != len(expectedDict) {
+		t.Fatalf("ValueCount() = %d, want %d", sdv.ValueCount(), len(expectedDict))
+	}
+	for i, want := range expectedDict {
+		got, err := sdv.LookupOrd(i)
+		if err != nil {
+			t.Fatalf("LookupOrd(%d): %v", i, err)
+		}
+		if string(got) != want {
+			t.Errorf("LookupOrd(%d) = %q, want %q", i, got, want)
+		}
+	}
+
+	writer.Close()
+}
+
+func createTempDir(t *testing.T) store.Directory {
+	t.Helper()
+	tmpDir := t.TempDir()
+	dir, err := store.NewFSDirectory(tmpDir)
+	if err != nil {
+		t.Fatalf("NewFSDirectory: %v", err)
+	}
+	return dir
+}

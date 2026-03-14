@@ -10,13 +10,18 @@ const (
 	FieldTypeKeyword
 	// FieldTypeStored is a field that is only stored and returned with search results.
 	FieldTypeStored
+	// FieldTypeNumericDocValues stores a per-document int64 value for sorting.
+	FieldTypeNumericDocValues
+	// FieldTypeSortedDocValues stores a per-document string value with ordinal deduplication for sorting.
+	FieldTypeSortedDocValues
 )
 
 // Field represents a single field within a document.
 type Field struct {
-	Name  string
-	Value string
-	Type  FieldType
+	Name         string
+	Value        string
+	Type         FieldType
+	NumericValue int64 // used when Type == FieldTypeNumericDocValues
 }
 
 // Document represents a single document to be indexed.
@@ -33,5 +38,21 @@ func (d *Document) AddField(name, value string, fieldType FieldType) {
 		Name:  name,
 		Value: value,
 		Type:  fieldType,
+	})
+}
+
+func (d *Document) AddNumericDocValuesField(name string, value int64) {
+	d.Fields = append(d.Fields, Field{
+		Name:         name,
+		Type:         FieldTypeNumericDocValues,
+		NumericValue: value,
+	})
+}
+
+func (d *Document) AddSortedDocValuesField(name string, value string) {
+	d.Fields = append(d.Fields, Field{
+		Name:  name,
+		Value: value,
+		Type:  FieldTypeSortedDocValues,
 	})
 }

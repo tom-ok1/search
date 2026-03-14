@@ -170,6 +170,51 @@ func TestBitsetSizeNotMultipleOf8(t *testing.T) {
 	}
 }
 
+func TestBitsetCountRange(t *testing.T) {
+	bs := NewBitset(24)
+	// Set bits: 0, 2, 7, 8, 15, 23
+	bs.Set(0)
+	bs.Set(2)
+	bs.Set(7)
+	bs.Set(8)
+	bs.Set(15)
+	bs.Set(23)
+
+	tests := []struct {
+		from, to int
+		want     int
+	}{
+		{0, 0, 0},   // empty range
+		{0, 1, 1},   // bit 0
+		{0, 3, 2},   // bits 0, 2
+		{1, 3, 1},   // bit 2
+		{0, 8, 3},   // bits 0, 2, 7
+		{0, 9, 4},   // bits 0, 2, 7, 8
+		{7, 9, 2},   // bits 7, 8
+		{8, 16, 2},  // bits 8, 15
+		{0, 24, 6},  // all bits
+		{15, 24, 2}, // bits 15, 23
+		{16, 24, 1}, // bit 23
+	}
+	for _, tt := range tests {
+		got := bs.countRange(tt.from, tt.to)
+		if got != tt.want {
+			t.Errorf("countRange(%d, %d): got %d, want %d", tt.from, tt.to, got, tt.want)
+		}
+	}
+
+	// Edge cases
+	if bs.countRange(-1, 0) != 0 {
+		t.Errorf("countRange(-1, 0): got %d, want 0", bs.countRange(-1, 0))
+	}
+	if bs.countRange(0, 100) != 6 {
+		t.Errorf("countRange(0, 100): got %d, want 6", bs.countRange(0, 100))
+	}
+	if bs.countRange(5, 3) != 0 {
+		t.Errorf("countRange(5, 3): got %d, want 0", bs.countRange(5, 3))
+	}
+}
+
 func TestBitsetAllBitsSet(t *testing.T) {
 	size := 16
 	bs := NewBitset(size)

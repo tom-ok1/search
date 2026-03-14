@@ -78,6 +78,9 @@ func (m *mockSegment) PostingsIterator(field, term string) index.PostingsIterato
 	return index.EmptyPostingsIterator{}
 }
 
+func (m *mockSegment) NumericDocValues(field string) index.NumericDocValues { return nil }
+func (m *mockSegment) SortedDocValues(field string) index.SortedDocValues  { return nil }
+
 // mockQuery returns predetermined DocScore results.
 type mockQuery struct {
 	results map[string][]DocScore // segment name -> results
@@ -111,7 +114,7 @@ func TestSearchSingleSegment(t *testing.T) {
 		},
 	}
 
-	results := searcher.Search(q, 10)
+	results := searcher.Search(q, NewTopKCollector(10))
 	if len(results) != 3 {
 		t.Fatalf("expected 3 results, got %d", len(results))
 	}
@@ -148,7 +151,7 @@ func TestSearchMultipleSegments(t *testing.T) {
 		},
 	}
 
-	results := searcher.Search(q, 10)
+	results := searcher.Search(q, NewTopKCollector(10))
 	if len(results) != 3 {
 		t.Fatalf("expected 3 results, got %d", len(results))
 	}
@@ -190,7 +193,7 @@ func TestSearchSkipsDeletedDocs(t *testing.T) {
 		},
 	}
 
-	results := searcher.Search(q, 10)
+	results := searcher.Search(q, NewTopKCollector(10))
 	if len(results) != 2 {
 		t.Fatalf("expected 2 results (deleted doc skipped), got %d", len(results))
 	}
@@ -223,7 +226,7 @@ func TestSearchTopK(t *testing.T) {
 		},
 	}
 
-	results := searcher.Search(q, 3)
+	results := searcher.Search(q, NewTopKCollector(3))
 	if len(results) != 3 {
 		t.Fatalf("expected 3 results, got %d", len(results))
 	}
@@ -244,7 +247,7 @@ func TestSearchNoResults(t *testing.T) {
 
 	q := &mockQuery{results: map[string][]DocScore{}}
 
-	results := searcher.Search(q, 10)
+	results := searcher.Search(q, NewTopKCollector(10))
 	if len(results) != 0 {
 		t.Fatalf("expected 0 results, got %d", len(results))
 	}
@@ -256,7 +259,7 @@ func TestSearchEmptyIndex(t *testing.T) {
 
 	q := &mockQuery{results: map[string][]DocScore{}}
 
-	results := searcher.Search(q, 10)
+	results := searcher.Search(q, NewTopKCollector(10))
 	if len(results) != 0 {
 		t.Fatalf("expected 0 results for empty index, got %d", len(results))
 	}
@@ -279,7 +282,7 @@ func TestSearchAllDocsDeleted(t *testing.T) {
 		},
 	}
 
-	results := searcher.Search(q, 10)
+	results := searcher.Search(q, NewTopKCollector(10))
 	if len(results) != 0 {
 		t.Fatalf("expected 0 results when all docs deleted, got %d", len(results))
 	}
@@ -301,7 +304,7 @@ func TestSearchStoredFieldsPopulated(t *testing.T) {
 		},
 	}
 
-	results := searcher.Search(q, 10)
+	results := searcher.Search(q, NewTopKCollector(10))
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
 	}
@@ -340,7 +343,7 @@ func TestSearchTopKAcrossMultipleSegments(t *testing.T) {
 		},
 	}
 
-	results := searcher.Search(q, 3)
+	results := searcher.Search(q, NewTopKCollector(3))
 	if len(results) != 3 {
 		t.Fatalf("expected 3 results, got %d", len(results))
 	}
@@ -376,7 +379,7 @@ func TestSearchDeletedDocsNotCountedInTopK(t *testing.T) {
 		},
 	}
 
-	results := searcher.Search(q, 2)
+	results := searcher.Search(q, NewTopKCollector(2))
 	if len(results) != 2 {
 		t.Fatalf("expected 2 results, got %d", len(results))
 	}

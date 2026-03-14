@@ -141,6 +141,18 @@ func (m *MMapIndexInput) ReadUint64At(offset int) (uint64, error) {
 	return binary.LittleEndian.Uint64(m.data[offset:]), nil
 }
 
+// ReadInt64At reads a little-endian int64 at the given byte offset without changing position.
+func (m *MMapIndexInput) ReadInt64At(offset int) (int64, error) {
+	v, err := m.ReadUint64At(offset)
+	return int64(v), err
+}
+
+// ReadInt32At reads a little-endian int32 at the given byte offset without changing position.
+func (m *MMapIndexInput) ReadInt32At(offset int) (int32, error) {
+	v, err := m.ReadUint32At(offset)
+	return int32(v), err
+}
+
 // --- Position control ---
 
 // Seek sets the sequential read position. Panics if pos is negative or beyond length.

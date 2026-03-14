@@ -130,6 +130,24 @@ func (w *IndexWriter) AddDocument(doc *document.Document) error {
 			pl.Postings = append(pl.Postings, Posting{
 				DocID: docID, Freq: 1, Positions: []int{0},
 			})
+
+		case document.FieldTypeNumericDocValues:
+			// Fill the numericDocValues slice with zeros up to docID, then set the value.
+			vals := w.buffer.numericDocValues[field.Name]
+			if len(vals) <= docID {
+				vals = append(vals, make([]int64, docID+1-len(vals))...)
+			}
+			vals[docID] = field.NumericValue
+			w.buffer.numericDocValues[field.Name] = vals
+
+		case document.FieldTypeSortedDocValues:
+			// Fill the sortedDocValues slice with empty strings up to docID, then set the value.
+			svals := w.buffer.sortedDocValues[field.Name]
+			if len(svals) <= docID {
+				svals = append(svals, make([]string, docID+1-len(svals))...)
+			}
+			svals[docID] = field.Value
+			w.buffer.sortedDocValues[field.Name] = svals
 		}
 
 		// Stored fields

@@ -85,10 +85,11 @@ func TestBM25Scoring(t *testing.T) {
 
 func TestTopKCollector(t *testing.T) {
 	collector := NewTopKCollector(2)
+	lc := collector.GetLeafCollector(leafCtx(0))
 
-	collector.Collect(SearchResult{DocID: 0, Score: 1.0})
-	collector.Collect(SearchResult{DocID: 1, Score: 3.0})
-	collector.Collect(SearchResult{DocID: 2, Score: 2.0})
+	lc.Collect(0, 1.0)
+	lc.Collect(1, 3.0)
+	lc.Collect(2, 2.0)
 
 	results := collector.Results()
 	if len(results) != 2 {

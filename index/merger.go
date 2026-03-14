@@ -16,106 +16,100 @@ type MergeInput struct {
 	IsDeleted func(docID int) bool
 }
 
+// segmentDocMap holds per-segment state for mapping old doc IDs to new merged IDs.
+type segmentDocMap struct {
+	liveDocs *Bitset
+	offset   int // start position in the merged ID space
+}
+
+// DocIDMapper maps old segment-local doc IDs to new merged doc IDs.
+// It uses precomputed rank tables for O(1) lookups.
+type DocIDMapper struct {
+	segments  []segmentDocMap
+	liveCount int
+}
+
+// NewDocIDMapper builds a mapper by scanning each input's deletion state.
+func NewDocIDMapper(inputs []MergeInput) *DocIDMapper {
+	m := &DocIDMapper{
+		segments: make([]segmentDocMap, len(inputs)),
+	}
+	for i, input := range inputs {
+		n := input.Segment.DocCount()
+		seg := &m.segments[i]
+		seg.offset = m.liveCount
+		seg.liveDocs = NewBitset(n)
+		for oldDoc := 0; oldDoc < n; oldDoc++ {
+			if !input.IsDeleted(oldDoc) {
+				seg.liveDocs.Set(oldDoc)
+				m.liveCount++
+			}
+		}
+		seg.liveDocs.BuildRankTable()
+	}
+	return m
+}
+
+// IsLive reports whether oldDoc in segment segIdx is live (not deleted).
+func (m *DocIDMapper) IsLive(segIdx, oldDoc int) bool {
+	return m.segments[segIdx].liveDocs.Get(oldDoc)
+}
+
+// Map returns the new merged doc ID for oldDoc in segment segIdx.
+// The caller must ensure IsLive(segIdx, oldDoc) is true.
+func (m *DocIDMapper) Map(segIdx, oldDoc int) int {
+	return m.segments[segIdx].offset + m.segments[segIdx].liveDocs.Rank(oldDoc)
+}
+
+// LiveDocCount returns the total number of live documents across all segments.
+func (m *DocIDMapper) LiveDocCount() int {
+	return m.liveCount
+}
+
 // MergeResult holds the outcome of a streaming merge.
 type MergeResult struct {
-	DocCount int
-	Fields   []string
-	Files    []string
+	DocCount        int
+	Fields          []string
+	NumericDVFields []string
+	SortedDVFields  []string
+	Files           []string
 }
 
 // MergeSegmentsToDisk merges multiple disk segments and writes the result
 // directly to disk, streaming postings per term to avoid holding all
 // postings in memory at once.
 func MergeSegmentsToDisk(dir store.Directory, inputs []MergeInput, newName string) (*MergeResult, error) {
-	// Phase 1: Build docID mapping and stream stored fields to disk.
-	// remaps[i] maps old docID → new docID for input i (-1 means deleted).
-	remaps := make([][]int, len(inputs))
+	mapper := NewDocIDMapper(inputs)
+	docCount := mapper.LiveDocCount()
 
-	storedOut, err := dir.CreateOutput(newName + ".stored")
-	if err != nil {
-		return nil, err
-	}
-
-	newDocID := 0
-	var storedOffsets []uint64
-	var storedPos uint64
-	scratch := &bytes.Buffer{}
-
-	for i, input := range inputs {
-		n := input.Segment.DocCount()
-		remaps[i] = make([]int, n)
-		for oldDoc := 0; oldDoc < n; oldDoc++ {
-			if input.IsDeleted(oldDoc) {
-				remaps[i][oldDoc] = -1
-				continue
-			}
-			remaps[i][oldDoc] = newDocID
-
-			sf, err := input.Segment.StoredFields(oldDoc)
-			if err != nil {
-				storedOut.Close()
-				return nil, err
-			}
-			storedOffsets = append(storedOffsets, storedPos)
-			n, err := writeStoredFieldsEntry(storedOut, sf, scratch)
-			if err != nil {
-				storedOut.Close()
-				return nil, fmt.Errorf("write stored fields: %w", err)
-			}
-			storedPos += n
-
-			newDocID++
-		}
-	}
-	docCount := newDocID
-
-	// Write trailer: offset table + doc_count.
-	for _, offset := range storedOffsets {
-		if err := storedOut.WriteUint64(offset); err != nil {
-			storedOut.Close()
-			return nil, fmt.Errorf("write stored offset: %w", err)
-		}
-	}
-	if err := storedOut.WriteUint32(uint32(docCount)); err != nil {
-		storedOut.Close()
-		return nil, fmt.Errorf("write stored doc count: %w", err)
-	}
-	storedOut.Close()
-
-	allFields := collectAllFields(inputs)
-
-	// Phase 2: Collect field lengths.
-	fieldLengths := make(map[string][]int)
-	for _, field := range allFields {
-		lengths := make([]int, docCount)
-		for i, input := range inputs {
-			for oldDoc := 0; oldDoc < input.Segment.DocCount(); oldDoc++ {
-				newID := remaps[i][oldDoc]
-				if newID < 0 {
-					continue
-				}
-				lengths[newID] = input.Segment.FieldLength(field, oldDoc)
-			}
-		}
-		fieldLengths[field] = lengths
-	}
+	allFields := collectMergeFields(inputs, (*DiskSegment).Fields)
+	numericDVFields := collectMergeFields(inputs, (*DiskSegment).NumericDVFields)
+	sortedDVFields := collectMergeFields(inputs, (*DiskSegment).SortedDVFields)
 
 	var files []string
 
 	// Write metadata.
 	metaFileName, err := writeSegmentMeta(dir, SegmentMeta{
-		Name:     newName,
-		DocCount: docCount,
-		Fields:   allFields,
+		Name:            newName,
+		DocCount:        docCount,
+		Fields:          allFields,
+		NumericDVFields: numericDVFields,
+		SortedDVFields:  sortedDVFields,
 	})
 	if err != nil {
 		return nil, err
 	}
 	files = append(files, metaFileName)
 
-	// Phase 3: Merge postings using k-way merge and stream to disk.
+	// Merge stored fields.
+	if err := mergeStoredFieldsToDisk(dir, newName, inputs, mapper); err != nil {
+		return nil, err
+	}
+	files = append(files, newName+".stored")
+
+	// Merge postings per field.
 	for _, field := range allFields {
-		if err := mergeFieldPostingsToDisk(dir, newName, field, inputs, remaps); err != nil {
+		if err := mergeFieldPostingsToDisk(dir, newName, field, inputs, mapper); err != nil {
 			return nil, err
 		}
 		files = append(files,
@@ -125,22 +119,138 @@ func MergeSegmentsToDisk(dir store.Directory, inputs []MergeInput, newName strin
 		)
 	}
 
-	// Stored fields already written during Phase 1.
-	files = append(files, newName+".stored")
-
-	// Phase 5: Write field lengths.
+	// Merge field lengths.
 	for _, field := range allFields {
-		if err := writeFieldLengthsV2(dir, newName, field, fieldLengths[field], docCount); err != nil {
+		if err := mergeFieldLengthsToDisk(dir, newName, field, inputs, mapper); err != nil {
 			return nil, err
 		}
 		files = append(files, fmt.Sprintf("%s.%s.flen", newName, field))
 	}
 
+	// Merge numeric doc values.
+	for _, field := range numericDVFields {
+		if err := mergeNumericDocValuesToDisk(dir, newName, field, inputs, mapper); err != nil {
+			return nil, err
+		}
+		files = append(files, fmt.Sprintf("%s.%s.ndv", newName, field))
+	}
+
+	// Merge sorted doc values.
+	for _, field := range sortedDVFields {
+		if err := mergeSortedDocValuesToDisk(dir, newName, field, inputs, mapper); err != nil {
+			return nil, err
+		}
+		files = append(files,
+			fmt.Sprintf("%s.%s.sdvo", newName, field),
+			fmt.Sprintf("%s.%s.sdvd", newName, field),
+		)
+	}
+
 	return &MergeResult{
-		DocCount: docCount,
-		Fields:   allFields,
-		Files:    files,
+		DocCount:        docCount,
+		Fields:          allFields,
+		NumericDVFields: numericDVFields,
+		SortedDVFields:  sortedDVFields,
+		Files:           files,
 	}, nil
+}
+
+// mergeStoredFieldsToDisk streams stored fields from all input segments to disk.
+func mergeStoredFieldsToDisk(dir store.Directory, segName string, inputs []MergeInput, mapper *DocIDMapper) error {
+	out, err := dir.CreateOutput(segName + ".stored")
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	var offsets []uint64
+	var pos uint64
+	scratch := &bytes.Buffer{}
+
+	for i, input := range inputs {
+		for oldDoc := range input.Segment.DocCount() {
+			if !mapper.IsLive(i, oldDoc) {
+				continue
+			}
+			sf, err := input.Segment.StoredFields(oldDoc)
+			if err != nil {
+				return err
+			}
+			offsets = append(offsets, pos)
+			n, err := writeStoredFieldsEntry(out, sf, scratch)
+			if err != nil {
+				return fmt.Errorf("write stored fields: %w", err)
+			}
+			pos += n
+		}
+	}
+
+	for _, offset := range offsets {
+		if err := out.WriteUint64(offset); err != nil {
+			return fmt.Errorf("write stored offset: %w", err)
+		}
+	}
+	if err := out.WriteUint32(uint32(mapper.LiveDocCount())); err != nil {
+		return fmt.Errorf("write stored doc count: %w", err)
+	}
+	return nil
+}
+
+// mergeFieldLengthsToDisk streams field lengths for a single field to disk.
+func mergeFieldLengthsToDisk(dir store.Directory, segName, field string, inputs []MergeInput, mapper *DocIDMapper) error {
+	out, err := dir.CreateOutput(fmt.Sprintf("%s.%s.flen", segName, field))
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	if err := out.WriteUint32(uint32(mapper.LiveDocCount())); err != nil {
+		return fmt.Errorf("write flen doc count: %w", err)
+	}
+	for i, input := range inputs {
+		for oldDoc := 0; oldDoc < input.Segment.DocCount(); oldDoc++ {
+			if !mapper.IsLive(i, oldDoc) {
+				continue
+			}
+			l := input.Segment.FieldLength(field, oldDoc)
+			if err := out.WriteUint32(uint32(l)); err != nil {
+				return fmt.Errorf("write flen: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
+// mergeNumericDocValuesToDisk streams numeric doc values for a single field to disk.
+func mergeNumericDocValuesToDisk(dir store.Directory, segName, field string, inputs []MergeInput, mapper *DocIDMapper) error {
+	out, err := dir.CreateOutput(fmt.Sprintf("%s.%s.ndv", segName, field))
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	for i, input := range inputs {
+		ndv := input.Segment.NumericDocValues(field)
+		for oldDoc := 0; oldDoc < input.Segment.DocCount(); oldDoc++ {
+			if !mapper.IsLive(i, oldDoc) {
+				continue
+			}
+			var v int64
+			if ndv != nil {
+				v, err = ndv.Get(oldDoc)
+				if err != nil {
+					return fmt.Errorf("read numeric DV for field %s doc %d: %w", field, oldDoc, err)
+				}
+			}
+			if err := out.WriteUint64(uint64(v)); err != nil {
+				return fmt.Errorf("write ndv value: %w", err)
+			}
+		}
+	}
+	if err := out.WriteUint32(uint32(mapper.LiveDocCount())); err != nil {
+		return err
+	}
+	return nil
 }
 
 // mergeFieldPostingsToDisk performs k-way merge for a single field and writes
@@ -149,7 +259,7 @@ func mergeFieldPostingsToDisk(
 	dir store.Directory,
 	segName, field string,
 	inputs []MergeInput,
-	remaps [][]int,
+	mapper *DocIDMapper,
 ) error {
 	// Initialize the heap with one entry per segment that has this field.
 	var h termHeap
@@ -206,16 +316,13 @@ func mergeFieldPostingsToDisk(
 			pi := inputs[i].Segment.PostingsIterator(field, currentTerm)
 			for pi.Next() {
 				oldDoc := pi.DocID()
-				newID := remaps[i][oldDoc]
-				if newID < 0 {
+				if !mapper.IsLive(i, oldDoc) {
 					continue
 				}
-				positions := make([]int, len(pi.Positions()))
-				copy(positions, pi.Positions())
 				postings = append(postings, Posting{
-					DocID:     newID,
+					DocID:     mapper.Map(i, oldDoc),
 					Freq:      pi.Freq(),
-					Positions: positions,
+					Positions: pi.Positions(),
 				})
 			}
 
@@ -293,11 +400,160 @@ func (h *termHeap) Pop() any {
 	return entry
 }
 
-// collectAllFields returns a deduplicated, sorted list of all field names across all inputs.
-func collectAllFields(inputs []MergeInput) []string {
+// mergeSortedDocValuesToDisk merges sorted doc values from multiple segments
+// using a k-way merge of their dictionaries and streaming ordinal writes.
+func mergeSortedDocValuesToDisk(dir store.Directory, segName, field string, inputs []MergeInput, mapper *DocIDMapper) error {
+	// Collect SortedDocValues handles.
+	sdvs := make([]SortedDocValues, len(inputs))
+	for i, input := range inputs {
+		sdvs[i] = input.Segment.SortedDocValues(field)
+	}
+
+	// In-memory ordinal map: segmentOrd → globalOrd for each segment.
+	segmentToGlobalOrds := make([][]int32, len(inputs))
+	for i, sdv := range sdvs {
+		if sdv != nil && sdv.ValueCount() > 0 {
+			segmentToGlobalOrds[i] = make([]int32, sdv.ValueCount())
+		}
+	}
+
+	// Initialize the heap with ord=0 from each segment that has values.
+	var h sdvHeap
+	for i, sdv := range sdvs {
+		if sdv == nil || sdv.ValueCount() == 0 {
+			continue
+		}
+		val, err := sdv.LookupOrd(0)
+		if err != nil {
+			return fmt.Errorf("lookup initial ord for seg %d: %w", i, err)
+		}
+		h = append(h, &sdvHeapEntry{
+			value:  val,
+			segIdx: i,
+			ord:    0,
+			maxOrd: sdv.ValueCount(),
+			sdv:    sdv,
+		})
+	}
+	heap.Init(&h)
+
+	// K-way merge dictionaries → write .sdvd
+	sdvdOut, err := dir.CreateOutput(fmt.Sprintf("%s.%s.sdvd", segName, field))
+	if err != nil {
+		return err
+	}
+	defer sdvdOut.Close()
+
+	var newOrd int32
+	var offsets []uint64
+	var pos uint64
+
+	for h.Len() > 0 {
+		currentValue := h[0].value
+
+		// Collect all segments that have this same value.
+		for h.Len() > 0 && bytes.Equal(h[0].value, currentValue) {
+			entry := h[0]
+			segmentToGlobalOrds[entry.segIdx][entry.ord] = newOrd
+
+			entry.ord++
+			if entry.ord < entry.maxOrd {
+				val, err := entry.sdv.LookupOrd(entry.ord)
+				if err != nil {
+					return fmt.Errorf("lookup ord %d seg %d: %w", entry.ord, entry.segIdx, err)
+				}
+				entry.value = val
+				heap.Fix(&h, 0)
+			} else {
+				heap.Pop(&h)
+			}
+		}
+
+		// Write value data.
+		offsets = append(offsets, pos)
+		if _, err := sdvdOut.Write(currentValue); err != nil {
+			return fmt.Errorf("write sdvd value: %w", err)
+		}
+		pos += uint64(len(currentValue))
+		newOrd++
+	}
+
+	// Write offset table and trailer.
+	for _, offset := range offsets {
+		if err := sdvdOut.WriteUint64(offset); err != nil {
+			return fmt.Errorf("write sdvd offset: %w", err)
+		}
+	}
+	if err := sdvdOut.WriteUint32(uint32(newOrd)); err != nil {
+		return fmt.Errorf("write sdvd trailer: %w", err)
+	}
+
+	// Stream .sdvo: iterate segments sequentially, remap ordinals.
+	sdvoOut, err := dir.CreateOutput(fmt.Sprintf("%s.%s.sdvo", segName, field))
+	if err != nil {
+		return err
+	}
+	defer sdvoOut.Close()
+
+	for i, input := range inputs {
+		for oldDoc := 0; oldDoc < input.Segment.DocCount(); oldDoc++ {
+			if !mapper.IsLive(i, oldDoc) {
+				continue
+			}
+			mapped := int32(-1)
+			if sdvs[i] != nil {
+				oldOrd, err := sdvs[i].OrdValue(oldDoc)
+				if err != nil {
+					return fmt.Errorf("read sdvo ord seg %d doc %d: %w", i, oldDoc, err)
+				}
+				if oldOrd >= 0 {
+					mapped = segmentToGlobalOrds[i][oldOrd]
+				}
+			}
+			if err := sdvoOut.WriteUint32(uint32(mapped)); err != nil {
+				return fmt.Errorf("write sdvo: %w", err)
+			}
+		}
+	}
+
+	if err := sdvoOut.WriteUint32(uint32(mapper.LiveDocCount())); err != nil {
+		return fmt.Errorf("write sdvo trailer: %w", err)
+	}
+
+	return nil
+}
+
+// sdvHeapEntry holds a dictionary value iterator for one segment in the k-way merge.
+type sdvHeapEntry struct {
+	value  []byte
+	segIdx int
+	ord    int
+	maxOrd int
+	sdv    SortedDocValues
+}
+
+// sdvHeap is a min-heap ordered by value (lexicographic).
+type sdvHeap []*sdvHeapEntry
+
+func (h sdvHeap) Len() int           { return len(h) }
+func (h sdvHeap) Less(i, j int) bool { return bytes.Compare(h[i].value, h[j].value) < 0 }
+func (h sdvHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h *sdvHeap) Push(x any)        { *h = append(*h, x.(*sdvHeapEntry)) }
+func (h *sdvHeap) Pop() any {
+	old := *h
+	n := len(old)
+	entry := old[n-1]
+	old[n-1] = nil
+	*h = old[:n-1]
+	return entry
+}
+
+// collectMergeFields returns a deduplicated, sorted list of field names
+// extracted from each input segment using the given accessor.
+func collectMergeFields(inputs []MergeInput, accessor func(*DiskSegment) []string) []string {
 	fieldSet := make(map[string]bool)
 	for _, input := range inputs {
-		for _, f := range input.Segment.Fields() {
+		for _, f := range accessor(input.Segment) {
 			fieldSet[f] = true
 		}
 	}

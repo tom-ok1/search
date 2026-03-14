@@ -33,6 +33,16 @@ func WriteSegmentV2(dir store.Directory, seg *InMemorySegment) ([]string, error)
 	}
 	sort.Strings(meta.Fields)
 
+	for fieldName := range seg.numericDocValues {
+		meta.NumericDVFields = append(meta.NumericDVFields, fieldName)
+	}
+	sort.Strings(meta.NumericDVFields)
+
+	for fieldName := range seg.sortedDocValues {
+		meta.SortedDVFields = append(meta.SortedDVFields, fieldName)
+	}
+	sort.Strings(meta.SortedDVFields)
+
 	metaFileName, err := writeSegmentMeta(dir, meta)
 	if err != nil {
 		return nil, err
@@ -65,6 +75,27 @@ func WriteSegmentV2(dir store.Directory, seg *InMemorySegment) ([]string, error)
 			return nil, err
 		}
 		files = append(files, fmt.Sprintf("%s.%s.flen", seg.name, fieldName))
+	}
+
+	// 5. Write numeric doc values
+	for _, fieldName := range meta.NumericDVFields {
+		values := seg.numericDocValues[fieldName]
+		if err := writeNumericDocValues(dir, seg.name, fieldName, values, seg.docCount); err != nil {
+			return nil, err
+		}
+		files = append(files, fmt.Sprintf("%s.%s.ndv", seg.name, fieldName))
+	}
+
+	// 6. Write sorted doc values
+	for _, fieldName := range meta.SortedDVFields {
+		values := seg.sortedDocValues[fieldName]
+		if err := writeSortedDocValues(dir, seg.name, fieldName, values, seg.docCount); err != nil {
+			return nil, err
+		}
+		files = append(files,
+			fmt.Sprintf("%s.%s.sdvo", seg.name, fieldName),
+			fmt.Sprintf("%s.%s.sdvd", seg.name, fieldName),
+		)
 	}
 
 	return files, nil

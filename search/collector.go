@@ -1,6 +1,10 @@
 package search
 
-import "container/heap"
+import (
+	"container/heap"
+
+	"gosearch/index"
+)
 
 // TopKCollector collects the top-K documents by score using a min-heap.
 type TopKCollector struct {
@@ -15,16 +19,13 @@ func NewTopKCollector(k int) *TopKCollector {
 	}
 }
 
-// Collect adds a document to the collector.
-// Only the top-K scoring documents are retained.
-func (c *TopKCollector) Collect(result SearchResult) {
-	if len(c.results) < c.k {
-		heap.Push(&c.results, result)
-	} else if result.Score > c.results[0].Score {
-		c.results[0] = result
-		heap.Fix(&c.results, 0)
-	}
+// GetLeafCollector returns a leaf-level collector that knows the DocBase offset.
+func (c *TopKCollector) GetLeafCollector(ctx index.LeafReaderContext) LeafCollector {
+	return &topKLeafCollector{parent: c, docBase: ctx.DocBase}
 }
+
+// ScoreMode returns ScoreModeComplete because score-based ranking needs scores.
+func (c *TopKCollector) ScoreMode() ScoreMode { return ScoreModeComplete }
 
 // Results returns collected documents in descending score order.
 func (c *TopKCollector) Results() []SearchResult {
@@ -33,6 +34,23 @@ func (c *TopKCollector) Results() []SearchResult {
 		sorted[i] = heap.Pop(&c.results).(SearchResult)
 	}
 	return sorted
+}
+
+// topKLeafCollector collects hits for a single segment into the parent TopKCollector.
+type topKLeafCollector struct {
+	parent  *TopKCollector
+	docBase int
+}
+
+func (lc *topKLeafCollector) Collect(docID int, score float64) {
+	globalDocID := lc.docBase + docID
+	result := SearchResult{DocID: globalDocID, Score: score}
+	if len(lc.parent.results) < lc.parent.k {
+		heap.Push(&lc.parent.results, result)
+	} else if score > lc.parent.results[0].Score {
+		lc.parent.results[0] = result
+		heap.Fix(&lc.parent.results, 0)
+	}
 }
 
 // min-heap implementation ordered by score (lowest first)

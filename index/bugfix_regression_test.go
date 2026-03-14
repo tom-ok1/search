@@ -29,7 +29,7 @@ func TestFindCommonDocsSortedOutput(t *testing.T) {
 
 	// Phrase query "common shared" must find all 20 docs regardless of
 	// internal iteration order.
-	results := searcher.Search(search.NewPhraseQuery("body", "common", "shared"), 100)
+	results := searcher.Search(search.NewPhraseQuery("body", "common", "shared"), search.NewTopKCollector(100))
 	if len(results) != 20 {
 		t.Errorf("expected 20 results for phrase 'common shared', got %d", len(results))
 	}
@@ -383,7 +383,7 @@ func TestSegmentWriterRoundTrip(t *testing.T) {
 
 	// Verify all terms are searchable (implying writes succeeded without silent errors)
 	for _, term := range []string{"alpha", "beta", "gamma", "delta", "epsilon", "zeta"} {
-		results := searcher.Search(search.NewTermQuery("body", term), 10)
+		results := searcher.Search(search.NewTermQuery("body", term), search.NewTopKCollector(10))
 		if len(results) == 0 {
 			t.Errorf("no results for term %q — write may have silently failed", term)
 		}
@@ -410,7 +410,7 @@ func TestMergerProducesValidOutput(t *testing.T) {
 	searcher := search.NewIndexSearcher(reader)
 
 	// All docs should be findable after merge
-	results := searcher.Search(search.NewTermQuery("body", "merge"), 10)
+	results := searcher.Search(search.NewTermQuery("body", "merge"), search.NewTopKCollector(10))
 	if len(results) != 4 {
 		t.Errorf("expected 4 results after merge, got %d", len(results))
 	}
@@ -438,7 +438,7 @@ func TestScoringUsesLiveDocCount(t *testing.T) {
 	searcher := search.NewIndexSearcher(reader)
 
 	// With LiveDocCount=1, IDF for "rare" should reflect 1 total doc, not 4.
-	results := searcher.Search(search.NewTermQuery("body", "rare"), 10)
+	results := searcher.Search(search.NewTermQuery("body", "rare"), search.NewTopKCollector(10))
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
 	}
@@ -460,7 +460,7 @@ func TestScoringUsesLiveDocCount(t *testing.T) {
 	reader2 := commitAndOpenReader(t, writer2, dir2)
 	searcher2 := search.NewIndexSearcher(reader2)
 
-	results2 := searcher2.Search(search.NewPhraseQuery("body", "quick", "brown"), 10)
+	results2 := searcher2.Search(search.NewPhraseQuery("body", "quick", "brown"), search.NewTopKCollector(10))
 	if len(results2) != 1 {
 		t.Fatalf("expected 1 phrase result, got %d", len(results2))
 	}
@@ -487,7 +487,7 @@ func TestScoringConsistencyWithDeletions(t *testing.T) {
 	}
 	defer readerA.Close()
 	searcherA := search.NewIndexSearcher(readerA)
-	resultsA := searcherA.Search(search.NewTermQuery("body", "unique"), 10)
+	resultsA := searcherA.Search(search.NewTermQuery("body", "unique"), search.NewTopKCollector(10))
 
 	// Corpus B: "target" doc + extras that get deleted
 	writerB, _ := newTestWriter(t, 100)
@@ -501,7 +501,7 @@ func TestScoringConsistencyWithDeletions(t *testing.T) {
 	}
 	defer readerB.Close()
 	searcherB := search.NewIndexSearcher(readerB)
-	resultsB := searcherB.Search(search.NewTermQuery("body", "unique"), 10)
+	resultsB := searcherB.Search(search.NewTermQuery("body", "unique"), search.NewTopKCollector(10))
 
 	if len(resultsA) != 1 || len(resultsB) != 1 {
 		t.Fatalf("expected 1 result each, got A=%d B=%d", len(resultsA), len(resultsB))
@@ -530,7 +530,7 @@ func TestPhraseQueryDeterministicResults(t *testing.T) {
 	// Run the same query multiple times — results should be deterministic
 	var firstDocIDs []int
 	for attempt := 0; attempt < 5; attempt++ {
-		results := searcher.Search(search.NewPhraseQuery("body", "hello", "world"), 100)
+		results := searcher.Search(search.NewPhraseQuery("body", "hello", "world"), search.NewTopKCollector(100))
 		if len(results) != 10 {
 			t.Fatalf("attempt %d: expected 10 results, got %d", attempt, len(results))
 		}

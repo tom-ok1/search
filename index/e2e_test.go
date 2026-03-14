@@ -68,7 +68,7 @@ func TestE2EDiskSegmentSearch(t *testing.T) {
 	defer reader.Close()
 
 	searcher := search.NewIndexSearcher(reader)
-	results := searcher.Search(search.NewTermQuery("body", "fox"), 10)
+	results := searcher.Search(search.NewTermQuery("body", "fox"), search.NewTopKCollector(10))
 
 	// "fox" appears in doc0 (seg0) and doc2 (seg1)
 	if len(results) != 2 {
@@ -96,7 +96,7 @@ func TestE2EDiskSegmentSearch(t *testing.T) {
 	}
 	defer nrtReader.Close()
 	nrtSearcher := search.NewIndexSearcher(nrtReader)
-	nrtResults := nrtSearcher.Search(search.NewTermQuery("body", "fox"), 10)
+	nrtResults := nrtSearcher.Search(search.NewTermQuery("body", "fox"), search.NewTopKCollector(10))
 
 	if len(results) != len(nrtResults) {
 		t.Fatalf("result count mismatch: disk=%d, nrt=%d", len(results), len(nrtResults))
@@ -131,7 +131,7 @@ func TestE2EDeleteAndSearch(t *testing.T) {
 	searcher := search.NewIndexSearcher(reader)
 
 	// "brown" appears in doc0, doc1, doc2; doc1 is deleted → 2 results
-	results := searcher.Search(search.NewTermQuery("body", "brown"), 10)
+	results := searcher.Search(search.NewTermQuery("body", "brown"), search.NewTopKCollector(10))
 	if len(results) != 2 {
 		t.Errorf("expected 2 results after deletion, got %d", len(results))
 	}
@@ -158,13 +158,13 @@ func TestE2EDeleteAllDocsInSegment(t *testing.T) {
 	searcher := search.NewIndexSearcher(reader)
 
 	// "alpha" docs are deleted, should return nothing
-	results := searcher.Search(search.NewTermQuery("body", "alpha"), 10)
+	results := searcher.Search(search.NewTermQuery("body", "alpha"), search.NewTopKCollector(10))
 	if len(results) != 0 {
 		t.Errorf("expected 0 results for deleted term, got %d", len(results))
 	}
 
 	// "delta" docs still exist
-	results = searcher.Search(search.NewTermQuery("body", "delta"), 10)
+	results = searcher.Search(search.NewTermQuery("body", "delta"), search.NewTopKCollector(10))
 	if len(results) != 2 {
 		t.Errorf("expected 2 results for surviving docs, got %d", len(results))
 	}
@@ -182,19 +182,19 @@ func TestE2EPhraseQueryNonConsecutiveTerms(t *testing.T) {
 	searcher := search.NewIndexSearcher(reader)
 
 	// "quick fox" should NOT match — terms are not consecutive
-	results := searcher.Search(search.NewPhraseQuery("body", "quick", "fox"), 10)
+	results := searcher.Search(search.NewPhraseQuery("body", "quick", "fox"), search.NewTopKCollector(10))
 	if len(results) != 0 {
 		t.Errorf("expected 0 results for non-consecutive phrase 'quick fox', got %d", len(results))
 	}
 
 	// "quick brown" SHOULD match doc0
-	results = searcher.Search(search.NewPhraseQuery("body", "quick", "brown"), 10)
+	results = searcher.Search(search.NewPhraseQuery("body", "quick", "brown"), search.NewTopKCollector(10))
 	if len(results) != 1 {
 		t.Errorf("expected 1 result for consecutive phrase 'quick brown', got %d", len(results))
 	}
 
 	// "brown fox" should match both docs
-	results = searcher.Search(search.NewPhraseQuery("body", "brown", "fox"), 10)
+	results = searcher.Search(search.NewPhraseQuery("body", "brown", "fox"), search.NewTopKCollector(10))
 	if len(results) != 2 {
 		t.Errorf("expected 2 results for phrase 'brown fox', got %d", len(results))
 	}
@@ -212,13 +212,13 @@ func TestE2EPhraseQueryRepeatedTerms(t *testing.T) {
 	searcher := search.NewIndexSearcher(reader)
 
 	// "foo foo" should match doc0 only (positions 0,1 or 1,2)
-	results := searcher.Search(search.NewPhraseQuery("body", "foo", "foo"), 10)
+	results := searcher.Search(search.NewPhraseQuery("body", "foo", "foo"), search.NewTopKCollector(10))
 	if len(results) != 1 {
 		t.Errorf("expected 1 result for phrase 'foo foo', got %d", len(results))
 	}
 
 	// Three-term phrase "foo foo foo" should also match doc0
-	results = searcher.Search(search.NewPhraseQuery("body", "foo", "foo", "foo"), 10)
+	results = searcher.Search(search.NewPhraseQuery("body", "foo", "foo", "foo"), search.NewTopKCollector(10))
 	if len(results) != 1 {
 		t.Errorf("expected 1 result for phrase 'foo foo foo', got %d", len(results))
 	}
@@ -233,7 +233,7 @@ func TestE2EBooleanQueryOnlyMustNot(t *testing.T) {
 
 	// BooleanQuery with ONLY MustNot — no positive clauses means no candidates
 	results := searcher.Search(search.NewBooleanQuery().
-		Add(search.NewTermQuery("body", "hello"), search.OccurMustNot), 10)
+		Add(search.NewTermQuery("body", "hello"), search.OccurMustNot), search.NewTopKCollector(10))
 	if len(results) != 0 {
 		t.Errorf("expected 0 results for only-must-not query, got %d", len(results))
 	}
@@ -255,7 +255,7 @@ func TestE2EBooleanQueryAllShould(t *testing.T) {
 	// All SHOULD = OR semantics: matches doc0 and doc1
 	results := searcher.Search(search.NewBooleanQuery().
 		Add(search.NewTermQuery("body", "alpha"), search.OccurShould).
-		Add(search.NewTermQuery("body", "beta"), search.OccurShould), 10)
+		Add(search.NewTermQuery("body", "beta"), search.OccurShould), search.NewTopKCollector(10))
 	if len(results) != 2 {
 		t.Errorf("expected 2 results for all-should query, got %d", len(results))
 	}
@@ -275,19 +275,19 @@ func TestE2ESearchNonExistentTerm(t *testing.T) {
 	searcher := search.NewIndexSearcher(reader)
 
 	// Term that doesn't exist at all
-	results := searcher.Search(search.NewTermQuery("body", "nonexistent"), 10)
+	results := searcher.Search(search.NewTermQuery("body", "nonexistent"), search.NewTopKCollector(10))
 	if len(results) != 0 {
 		t.Errorf("expected 0 results for nonexistent term, got %d", len(results))
 	}
 
 	// Field that doesn't exist
-	results = searcher.Search(search.NewTermQuery("title", "hello"), 10)
+	results = searcher.Search(search.NewTermQuery("title", "hello"), search.NewTopKCollector(10))
 	if len(results) != 0 {
 		t.Errorf("expected 0 results for nonexistent field, got %d", len(results))
 	}
 
 	// Phrase query with one nonexistent term
-	results = searcher.Search(search.NewPhraseQuery("body", "hello", "nonexistent"), 10)
+	results = searcher.Search(search.NewPhraseQuery("body", "hello", "nonexistent"), search.NewTopKCollector(10))
 	if len(results) != 0 {
 		t.Errorf("expected 0 results for phrase with nonexistent term, got %d", len(results))
 	}
@@ -313,7 +313,7 @@ func TestE2EForceMergeWithDeletions(t *testing.T) {
 	searcher := search.NewIndexSearcher(reader)
 
 	// "alpha" should match doc0 and doc3 only (doc1 was deleted before merge)
-	results := searcher.Search(search.NewTermQuery("body", "alpha"), 10)
+	results := searcher.Search(search.NewTermQuery("body", "alpha"), search.NewTopKCollector(10))
 	if len(results) != 2 {
 		t.Errorf("expected 2 results for 'alpha' after merge+delete, got %d", len(results))
 	}
@@ -344,13 +344,13 @@ func TestE2ETopKLimiting(t *testing.T) {
 	searcher := search.NewIndexSearcher(reader)
 
 	// topK=3 should limit to 3 results
-	results := searcher.Search(search.NewTermQuery("body", "common"), 3)
+	results := searcher.Search(search.NewTermQuery("body", "common"), search.NewTopKCollector(3))
 	if len(results) != 3 {
 		t.Errorf("expected 3 results with topK=3, got %d", len(results))
 	}
 
 	// topK=1 should return exactly 1
-	results = searcher.Search(search.NewTermQuery("body", "common"), 1)
+	results = searcher.Search(search.NewTermQuery("body", "common"), search.NewTopKCollector(1))
 	if len(results) != 1 {
 		t.Errorf("expected 1 result with topK=1, got %d", len(results))
 	}
@@ -374,13 +374,13 @@ func TestE2ENRTReaderSnapshotIsolation(t *testing.T) {
 	nrtSearcher := search.NewIndexSearcher(nrtReader)
 
 	// NRT reader should NOT see doc1 (added after snapshot)
-	results := nrtSearcher.Search(search.NewTermQuery("body", "beta"), 10)
+	results := nrtSearcher.Search(search.NewTermQuery("body", "beta"), search.NewTopKCollector(10))
 	if len(results) != 0 {
 		t.Errorf("NRT reader should not see documents added after snapshot, got %d results", len(results))
 	}
 
 	// NRT reader SHOULD see doc0
-	results = nrtSearcher.Search(search.NewTermQuery("body", "alpha"), 10)
+	results = nrtSearcher.Search(search.NewTermQuery("body", "alpha"), search.NewTopKCollector(10))
 	if len(results) != 1 {
 		t.Errorf("NRT reader should see pre-snapshot documents, expected 1, got %d", len(results))
 	}
@@ -393,7 +393,7 @@ func TestE2ENRTReaderSnapshotIsolation(t *testing.T) {
 	defer nrtReader2.Close()
 
 	nrtSearcher2 := search.NewIndexSearcher(nrtReader2)
-	results = nrtSearcher2.Search(search.NewTermQuery("body", "test"), 10)
+	results = nrtSearcher2.Search(search.NewTermQuery("body", "test"), search.NewTopKCollector(10))
 	if len(results) != 2 {
 		t.Errorf("new NRT reader should see all documents, expected 2, got %d", len(results))
 	}
@@ -409,7 +409,7 @@ func TestE2EScoreOrdering(t *testing.T) {
 
 	reader := commitAndOpenReader(t, writer, dir)
 	searcher := search.NewIndexSearcher(reader)
-	results := searcher.Search(search.NewTermQuery("body", "fox"), 10)
+	results := searcher.Search(search.NewTermQuery("body", "fox"), search.NewTopKCollector(10))
 	if len(results) != 2 {
 		t.Fatalf("expected 2 results, got %d", len(results))
 	}
@@ -444,13 +444,13 @@ func TestE2EMultiFieldDocument(t *testing.T) {
 	searcher := search.NewIndexSearcher(reader)
 
 	// Search "title" field for "fox" — should match doc0 only
-	results := searcher.Search(search.NewTermQuery("title", "fox"), 10)
+	results := searcher.Search(search.NewTermQuery("title", "fox"), search.NewTopKCollector(10))
 	if len(results) != 1 {
 		t.Errorf("expected 1 result searching title for 'fox', got %d", len(results))
 	}
 
 	// Search "body" field for "fox" — should match doc2 only
-	results = searcher.Search(search.NewTermQuery("body", "fox"), 10)
+	results = searcher.Search(search.NewTermQuery("body", "fox"), search.NewTopKCollector(10))
 	if len(results) != 1 {
 		t.Errorf("expected 1 result searching body for 'fox', got %d", len(results))
 	}
@@ -461,7 +461,7 @@ func TestE2EMultiFieldDocument(t *testing.T) {
 	// So title:fox AND body:dog → doc0 matches both!
 	results = searcher.Search(search.NewBooleanQuery().
 		Add(search.NewTermQuery("title", "fox"), search.OccurMust).
-		Add(search.NewTermQuery("body", "dog"), search.OccurMust), 10)
+		Add(search.NewTermQuery("body", "dog"), search.OccurMust), search.NewTopKCollector(10))
 	if len(results) != 1 {
 		t.Errorf("expected 1 result for cross-field boolean query, got %d", len(results))
 	}
@@ -492,13 +492,13 @@ func TestE2EKeywordField(t *testing.T) {
 	searcher := search.NewIndexSearcher(reader)
 
 	// Keyword field: exact match (not analyzed, so case-sensitive)
-	results := searcher.Search(search.NewTermQuery("status", "ACTIVE"), 10)
+	results := searcher.Search(search.NewTermQuery("status", "ACTIVE"), search.NewTopKCollector(10))
 	if len(results) != 1 {
 		t.Errorf("expected 1 result for keyword exact match, got %d", len(results))
 	}
 
 	// Lowercase should NOT match keyword field (not analyzed)
-	results = searcher.Search(search.NewTermQuery("status", "active"), 10)
+	results = searcher.Search(search.NewTermQuery("status", "active"), search.NewTopKCollector(10))
 	if len(results) != 0 {
 		t.Errorf("expected 0 results for lowercase keyword (not analyzed), got %d", len(results))
 	}
@@ -506,7 +506,7 @@ func TestE2EKeywordField(t *testing.T) {
 	// Boolean: body:text AND status:ACTIVE
 	results = searcher.Search(search.NewBooleanQuery().
 		Add(search.NewTermQuery("body", "text"), search.OccurMust).
-		Add(search.NewTermQuery("status", "ACTIVE"), search.OccurMust), 10)
+		Add(search.NewTermQuery("status", "ACTIVE"), search.OccurMust), search.NewTopKCollector(10))
 	if len(results) != 1 {
 		t.Errorf("expected 1 result for text+keyword boolean, got %d", len(results))
 	}
@@ -523,7 +523,7 @@ func TestE2EThreeTermPhraseQuery(t *testing.T) {
 	searcher := search.NewIndexSearcher(reader)
 
 	// "quick brown fox" — 3-term phrase, should match doc0 only
-	results := searcher.Search(search.NewPhraseQuery("body", "quick", "brown", "fox"), 10)
+	results := searcher.Search(search.NewPhraseQuery("body", "quick", "brown", "fox"), search.NewTopKCollector(10))
 	if len(results) != 1 {
 		t.Errorf("expected 1 result for 3-term phrase 'quick brown fox', got %d", len(results))
 	}
@@ -544,7 +544,7 @@ func TestE2EMultiSegmentPhraseQuery(t *testing.T) {
 	searcher := search.NewIndexSearcher(reader)
 
 	// "brown fox" should match seg0 and seg1 but not seg2 (reversed)
-	results := searcher.Search(search.NewPhraseQuery("body", "brown", "fox"), 10)
+	results := searcher.Search(search.NewPhraseQuery("body", "brown", "fox"), search.NewTopKCollector(10))
 	if len(results) != 2 {
 		t.Errorf("expected 2 results for phrase 'brown fox' across segments, got %d", len(results))
 	}
@@ -557,7 +557,7 @@ func TestE2EMultiSegmentPhraseQuery(t *testing.T) {
 	defer nrtReader.Close()
 
 	nrtSearcher := search.NewIndexSearcher(nrtReader)
-	nrtResults := nrtSearcher.Search(search.NewPhraseQuery("body", "brown", "fox"), 10)
+	nrtResults := nrtSearcher.Search(search.NewPhraseQuery("body", "brown", "fox"), search.NewTopKCollector(10))
 	if len(nrtResults) != len(results) {
 		t.Errorf("NRT vs disk mismatch: nrt=%d disk=%d", len(nrtResults), len(results))
 	}
@@ -573,7 +573,7 @@ func TestE2EHighTermFrequencyScoring(t *testing.T) {
 
 	reader := commitAndOpenReader(t, writer, dir)
 	searcher := search.NewIndexSearcher(reader)
-	results := searcher.Search(search.NewTermQuery("body", "fox"), 10)
+	results := searcher.Search(search.NewTermQuery("body", "fox"), search.NewTopKCollector(10))
 	if len(results) != 2 {
 		t.Fatalf("expected 2 results, got %d", len(results))
 	}
@@ -613,12 +613,12 @@ func TestE2EDeleteThenMergeThenSearch(t *testing.T) {
 	searcher := search.NewIndexSearcher(reader)
 
 	// Only doc2, doc3, doc5 should survive
-	results := searcher.Search(search.NewTermQuery("body", "beta"), 10)
+	results := searcher.Search(search.NewTermQuery("body", "beta"), search.NewTopKCollector(10))
 	if len(results) != 2 {
 		t.Errorf("expected 2 results for 'beta' after delete+merge, got %d", len(results))
 	}
 
-	results = searcher.Search(search.NewTermQuery("body", "alpha"), 10)
+	results = searcher.Search(search.NewTermQuery("body", "alpha"), search.NewTopKCollector(10))
 	if len(results) != 0 {
 		t.Errorf("expected 0 results for 'alpha' (all deleted), got %d", len(results))
 	}
@@ -647,7 +647,7 @@ func TestE2EBooleanQueryMustWithShould(t *testing.T) {
 	// but doc0 should score higher (boosted by SHOULD match)
 	results := searcher.Search(search.NewBooleanQuery().
 		Add(search.NewTermQuery("body", "alpha"), search.OccurMust).
-		Add(search.NewTermQuery("body", "beta"), search.OccurShould), 10)
+		Add(search.NewTermQuery("body", "beta"), search.OccurShould), search.NewTopKCollector(10))
 
 	if len(results) != 2 {
 		t.Fatalf("expected 2 results for MUST+SHOULD, got %d", len(results))
@@ -685,13 +685,13 @@ func TestE2EDiskSegmentQueryExecution(t *testing.T) {
 	diskSearcher := search.NewIndexSearcher(index.NewIndexReader(diskReaders))
 
 	// TermQuery
-	tqResults := diskSearcher.Search(search.NewTermQuery("body", "fox"), 10)
+	tqResults := diskSearcher.Search(search.NewTermQuery("body", "fox"), search.NewTopKCollector(10))
 	if len(tqResults) != 3 {
 		t.Errorf("TermQuery 'fox': expected 3 results, got %d", len(tqResults))
 	}
 
 	// PhraseQuery "brown fox"
-	pqResults := diskSearcher.Search(search.NewPhraseQuery("body", "brown", "fox"), 10)
+	pqResults := diskSearcher.Search(search.NewPhraseQuery("body", "brown", "fox"), search.NewTopKCollector(10))
 	if len(pqResults) != 2 {
 		t.Errorf("PhraseQuery 'brown fox': expected 2 results, got %d", len(pqResults))
 	}
@@ -699,7 +699,7 @@ func TestE2EDiskSegmentQueryExecution(t *testing.T) {
 	// BooleanQuery: "brown" AND NOT "dog"
 	bqResults := diskSearcher.Search(search.NewBooleanQuery().
 		Add(search.NewTermQuery("body", "brown"), search.OccurMust).
-		Add(search.NewTermQuery("body", "dog"), search.OccurMustNot), 10)
+		Add(search.NewTermQuery("body", "dog"), search.OccurMustNot), search.NewTopKCollector(10))
 	if len(bqResults) != 2 {
 		t.Errorf("BooleanQuery 'brown AND NOT dog': expected 2 results, got %d", len(bqResults))
 	}
@@ -722,8 +722,8 @@ func TestE2EDiskSegmentQueryExecution(t *testing.T) {
 			Add(search.NewTermQuery("body", "brown"), search.OccurMust).
 			Add(search.NewTermQuery("body", "dog"), search.OccurMustNot)},
 	} {
-		nrtResults := nrtSearcher.Search(tc.query, 10)
-		diskResults := diskSearcher.Search(tc.query, 10)
+		nrtResults := nrtSearcher.Search(tc.query, search.NewTopKCollector(10))
+		diskResults := diskSearcher.Search(tc.query, search.NewTopKCollector(10))
 
 		if len(nrtResults) != len(diskResults) {
 			t.Errorf("%s: result count mismatch: nrt=%d, disk=%d",
