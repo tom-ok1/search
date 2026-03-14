@@ -1,6 +1,7 @@
 package search
 
 import (
+	"math"
 	"sort"
 	"testing"
 
@@ -99,5 +100,19 @@ func TestTopKCollector(t *testing.T) {
 	if results[0].DocID != 1 || results[1].DocID != 2 {
 		t.Errorf("expected [doc1, doc2], got [doc%d, doc%d]",
 			results[0].DocID, results[1].DocID)
+	}
+}
+
+func TestBM25ScoreZeroAvgDocLen(t *testing.T) {
+	scorer := NewBM25Scorer()
+	idf := scorer.IDF(10, 1)
+
+	// avgDocLen=0 should not produce NaN or Inf
+	score := scorer.Score(1.0, 5.0, 0.0, idf)
+	if math.IsNaN(score) || math.IsInf(score, 0) {
+		t.Errorf("BM25 score with avgDocLen=0 should be finite, got %f", score)
+	}
+	if score <= 0 {
+		t.Errorf("BM25 score should be positive, got %f", score)
 	}
 }

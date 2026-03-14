@@ -237,3 +237,63 @@ func TestMMapEmptyFile(t *testing.T) {
 		t.Error("expected error reading from empty mmap")
 	}
 }
+
+func TestMMapSeekPanicsOnNegative(t *testing.T) {
+	dir := t.TempDir()
+	path := writeTempFile(t, dir, "test.bin", []byte{1, 2, 3, 4, 5})
+
+	m, err := OpenMMap(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("Seek(-1) should panic")
+		}
+	}()
+	m.Seek(-1)
+}
+
+func TestMMapSeekPanicsOnBeyondLength(t *testing.T) {
+	dir := t.TempDir()
+	path := writeTempFile(t, dir, "test.bin", []byte{1, 2, 3, 4, 5})
+
+	m, err := OpenMMap(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+
+	// Seek to exactly length is OK (EOF position)
+	m.Seek(5)
+
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("Seek(6) on 5-byte file should panic")
+		}
+	}()
+	m.Seek(6)
+}
+
+func TestMMapSliceRejectsNegativeOffset(t *testing.T) {
+	dir := t.TempDir()
+	path := writeTempFile(t, dir, "test.bin", []byte{1, 2, 3, 4, 5})
+
+	m, err := OpenMMap(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+
+	_, err = m.Slice(-1, 3)
+	if err == nil {
+		t.Error("Slice with negative offset should return error")
+	}
+
+	_, err = m.Slice(0, -1)
+	if err == nil {
+		t.Error("Slice with negative length should return error")
+	}
+}

@@ -225,3 +225,40 @@ func TestBitsetAllBitsSet(t *testing.T) {
 		t.Errorf("Count with all bits set: got %d, want %d", bs.Count(), size)
 	}
 }
+
+func TestBitsetSetPanicsOnOutOfRange(t *testing.T) {
+	bs := NewBitset(8)
+
+	testPanic := func(name string, f func()) {
+		t.Helper()
+		defer func() {
+			if r := recover(); r == nil {
+				t.Errorf("Bitset.Set(%s) should panic on out-of-range", name)
+			}
+		}()
+		f()
+	}
+
+	testPanic("negative", func() { bs.Set(-1) })
+	testPanic("equal to size", func() { bs.Set(8) })
+	testPanic("beyond size", func() { bs.Set(100) })
+}
+
+func TestBitsetGetReturnsFalseOnOutOfRange(t *testing.T) {
+	bs := NewBitset(8)
+	bs.Set(0)
+
+	if bs.Get(-1) {
+		t.Error("Get(-1) should return false")
+	}
+	if bs.Get(8) {
+		t.Error("Get(8) should return false for out-of-range")
+	}
+	if bs.Get(100) {
+		t.Error("Get(100) should return false for out-of-range")
+	}
+	// Valid index should still work
+	if !bs.Get(0) {
+		t.Error("Get(0) should return true")
+	}
+}
