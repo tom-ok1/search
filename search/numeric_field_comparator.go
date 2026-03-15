@@ -23,7 +23,7 @@ func (c *NumericFieldComparator) CompareSlots(slot1, slot2 int) int {
 	return cmp.Compare(c.values[slot1], c.values[slot2])
 }
 
-func (c *NumericFieldComparator) Value(slot int) interface{} {
+func (c *NumericFieldComparator) Value(slot int) any {
 	return c.values[slot]
 }
 

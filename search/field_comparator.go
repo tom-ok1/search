@@ -9,7 +9,7 @@ type FieldComparator interface {
 	// CompareSlots compares two already-collected slots.
 	CompareSlots(slot1, slot2 int) int
 	// Value returns the sort value stored in the given slot.
-	Value(slot int) interface{}
+	Value(slot int) any
 	// GetLeafComparator returns a segment-local comparator for the given segment.
 	GetLeafComparator(seg index.SegmentReader) LeafFieldComparator
 }

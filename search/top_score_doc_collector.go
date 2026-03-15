@@ -40,9 +40,15 @@ func (c *TopKCollector) Results() []SearchResult {
 type topKLeafCollector struct {
 	parent  *TopKCollector
 	docBase int
+	scorer  Scorable
 }
 
-func (lc *topKLeafCollector) Collect(docID int, score float64) {
+func (lc *topKLeafCollector) SetScorer(scorer Scorable) {
+	lc.scorer = scorer
+}
+
+func (lc *topKLeafCollector) Collect(docID int) {
+	score := lc.scorer.Score()
 	globalDocID := lc.docBase + docID
 	result := SearchResult{DocID: globalDocID, Score: score}
 	if len(lc.parent.results) < lc.parent.k {
@@ -62,11 +68,11 @@ func (h minHeap) Len() int           { return len(h) }
 func (h minHeap) Less(i, j int) bool { return h[i].Score < h[j].Score }
 func (h minHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
 
-func (h *minHeap) Push(x interface{}) {
+func (h *minHeap) Push(x any) {
 	*h = append(*h, x.(SearchResult))
 }
 
-func (h *minHeap) Pop() interface{} {
+func (h *minHeap) Pop() any {
 	old := *h
 	n := len(old)
 	result := old[n-1]

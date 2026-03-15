@@ -86,7 +86,7 @@ func (b *Bitset) countRange(from, to int) int {
 
 	// Same byte case.
 	if startByte == endByte {
-		mask := byte((1<<uint(endBit)) - (1 << uint(startBit)))
+		mask := byte((1 << uint(endBit)) - (1 << uint(startBit)))
 		return bits.OnesCount8(b.bits[startByte] & mask)
 	}
 

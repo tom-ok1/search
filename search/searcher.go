@@ -4,10 +4,10 @@ import "gosearch/index"
 
 // SearchResult represents a single search hit.
 type SearchResult struct {
-	DocID      int               // global DocID
+	DocID      int // global DocID
 	Score      float64
 	Fields     map[string]string // stored fields
-	SortValues []interface{}     // populated by TopFieldCollector
+	SortValues []any             // populated by TopFieldCollector
 }
 
 // IndexSearcher searches across multiple segments.
@@ -22,13 +22,21 @@ func NewIndexSearcher(reader *index.IndexReader) *IndexSearcher {
 // Search executes a Query across all segments, collecting results into the given Collector.
 // StoredFields are populated on the final results after collection is complete.
 func (s *IndexSearcher) Search(q Query, c Collector) []SearchResult {
+	scoreMode := c.ScoreMode()
 	for _, leaf := range s.reader.Leaves() {
+		scorer := q.CreateScorer(leaf, scoreMode)
+		if scorer == nil {
+			continue
+		}
+
 		lc := c.GetLeafCollector(leaf)
-		for _, ds := range q.Execute(leaf.Segment) {
-			if leaf.Segment.IsDeleted(ds.DocID) {
-				continue
+		lc.SetScorer(scorer)
+
+		iter := scorer.Iterator()
+		for iter.NextDoc() != NoMoreDocs {
+			if !leaf.Segment.IsDeleted(iter.DocID()) {
+				lc.Collect(iter.DocID())
 			}
-			lc.Collect(ds.DocID, ds.Score)
 		}
 	}
 
@@ -38,4 +46,3 @@ func (s *IndexSearcher) Search(q Query, c Collector) []SearchResult {
 	}
 	return results
 }
-

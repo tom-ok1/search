@@ -116,10 +116,10 @@ func TestE2EDiskSegmentSearch(t *testing.T) {
 func TestE2EDeleteAndSearch(t *testing.T) {
 	writer, dir := newTestWriter(t, 100)
 	for _, text := range []string{
-		"the quick brown fox",   // doc0
-		"the lazy brown dog",    // doc1
-		"brown fox jumps over",  // doc2
-		"the quick red fox",     // doc3
+		"the quick brown fox",  // doc0
+		"the lazy brown dog",   // doc1
+		"brown fox jumps over", // doc2
+		"the quick red fox",    // doc3
 	} {
 		addTextDoc(t, writer, "body", text)
 	}
@@ -147,9 +147,9 @@ func TestE2EDeleteAllDocsInSegment(t *testing.T) {
 	writer, dir := newTestWriter(t, 2)
 
 	addTextDoc(t, writer, "body", "alpha beta")
-	addTextDoc(t, writer, "body", "alpha gamma")   // auto-flush → seg0
+	addTextDoc(t, writer, "body", "alpha gamma") // auto-flush → seg0
 	addTextDoc(t, writer, "body", "delta epsilon")
-	addTextDoc(t, writer, "body", "delta zeta")     // auto-flush → seg1
+	addTextDoc(t, writer, "body", "delta zeta") // auto-flush → seg1
 
 	// Delete all docs in seg0 by deleting "alpha"
 	writer.DeleteDocuments("body", "alpha")
@@ -298,7 +298,7 @@ func TestE2EForceMergeWithDeletions(t *testing.T) {
 	writer, dir := newTestWriter(t, 2)
 
 	addTextDoc(t, writer, "body", "alpha beta gamma")
-	addTextDoc(t, writer, "body", "alpha delta")     // → seg0
+	addTextDoc(t, writer, "body", "alpha delta") // → seg0
 	addTextDoc(t, writer, "body", "beta epsilon")
 	addTextDoc(t, writer, "body", "gamma zeta alpha") // → seg1
 
@@ -633,9 +633,9 @@ func TestE2EBooleanQueryMustWithShould(t *testing.T) {
 	writer, dir := newTestWriter(t, 100)
 
 	for _, text := range []string{
-		"alpha beta gamma",  // doc0 — matches MUST and SHOULD
-		"alpha delta",       // doc1 — matches MUST only
-		"beta gamma",        // doc2 — matches SHOULD only, not MUST
+		"alpha beta gamma", // doc0 — matches MUST and SHOULD
+		"alpha delta",      // doc1 — matches MUST only
+		"beta gamma",       // doc2 — matches SHOULD only, not MUST
 	} {
 		addTextDoc(t, writer, "body", text)
 	}

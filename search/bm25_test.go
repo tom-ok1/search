@@ -59,7 +59,8 @@ func TestBM25Scoring(t *testing.T) {
 	defer reader.Close()
 	seg := reader.Leaves()[0].Segment
 
-	results := NewTermQuery("body", "fox").Execute(seg)
+	q := NewTermQuery("body", "fox")
+	results := collectDocs(t, q, seg)
 
 	// Only doc0 and doc1 should match
 	if len(results) != 2 {
@@ -87,10 +88,15 @@ func TestBM25Scoring(t *testing.T) {
 func TestTopKCollector(t *testing.T) {
 	collector := NewTopKCollector(2)
 	lc := collector.GetLeafCollector(leafCtx(0))
+	ms := &mockScorable{}
+	lc.SetScorer(ms)
 
-	lc.Collect(0, 1.0)
-	lc.Collect(1, 3.0)
-	lc.Collect(2, 2.0)
+	ms.score = 1.0
+	lc.Collect(0)
+	ms.score = 3.0
+	lc.Collect(1)
+	ms.score = 2.0
+	lc.Collect(2)
 
 	results := collector.Results()
 	if len(results) != 2 {

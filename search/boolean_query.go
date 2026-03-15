@@ -1,9 +1,6 @@
 package search
 
-import (
-	"gosearch/index"
-	"sort"
-)
+import "gosearch/index"
 
 // Occur represents the type of a boolean clause.
 type Occur int
@@ -34,123 +31,153 @@ func (q *BooleanQuery) Add(query Query, occur Occur) *BooleanQuery {
 	return q
 }
 
-func (q *BooleanQuery) Execute(seg index.SegmentReader) []DocScore {
-	var mustResults [][]DocScore
-	var shouldResults [][]DocScore
-	var mustNotResults [][]DocScore
+// CreateScorer creates a Scorer for this boolean query in the given segment.
+func (q *BooleanQuery) CreateScorer(ctx index.LeafReaderContext, scoreMode ScoreMode) Scorer {
+	var mustScorers []Scorer
+	var shouldScorers []Scorer
+	var mustNotScorers []Scorer
 
 	for _, clause := range q.Clauses {
-		results := clause.Query.Execute(seg)
+		scorer := clause.Query.CreateScorer(ctx, scoreMode)
+
 		switch clause.Occur {
 		case OccurMust:
-			mustResults = append(mustResults, results)
+			if scorer == nil {
+				return nil // MUST with no matches = no results
+			}
+			mustScorers = append(mustScorers, scorer)
 		case OccurShould:
-			shouldResults = append(shouldResults, results)
+			if scorer != nil {
+				shouldScorers = append(shouldScorers, scorer)
+			}
 		case OccurMustNot:
-			mustNotResults = append(mustNotResults, results)
-		}
-	}
-
-	// Compute MUST intersection
-	candidates := intersectAll(mustResults)
-
-	// If no MUST clauses, use SHOULD union as candidates
-	if len(mustResults) == 0 && len(shouldResults) > 0 {
-		candidates = unionAll(shouldResults)
-	} else if len(shouldResults) > 0 {
-		// When MUST exists, SHOULD only adds scores
-		candidates = addShouldScores(candidates, shouldResults)
-	}
-
-	// Exclude MUST_NOT matches
-	if len(mustNotResults) > 0 {
-		excludeSet := make(map[int]bool)
-		for _, results := range mustNotResults {
-			for _, ds := range results {
-				excludeSet[ds.DocID] = true
+			if scorer != nil {
+				mustNotScorers = append(mustNotScorers, scorer)
 			}
 		}
-		var filtered []DocScore
-		for _, ds := range candidates {
-			if !excludeSet[ds.DocID] {
-				filtered = append(filtered, ds)
-			}
-		}
-		candidates = filtered
 	}
 
-	return candidates
-}
+	var mainScorer Scorer
 
-// intersectAll finds DocIDs common to all lists, summing their scores.
-func intersectAll(lists [][]DocScore) []DocScore {
-	if len(lists) == 0 {
+	if len(mustScorers) > 0 {
+		// AND semantics for MUST
+		mainScorer = NewConjunctionScorer(mustScorers)
+		// Add SHOULD scores as a boost
+		if len(shouldScorers) > 0 {
+			mainScorer = newBoostedScorer(mainScorer, shouldScorers)
+		}
+	} else if len(shouldScorers) > 0 {
+		// OR semantics for SHOULD when no MUST
+		mainScorer = NewDisjunctionScorer(shouldScorers)
+	} else {
 		return nil
 	}
-	if len(lists) == 1 {
-		return lists[0]
+
+	// Apply MUST_NOT exclusion
+	if len(mustNotScorers) > 0 {
+		excl := NewDisjunctionScorer(mustNotScorers)
+		if excl != nil {
+			mainScorer = newExclusionScorer(mainScorer, excl)
+		}
 	}
 
-	result := lists[0]
-	for i := 1; i < len(lists); i++ {
-		result = intersectTwo(result, lists[i])
-	}
-	return result
+	return mainScorer
 }
 
-// intersectTwo finds common DocIDs between two sorted DocScore lists.
-func intersectTwo(a, b []DocScore) []DocScore {
-	var result []DocScore
-	i, j := 0, 0
-	for i < len(a) && j < len(b) {
-		if a[i].DocID == b[j].DocID {
-			result = append(result, DocScore{
-				DocID: a[i].DocID,
-				Score: a[i].Score + b[j].Score,
-			})
-			i++
-			j++
-		} else if a[i].DocID < b[j].DocID {
-			i++
-		} else {
-			j++
-		}
-	}
-	return result
+// boostedScorer adds scores from booster scorers to the main scorer.
+type boostedScorer struct {
+	main         Scorer
+	boosters     []Scorer
+	boosterIters []DocIdSetIterator
 }
 
-// unionAll merges multiple DocScore lists, summing scores for duplicate DocIDs.
-func unionAll(lists [][]DocScore) []DocScore {
-	scoreMap := make(map[int]float64)
-	for _, list := range lists {
-		for _, ds := range list {
-			scoreMap[ds.DocID] += ds.Score
-		}
+func newBoostedScorer(main Scorer, boosters []Scorer) *boostedScorer {
+	iters := make([]DocIdSetIterator, len(boosters))
+	for i, b := range boosters {
+		iters[i] = b.Iterator()
 	}
-
-	var result []DocScore
-	for docID, score := range scoreMap {
-		result = append(result, DocScore{DocID: docID, Score: score})
-	}
-	sort.Slice(result, func(i, j int) bool {
-		return result[i].DocID < result[j].DocID
-	})
-	return result
+	return &boostedScorer{main: main, boosters: boosters, boosterIters: iters}
 }
 
-// addShouldScores adds SHOULD scores to MUST results as a boost.
-func addShouldScores(must []DocScore, shouldLists [][]DocScore) []DocScore {
-	shouldScores := make(map[int]float64)
-	for _, list := range shouldLists {
-		for _, ds := range list {
-			shouldScores[ds.DocID] += ds.Score
-		}
-	}
+func (s *boostedScorer) Iterator() DocIdSetIterator {
+	return s.main.Iterator()
+}
 
-	for i := range must {
-		if bonus, exists := shouldScores[must[i].DocID]; exists {
-			must[i].Score += bonus
+func (s *boostedScorer) DocID() int {
+	return s.main.DocID()
+}
+
+func (s *boostedScorer) Score() float64 {
+	score := s.main.Score()
+	doc := s.main.DocID()
+	for i, b := range s.boosters {
+		if b.DocID() == doc {
+			score += b.Score()
+		} else if b.DocID() < doc {
+			s.boosterIters[i].Advance(doc)
+			if b.DocID() == doc {
+				score += b.Score()
+			}
 		}
 	}
-	return must
+	return score
+}
+
+// exclusionScorer filters out documents that match the excluded scorer.
+type exclusionScorer struct {
+	main     Scorer
+	excluded Scorer
+	mainIter DocIdSetIterator
+	excIter  DocIdSetIterator
+	docID    int
+}
+
+func newExclusionScorer(main, excluded Scorer) *exclusionScorer {
+	return &exclusionScorer{
+		main:     main,
+		excluded: excluded,
+		mainIter: main.Iterator(),
+		excIter:  excluded.Iterator(),
+		docID:    -1,
+	}
+}
+
+func (s *exclusionScorer) Iterator() DocIdSetIterator {
+	return s
+}
+
+func (s *exclusionScorer) DocID() int {
+	return s.docID
+}
+
+func (s *exclusionScorer) Score() float64 {
+	return s.main.Score()
+}
+
+func (s *exclusionScorer) NextDoc() int {
+	return s.advanceToNonExcluded(s.mainIter.NextDoc())
+}
+
+func (s *exclusionScorer) Advance(target int) int {
+	return s.advanceToNonExcluded(s.mainIter.Advance(target))
+}
+
+func (s *exclusionScorer) Cost() int64 {
+	return s.mainIter.Cost()
+}
+
+func (s *exclusionScorer) advanceToNonExcluded(doc int) int {
+	for doc != NoMoreDocs {
+		excDoc := s.excluded.DocID()
+		if excDoc < doc {
+			excDoc = s.excIter.Advance(doc)
+		}
+		if excDoc != doc {
+			s.docID = doc
+			return doc
+		}
+		doc = s.mainIter.NextDoc()
+	}
+	s.docID = NoMoreDocs
+	return NoMoreDocs
 }

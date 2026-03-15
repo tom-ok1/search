@@ -30,8 +30,8 @@ func newMockSegment(name string, docCount int) *mockSegment {
 	}
 }
 
-func (m *mockSegment) Name() string   { return m.name }
-func (m *mockSegment) DocCount() int  { return m.docCount }
+func (m *mockSegment) Name() string             { return m.name }
+func (m *mockSegment) DocCount() int            { return m.docCount }
 func (m *mockSegment) IsDeleted(docID int) bool { return m.deleted[docID] }
 
 func (m *mockSegment) LiveDocCount() int {
@@ -79,19 +79,62 @@ func (m *mockSegment) PostingsIterator(field, term string) index.PostingsIterato
 }
 
 func (m *mockSegment) NumericDocValues(field string) index.NumericDocValues { return nil }
-func (m *mockSegment) SortedDocValues(field string) index.SortedDocValues  { return nil }
+func (m *mockSegment) SortedDocValues(field string) index.SortedDocValues   { return nil }
 
-// mockQuery returns predetermined DocScore results.
+// mockDocEntry represents a document with its score for mockQuery.
+type mockDocEntry struct {
+	DocID int
+	Score float64
+}
+
+// mockQuery returns predetermined results.
 type mockQuery struct {
-	results map[string][]DocScore // segment name -> results
+	results map[string][]mockDocEntry // segment name -> results
 }
 
-func (q *mockQuery) Execute(seg index.SegmentReader) []DocScore {
-	if results, ok := q.results[seg.Name()]; ok {
-		return results
+func (q *mockQuery) CreateScorer(ctx index.LeafReaderContext, _ ScoreMode) Scorer {
+	entries, ok := q.results[ctx.Segment.Name()]
+	if !ok || len(entries) == 0 {
+		return nil
 	}
-	return nil
+	return &mockScorer{entries: entries, idx: -1, docID: -1}
 }
+
+type mockScorer struct {
+	entries []mockDocEntry
+	idx     int
+	docID   int
+}
+
+func (s *mockScorer) Iterator() DocIdSetIterator { return s }
+func (s *mockScorer) DocID() int                 { return s.docID }
+func (s *mockScorer) Score() float64 {
+	if s.idx >= 0 && s.idx < len(s.entries) {
+		return s.entries[s.idx].Score
+	}
+	return 0
+}
+
+func (s *mockScorer) NextDoc() int {
+	s.idx++
+	if s.idx >= len(s.entries) {
+		s.docID = NoMoreDocs
+		return NoMoreDocs
+	}
+	s.docID = s.entries[s.idx].DocID
+	return s.docID
+}
+
+func (s *mockScorer) Advance(target int) int {
+	for {
+		doc := s.NextDoc()
+		if doc >= target || doc == NoMoreDocs {
+			return doc
+		}
+	}
+}
+
+func (s *mockScorer) Cost() int64 { return int64(len(s.entries)) }
 
 // --- tests ---
 
@@ -105,7 +148,7 @@ func TestSearchSingleSegment(t *testing.T) {
 	searcher := NewIndexSearcher(reader)
 
 	q := &mockQuery{
-		results: map[string][]DocScore{
+		results: map[string][]mockDocEntry{
 			"seg0": {
 				{DocID: 0, Score: 3.0},
 				{DocID: 1, Score: 1.0},
@@ -119,13 +162,11 @@ func TestSearchSingleSegment(t *testing.T) {
 		t.Fatalf("expected 3 results, got %d", len(results))
 	}
 
-	// Results should be sorted by score descending (via TopKCollector)
 	if results[0].Score != 3.0 || results[1].Score != 2.0 || results[2].Score != 1.0 {
 		t.Errorf("expected scores [3.0, 2.0, 1.0], got [%f, %f, %f]",
 			results[0].Score, results[1].Score, results[2].Score)
 	}
 
-	// Stored fields should be populated
 	if results[0].Fields["title"] != "first" {
 		t.Errorf("expected title 'first', got %q", results[0].Fields["title"])
 	}
@@ -145,7 +186,7 @@ func TestSearchMultipleSegments(t *testing.T) {
 	searcher := NewIndexSearcher(reader)
 
 	q := &mockQuery{
-		results: map[string][]DocScore{
+		results: map[string][]mockDocEntry{
 			"seg0": {{DocID: 0, Score: 5.0}},
 			"seg1": {{DocID: 1, Score: 3.0}, {DocID: 2, Score: 7.0}},
 		},
@@ -156,13 +197,10 @@ func TestSearchMultipleSegments(t *testing.T) {
 		t.Fatalf("expected 3 results, got %d", len(results))
 	}
 
-	// Highest score first
 	if results[0].Score != 7.0 {
 		t.Errorf("expected top score 7.0, got %f", results[0].Score)
 	}
 
-	// Global DocIDs: seg0 has docBase=0 (docs 0,1), seg1 has docBase=2 (docs 2,3,4)
-	// seg1 docID=2 -> globalID=4, seg0 docID=0 -> globalID=0, seg1 docID=1 -> globalID=3
 	expectedGlobalIDs := map[float64]int{7.0: 4, 5.0: 0, 3.0: 3}
 	for _, r := range results {
 		if expected, ok := expectedGlobalIDs[r.Score]; ok {
@@ -184,10 +222,10 @@ func TestSearchSkipsDeletedDocs(t *testing.T) {
 	searcher := NewIndexSearcher(reader)
 
 	q := &mockQuery{
-		results: map[string][]DocScore{
+		results: map[string][]mockDocEntry{
 			"seg0": {
 				{DocID: 0, Score: 1.0},
-				{DocID: 1, Score: 5.0}, // deleted — should be skipped
+				{DocID: 1, Score: 5.0},
 				{DocID: 2, Score: 2.0},
 			},
 		},
@@ -207,7 +245,7 @@ func TestSearchSkipsDeletedDocs(t *testing.T) {
 
 func TestSearchTopK(t *testing.T) {
 	seg := newMockSegment("seg0", 5)
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		seg.stored[i] = map[string]string{}
 	}
 
@@ -215,7 +253,7 @@ func TestSearchTopK(t *testing.T) {
 	searcher := NewIndexSearcher(reader)
 
 	q := &mockQuery{
-		results: map[string][]DocScore{
+		results: map[string][]mockDocEntry{
 			"seg0": {
 				{DocID: 0, Score: 1.0},
 				{DocID: 1, Score: 5.0},
@@ -231,7 +269,6 @@ func TestSearchTopK(t *testing.T) {
 		t.Fatalf("expected 3 results, got %d", len(results))
 	}
 
-	// Top 3 scores should be 5.0, 4.0, 3.0
 	expectedScores := []float64{5.0, 4.0, 3.0}
 	for i, expected := range expectedScores {
 		if results[i].Score != expected {
@@ -245,7 +282,7 @@ func TestSearchNoResults(t *testing.T) {
 	reader := index.NewIndexReader([]index.SegmentReader{seg})
 	searcher := NewIndexSearcher(reader)
 
-	q := &mockQuery{results: map[string][]DocScore{}}
+	q := &mockQuery{results: map[string][]mockDocEntry{}}
 
 	results := searcher.Search(q, NewTopKCollector(10))
 	if len(results) != 0 {
@@ -257,7 +294,7 @@ func TestSearchEmptyIndex(t *testing.T) {
 	reader := index.NewIndexReader([]index.SegmentReader{})
 	searcher := NewIndexSearcher(reader)
 
-	q := &mockQuery{results: map[string][]DocScore{}}
+	q := &mockQuery{results: map[string][]mockDocEntry{}}
 
 	results := searcher.Search(q, NewTopKCollector(10))
 	if len(results) != 0 {
@@ -274,7 +311,7 @@ func TestSearchAllDocsDeleted(t *testing.T) {
 	searcher := NewIndexSearcher(reader)
 
 	q := &mockQuery{
-		results: map[string][]DocScore{
+		results: map[string][]mockDocEntry{
 			"seg0": {
 				{DocID: 0, Score: 1.0},
 				{DocID: 1, Score: 2.0},
@@ -299,7 +336,7 @@ func TestSearchStoredFieldsPopulated(t *testing.T) {
 	searcher := NewIndexSearcher(reader)
 
 	q := &mockQuery{
-		results: map[string][]DocScore{
+		results: map[string][]mockDocEntry{
 			"seg0": {{DocID: 0, Score: 1.0}},
 		},
 	}
@@ -320,7 +357,7 @@ func TestSearchStoredFieldsPopulated(t *testing.T) {
 func TestSearchTopKAcrossMultipleSegments(t *testing.T) {
 	seg0 := newMockSegment("seg0", 3)
 	seg1 := newMockSegment("seg1", 3)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		seg0.stored[i] = map[string]string{}
 		seg1.stored[i] = map[string]string{}
 	}
@@ -329,7 +366,7 @@ func TestSearchTopKAcrossMultipleSegments(t *testing.T) {
 	searcher := NewIndexSearcher(reader)
 
 	q := &mockQuery{
-		results: map[string][]DocScore{
+		results: map[string][]mockDocEntry{
 			"seg0": {
 				{DocID: 0, Score: 1.0},
 				{DocID: 1, Score: 6.0},
@@ -348,7 +385,6 @@ func TestSearchTopKAcrossMultipleSegments(t *testing.T) {
 		t.Fatalf("expected 3 results, got %d", len(results))
 	}
 
-	// Top 3 across both segments: 6.0 (seg0:1), 5.0 (seg1:0), 4.0 (seg1:2)
 	expectedScores := []float64{6.0, 5.0, 4.0}
 	for i, expected := range expectedScores {
 		if results[i].Score != expected {
@@ -359,7 +395,7 @@ func TestSearchTopKAcrossMultipleSegments(t *testing.T) {
 
 func TestSearchDeletedDocsNotCountedInTopK(t *testing.T) {
 	seg := newMockSegment("seg0", 4)
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		seg.stored[i] = map[string]string{}
 	}
 	seg.deleted[1] = true
@@ -369,12 +405,12 @@ func TestSearchDeletedDocsNotCountedInTopK(t *testing.T) {
 	searcher := NewIndexSearcher(reader)
 
 	q := &mockQuery{
-		results: map[string][]DocScore{
+		results: map[string][]mockDocEntry{
 			"seg0": {
 				{DocID: 0, Score: 1.0},
-				{DocID: 1, Score: 10.0}, // deleted
+				{DocID: 1, Score: 10.0},
 				{DocID: 2, Score: 2.0},
-				{DocID: 3, Score: 9.0}, // deleted
+				{DocID: 3, Score: 9.0},
 			},
 		},
 	}
@@ -384,7 +420,6 @@ func TestSearchDeletedDocsNotCountedInTopK(t *testing.T) {
 		t.Fatalf("expected 2 results, got %d", len(results))
 	}
 
-	// Only non-deleted docs: score 2.0 (doc2) and 1.0 (doc0)
 	if results[0].Score != 2.0 || results[1].Score != 1.0 {
 		t.Errorf("expected scores [2.0, 1.0], got [%f, %f]",
 			results[0].Score, results[1].Score)

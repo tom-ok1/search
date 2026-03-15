@@ -138,7 +138,6 @@ func (f *FST) Get(key []byte) (uint64, bool) {
 	return 0, false
 }
 
-
 // FSTFromInput creates an FST from a MMapIndexInput containing the serialized FST.
 //
 // Trailer format: [data: bytes][startNode: int64][dataLen: uint32]

@@ -174,7 +174,7 @@ func TestSearchWithSortSkipsDeletedDocs(t *testing.T) {
 		price int64
 	}{
 		{"1", "apple fruit", 300},
-		{"2", "apple pie", 100},   // will be deleted
+		{"2", "apple pie", 100}, // will be deleted
 		{"3", "apple sauce", 200},
 	}
 	for _, d := range docs {
@@ -340,7 +340,7 @@ func TestSearchWithSortByScore(t *testing.T) {
 func TestSearchWithSortMissingDocValues(t *testing.T) {
 	reader := setupIndexWithDV(t, []testDoc{
 		{body: "item alpha", category: "zebra", price: 300},
-		{body: "item beta", price: 100},              // no category
+		{body: "item beta", price: 100}, // no category
 		{body: "item gamma", category: "apple", price: 200},
 	})
 

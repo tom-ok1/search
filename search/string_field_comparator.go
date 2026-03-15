@@ -36,7 +36,7 @@ func (c *StringFieldComparator) CompareSlots(slot1, slot2 int) int {
 	return cmp.Compare(c.values[slot1], c.values[slot2])
 }
 
-func (c *StringFieldComparator) Value(slot int) interface{} {
+func (c *StringFieldComparator) Value(slot int) any {
 	if !c.hasValue[slot] {
 		return nil
 	}

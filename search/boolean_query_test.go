@@ -12,7 +12,7 @@ func TestBooleanMust(t *testing.T) {
 		Add(NewTermQuery("body", "brown"), OccurMust).
 		Add(NewTermQuery("body", "fox"), OccurMust)
 
-	results := q.Execute(seg)
+	results := collectDocs(t, q, seg)
 
 	docIDs := extractDocIDs(results)
 	// doc0 and doc3 contain both "brown" and "fox"
@@ -32,7 +32,7 @@ func TestBooleanMustNot(t *testing.T) {
 		Add(NewTermQuery("body", "brown"), OccurMust).
 		Add(NewTermQuery("body", "fox"), OccurMustNot)
 
-	results := q.Execute(seg)
+	results := collectDocs(t, q, seg)
 
 	docIDs := extractDocIDs(results)
 	// only doc1 has "brown" but not "fox"
@@ -49,7 +49,7 @@ func TestBooleanShould(t *testing.T) {
 		Add(NewTermQuery("body", "quick"), OccurShould).
 		Add(NewTermQuery("body", "lazy"), OccurShould)
 
-	results := q.Execute(seg)
+	results := collectDocs(t, q, seg)
 
 	docIDs := extractDocIDs(results)
 	// doc0: quick, doc1: lazy, doc2: quick
@@ -69,7 +69,7 @@ func TestBooleanMustWithShould(t *testing.T) {
 		Add(NewTermQuery("body", "brown"), OccurMust).
 		Add(NewTermQuery("body", "quick"), OccurShould)
 
-	results := q.Execute(seg)
+	results := collectDocs(t, q, seg)
 
 	docIDs := extractDocIDs(results)
 	// All docs with "brown": doc0, doc1, doc3

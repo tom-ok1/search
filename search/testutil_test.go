@@ -40,7 +40,26 @@ func setupTestSegment(t *testing.T) index.SegmentReader {
 	return reader.Leaves()[0].Segment
 }
 
-func extractDocIDs(results []DocScore) []int {
+// collectDocs runs a query against a single segment and returns matched docIDs and their scores.
+func collectDocs(t *testing.T, q Query, seg index.SegmentReader) []SearchResult {
+	t.Helper()
+	ctx := index.LeafReaderContext{Segment: seg, DocBase: 0}
+	scorer := q.CreateScorer(ctx, ScoreModeComplete)
+	if scorer == nil {
+		return nil
+	}
+	iter := scorer.Iterator()
+	var results []SearchResult
+	for iter.NextDoc() != NoMoreDocs {
+		results = append(results, SearchResult{
+			DocID: scorer.DocID(),
+			Score: scorer.Score(),
+		})
+	}
+	return results
+}
+
+func extractDocIDs(results []SearchResult) []int {
 	var ids []int
 	for _, r := range results {
 		ids = append(ids, r.DocID)

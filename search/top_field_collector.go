@@ -21,23 +21,27 @@ type TopFieldCollector struct {
 	heap        *fieldHeap
 	totalHits   int
 	nextSlot    int
+	needsScore  bool
 }
 
 func NewTopFieldCollector(k int, sort *Sort) *TopFieldCollector {
 	comparators := make([]FieldComparator, len(sort.Fields))
 	reverses := make([]bool, len(sort.Fields))
+	needsScore := false
 
 	for i, sf := range sort.Fields {
 		reverses[i] = sf.Reverse
 		switch sf.Type {
 		case SortFieldScore:
 			comparators[i] = NewScoreFieldComparator(k)
+			needsScore = true
 		case SortFieldNumeric:
 			comparators[i] = NewNumericFieldComparator(sf.Field, k)
 		case SortFieldString:
 			comparators[i] = NewStringFieldComparator(sf.Field, k)
 		default:
 			comparators[i] = NewScoreFieldComparator(k)
+			needsScore = true
 		}
 	}
 
@@ -52,6 +56,7 @@ func NewTopFieldCollector(k int, sort *Sort) *TopFieldCollector {
 		comparators: comparators,
 		reverses:    reverses,
 		heap:        h,
+		needsScore:  needsScore,
 	}
 }
 
@@ -68,8 +73,13 @@ func (c *TopFieldCollector) GetLeafCollector(ctx index.LeafReaderContext) LeafCo
 	}
 }
 
-// ScoreMode returns ScoreModeComplete because field sorting may include score.
-func (c *TopFieldCollector) ScoreMode() ScoreMode { return ScoreModeComplete }
+// ScoreMode returns ScoreModeComplete only if a score-based sort field is present.
+func (c *TopFieldCollector) ScoreMode() ScoreMode {
+	if c.needsScore {
+		return ScoreModeComplete
+	}
+	return ScoreModeNone
+}
 
 // compareWithBottom returns > 0 if the candidate doc is better than the current bottom.
 func (c *TopFieldCollector) compareWithBottom(leafComps []LeafFieldComparator, localDocID int) int {
@@ -149,9 +159,18 @@ type topFieldLeafCollector struct {
 	parent          *TopFieldCollector
 	docBase         int
 	leafComparators []LeafFieldComparator
+	scorer          Scorable
 }
 
-func (lc *topFieldLeafCollector) Collect(docID int, score float64) {
+func (lc *topFieldLeafCollector) SetScorer(scorer Scorable) {
+	lc.scorer = scorer
+}
+
+func (lc *topFieldLeafCollector) Collect(docID int) {
+	var score float64
+	if lc.parent.needsScore {
+		score = lc.scorer.Score()
+	}
 	globalDocID := lc.docBase + docID
 	c := lc.parent
 	c.totalHits++

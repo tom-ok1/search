@@ -25,7 +25,7 @@ func (c *ScoreFieldComparator) CompareSlots(slot1, slot2 int) int {
 	return cmp.Compare(c.scores[slot1], c.scores[slot2])
 }
 
-func (c *ScoreFieldComparator) Value(slot int) interface{} {
+func (c *ScoreFieldComparator) Value(slot int) any {
 	return c.scores[slot]
 }
 

@@ -8,7 +8,7 @@ func TestTermQueryMatch(t *testing.T) {
 	seg := setupTestSegment(t)
 
 	q := NewTermQuery("body", "brown")
-	results := q.Execute(seg)
+	results := collectDocs(t, q, seg)
 
 	docIDs := extractDocIDs(results)
 	// "brown" appears in doc0, doc1, doc3
@@ -26,7 +26,7 @@ func TestTermQueryNoMatch(t *testing.T) {
 	seg := setupTestSegment(t)
 
 	q := NewTermQuery("body", "nonexistent")
-	results := q.Execute(seg)
+	results := collectDocs(t, q, seg)
 
 	if len(results) != 0 {
 		t.Errorf("expected no matches, got %v", extractDocIDs(results))
@@ -39,7 +39,7 @@ func TestTermQueryScoring(t *testing.T) {
 	// "brown" appears twice in doc3, once in doc0 and doc1
 	// doc3 should have a higher score due to higher term frequency
 	q := NewTermQuery("body", "brown")
-	results := q.Execute(seg)
+	results := collectDocs(t, q, seg)
 
 	scoreMap := make(map[int]float64)
 	for _, r := range results {

@@ -11,9 +11,9 @@ import (
 //
 // Lucene equivalent: org.apache.lucene.index.PendingDeletes
 type PendingDeletes struct {
-	info              *SegmentCommitInfo
-	liveDocs          *Bitset // read-only snapshot; nil means all alive
-	writeableLiveDocs *Bitset // COW mutable copy; nil until first delete
+	info               *SegmentCommitInfo
+	liveDocs           *Bitset // read-only snapshot; nil means all alive
+	writeableLiveDocs  *Bitset // COW mutable copy; nil until first delete
 	pendingDeleteCount int
 }
 

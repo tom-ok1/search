@@ -2,7 +2,6 @@ package search
 
 import (
 	"slices"
-	"sort"
 
 	"gosearch/index"
 )
@@ -17,84 +16,150 @@ func NewPhraseQuery(field string, terms ...string) *PhraseQuery {
 	return &PhraseQuery{Field: field, Terms: terms}
 }
 
-func (q *PhraseQuery) Execute(seg index.SegmentReader) []DocScore {
+// CreateScorer creates a Scorer for this phrase query in the given segment.
+func (q *PhraseQuery) CreateScorer(ctx index.LeafReaderContext, scoreMode ScoreMode) Scorer {
 	if len(q.Terms) == 0 {
 		return nil
 	}
 
-	// Materialize PostingsLists from iterators
-	var postingsLists []*index.PostingsList
-	for _, term := range q.Terms {
-		pl := materializePostings(term, seg.PostingsIterator(q.Field, term))
-		if len(pl.Postings) == 0 {
-			return nil // any missing term means no match
+	seg := ctx.Segment
+
+	// Build PostingsDocIdSetIterators for each term, collecting docFreqs
+	iterators := make([]*PostingsDocIdSetIterator, len(q.Terms))
+	docFreqs := make([]int, len(q.Terms))
+	for i, term := range q.Terms {
+		docFreqs[i] = seg.DocFreq(q.Field, term)
+		if docFreqs[i] == 0 {
+			return nil // Any missing term means no match
 		}
-		postingsLists = append(postingsLists, pl)
+		postings := seg.PostingsIterator(q.Field, term)
+		iterators[i] = NewPostingsDocIdSetIterator(postings, int64(docFreqs[i]))
 	}
 
-	// Find DocIDs common to all terms
-	commonDocs := findCommonDocs(postingsLists)
-
-	scorer := NewBM25Scorer()
-	docCount := seg.LiveDocCount()
-
-	totalFieldLen := seg.TotalFieldLength(q.Field)
-	avgDocLen := 0.0
-	if docCount > 0 {
-		avgDocLen = float64(totalFieldLen) / float64(docCount)
+	// Prepare BM25 scoring parameters if needed
+	var bm25 *BM25Scorer
+	var avgDocLen float64
+	var idfs []float64
+	if scoreMode != ScoreModeNone {
+		bm25 = NewBM25Scorer()
+		docCount := seg.LiveDocCount()
+		totalFieldLen := seg.TotalFieldLength(q.Field)
+		if docCount > 0 {
+			avgDocLen = float64(totalFieldLen) / float64(docCount)
+		}
+		idfs = make([]float64, len(q.Terms))
+		for i := range q.Terms {
+			idfs[i] = bm25.IDF(docCount, docFreqs[i])
+		}
 	}
 
-	var results []DocScore
-	for _, docID := range commonDocs {
-		// Check if positions are consecutive
-		if q.matchPositions(postingsLists, docID) {
-			// Score: sum of BM25 scores for each term
-			totalScore := 0.0
-			docLen := float64(seg.FieldLength(q.Field, docID))
-			for i, pl := range postingsLists {
-				posting := findPosting(pl, docID)
-				if posting != nil {
-					idf := scorer.IDF(docCount, len(postingsLists[i].Postings))
-					totalScore += scorer.Score(float64(posting.Freq), docLen, avgDocLen, idf)
-				}
+	return &phraseScorer{
+		iterators:    iterators,
+		field:        q.Field,
+		seg:          seg,
+		needScore:    scoreMode != ScoreModeNone,
+		bm25:         bm25,
+		avgDocLen:    avgDocLen,
+		idfs:         idfs,
+		positionSets: make([][]int, len(q.Terms)),
+		docID:        -1,
+	}
+}
+
+// phraseScorer is the Scorer implementation for PhraseQuery.
+// It also implements DocIdSetIterator directly to avoid per-call allocations.
+type phraseScorer struct {
+	iterators []*PostingsDocIdSetIterator
+	field     string
+	seg       index.SegmentReader
+	docID int
+
+	// Scoring state
+	needScore    bool
+	bm25         *BM25Scorer
+	avgDocLen    float64
+	idfs         []float64
+	positionSets [][]int // reusable buffer
+}
+
+func (s *phraseScorer) Iterator() DocIdSetIterator {
+	return s
+}
+
+func (s *phraseScorer) DocID() int {
+	return s.docID
+}
+
+func (s *phraseScorer) Score() float64 {
+	if !s.needScore {
+		return 0.0
+	}
+
+	totalScore := 0.0
+	docLen := float64(s.seg.FieldLength(s.field, s.docID))
+	for i, iter := range s.iterators {
+		totalScore += s.bm25.Score(float64(iter.Freq()), docLen, s.avgDocLen, s.idfs[i])
+	}
+	return totalScore
+}
+
+func (s *phraseScorer) NextDoc() int {
+	doc := s.iterators[0].NextDoc()
+	return s.findNextMatch(doc)
+}
+
+func (s *phraseScorer) Advance(target int) int {
+	doc := s.iterators[0].Advance(target)
+	return s.findNextMatch(doc)
+}
+
+func (s *phraseScorer) Cost() int64 {
+	minCost := s.iterators[0].Cost()
+	for _, iter := range s.iterators[1:] {
+		if iter.Cost() < minCost {
+			minCost = iter.Cost()
+		}
+	}
+	return minCost
+}
+
+// findNextMatch advances from doc until all iterators align with matching positions.
+func (s *phraseScorer) findNextMatch(doc int) int {
+	for doc != NoMoreDocs {
+		allMatch := true
+		for i := 1; i < len(s.iterators); i++ {
+			other := s.iterators[i]
+			if other.DocID() < doc {
+				other.Advance(doc)
 			}
-			results = append(results, DocScore{DocID: docID, Score: totalScore})
+			if other.DocID() != doc {
+				allMatch = false
+				break
+			}
 		}
-	}
 
-	return results
+		if allMatch && s.matchPositions() {
+			s.docID = doc
+			return doc
+		}
+
+		doc = s.iterators[0].NextDoc()
+	}
+	s.docID = NoMoreDocs
+	return NoMoreDocs
 }
 
-// materializePostings collects all postings from an iterator into a PostingsList.
-func materializePostings(term string, iter index.PostingsIterator) *index.PostingsList {
-	pl := &index.PostingsList{Term: term}
-	for iter.Next() {
-		pl.Postings = append(pl.Postings, index.Posting{
-			DocID:     iter.DocID(),
-			Freq:      iter.Freq(),
-			Positions: iter.Positions(),
-		})
-	}
-	return pl
-}
-
-// matchPositions checks whether term positions are consecutive for the given DocID.
-func (q *PhraseQuery) matchPositions(postingsLists []*index.PostingsList, docID int) bool {
-	var positionSets [][]int
-	for _, pl := range postingsLists {
-		posting := findPosting(pl, docID)
-		if posting == nil {
-			return false
-		}
-		positionSets = append(positionSets, posting.Positions)
+// matchPositions checks if term positions are consecutive at the current doc.
+func (s *phraseScorer) matchPositions() bool {
+	for i, iter := range s.iterators {
+		s.positionSets[i] = iter.Positions()
 	}
 
-	// For each starting position of the first term, check consecutive positions
-	for _, startPos := range positionSets[0] {
+	for _, startPos := range s.positionSets[0] {
 		matched := true
-		for i := 1; i < len(positionSets); i++ {
+		for i := 1; i < len(s.positionSets); i++ {
 			expectedPos := startPos + i
-			if !containsInt(positionSets[i], expectedPos) {
+			if !slices.Contains(s.positionSets[i], expectedPos) {
 				matched = false
 				break
 			}
@@ -104,46 +169,4 @@ func (q *PhraseQuery) matchPositions(postingsLists []*index.PostingsList, docID 
 		}
 	}
 	return false
-}
-
-// findCommonDocs returns DocIDs that appear in all PostingsLists.
-func findCommonDocs(lists []*index.PostingsList) []int {
-	if len(lists) == 0 {
-		return nil
-	}
-
-	docSet := make(map[int]bool)
-	for _, p := range lists[0].Postings {
-		docSet[p.DocID] = true
-	}
-
-	for _, pl := range lists[1:] {
-		newSet := make(map[int]bool)
-		for _, p := range pl.Postings {
-			if docSet[p.DocID] {
-				newSet[p.DocID] = true
-			}
-		}
-		docSet = newSet
-	}
-
-	var result []int
-	for docID := range docSet {
-		result = append(result, docID)
-	}
-	sort.Ints(result)
-	return result
-}
-
-func findPosting(pl *index.PostingsList, docID int) *index.Posting {
-	for i := range pl.Postings {
-		if pl.Postings[i].DocID == docID {
-			return &pl.Postings[i]
-		}
-	}
-	return nil
-}
-
-func containsInt(slice []int, val int) bool {
-	return slices.Contains(slice, val)
 }

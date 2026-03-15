@@ -2,14 +2,9 @@ package search
 
 import "gosearch/index"
 
-// Query represents a search query.
+// Query represents a search query that can create a Scorer for execution.
 type Query interface {
-	// Execute runs the query against a single segment and returns matching documents with scores.
-	Execute(seg index.SegmentReader) []DocScore
-}
-
-// DocScore is a pair of document ID and its relevance score.
-type DocScore struct {
-	DocID int
-	Score float64
+	// CreateScorer creates a Scorer for the given segment context.
+	// Returns nil if no documents match in this segment.
+	CreateScorer(ctx index.LeafReaderContext, scoreMode ScoreMode) Scorer
 }
