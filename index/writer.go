@@ -27,6 +27,7 @@ type IndexWriter struct {
 	segmentCounter     int
 	pendingDeleteTerms []DeleteTerm                  // buffered deletes, resolved at commit time
 	readerMap          map[string]*ReadersAndUpdates // per-segment reader + pending deletes
+	mergePolicy        MergePolicy                   // if set, auto-merge is triggered after flush/commit
 }
 
 func NewIndexWriter(dir store.Directory, analyzer *analysis.Analyzer, bufferSize int) *IndexWriter {
@@ -67,6 +68,22 @@ func NewIndexWriter(dir store.Directory, analyzer *analysis.Analyzer, bufferSize
 
 	w.buffer = newInMemorySegment(w.nextSegmentName())
 	return w
+}
+
+// SetMergePolicy sets the merge policy for automatic merging.
+// When set, merges are automatically triggered after Flush, Commit, and NRT reader opens,
+// matching Lucene's behavior where segment structure changes trigger merge evaluation.
+func (w *IndexWriter) SetMergePolicy(policy MergePolicy) {
+	w.mergePolicy = policy
+}
+
+// autoMerge runs the merge policy if one is configured.
+// Called after operations that change segment structure (flush, commit, NRT).
+func (w *IndexWriter) autoMerge() error {
+	if w.mergePolicy == nil {
+		return nil
+	}
+	return w.MaybeMerge(w.mergePolicy)
 }
 
 func (w *IndexWriter) nextSegmentName() string {
@@ -214,6 +231,12 @@ func (w *IndexWriter) Flush() error {
 
 	// Reset buffer — old buffer is now GC'd
 	w.buffer = newInMemorySegment(w.nextSegmentName())
+
+	// Trigger auto-merge if a merge policy is configured (like Lucene's flush → maybeMerge).
+	if err := w.autoMerge(); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -277,6 +300,11 @@ func (w *IndexWriter) Commit() error {
 	// 9. Best-effort cleanup of stale files
 	w.deleteStaleFiles()
 
+	// 10. Trigger auto-merge if a merge policy is configured (like Lucene's commit → maybeMerge).
+	if err := w.autoMerge(); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -330,6 +358,11 @@ func (w *IndexWriter) nrtSegments() ([]SegmentReader, error) {
 
 	// Resolve buffered delete terms against all segments (including newly flushed).
 	if err := w.applyPendingDeletes(); err != nil {
+		return nil, err
+	}
+
+	// Trigger auto-merge if a merge policy is configured (like Lucene's getReader → maybeMerge).
+	if err := w.autoMerge(); err != nil {
 		return nil, err
 	}
 
