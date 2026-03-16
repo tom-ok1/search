@@ -72,7 +72,7 @@ type phraseScorer struct {
 	iterators []*PostingsDocIdSetIterator
 	field     string
 	seg       index.SegmentReader
-	docID int
+	docID     int
 
 	// Scoring state
 	needScore    bool

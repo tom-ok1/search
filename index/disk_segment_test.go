@@ -10,15 +10,15 @@ import (
 )
 
 // buildTestSegment creates an in-memory segment with test data.
-// Returns the buffer directly before flushing, for use in DiskSegment tests.
+// Returns the segment directly before flushing, for use in DiskSegment tests.
 func buildTestSegment(t *testing.T) *InMemorySegment {
 	t.Helper()
 	analyzer := analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
 	)
-	dir, _ := store.NewFSDirectory(t.TempDir())
-	writer := NewIndexWriter(dir, analyzer, 100)
+
+	dwpt := newDWPT("_seg0", analyzer)
 
 	docs := []struct {
 		title string
@@ -31,11 +31,10 @@ func buildTestSegment(t *testing.T) *InMemorySegment {
 	for _, d := range docs {
 		doc := document.NewDocument()
 		doc.AddField("title", d.title, document.FieldTypeText)
-		writer.AddDocument(doc)
+		dwpt.addDocument(doc)
 	}
 
-	// Return the buffer directly (before flushing) for comparison tests
-	return writer.buffer
+	return dwpt.segment
 }
 
 // writeAndOpenDiskSegment writes a segment with V2 format and opens it as DiskSegment.
@@ -44,7 +43,7 @@ func writeAndOpenDiskSegment(t *testing.T, seg *InMemorySegment) (*DiskSegment, 
 	tmpDir := t.TempDir()
 
 	dir, _ := store.NewFSDirectory(tmpDir)
-	if _, err := WriteSegmentV2(dir, seg); err != nil {
+	if _, _, err := WriteSegmentV2(dir, seg); err != nil {
 		t.Fatal(err)
 	}
 

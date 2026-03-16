@@ -20,7 +20,7 @@ import (
 //   - {seg}.{field}.tdat  — delta-encoded postings data
 //   - {seg}.{field}.flen  — fixed-width field lengths
 //   - {seg}.stored        — stored fields with doc offset table
-func WriteSegmentV2(dir store.Directory, seg *InMemorySegment) ([]string, error) {
+func WriteSegmentV2(dir store.Directory, seg *InMemorySegment) ([]string, []string, error) {
 	var files []string
 
 	// 1. Write metadata
@@ -45,7 +45,7 @@ func WriteSegmentV2(dir store.Directory, seg *InMemorySegment) ([]string, error)
 
 	metaFileName, err := writeSegmentMeta(dir, meta)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	files = append(files, metaFileName)
 
@@ -53,7 +53,7 @@ func WriteSegmentV2(dir store.Directory, seg *InMemorySegment) ([]string, error)
 	for _, fieldName := range meta.Fields {
 		fi := seg.fields[fieldName]
 		if err := writeFieldPostingsV2(dir, seg.name, fieldName, fi); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		files = append(files,
 			fmt.Sprintf("%s.%s.tidx", seg.name, fieldName),
@@ -64,7 +64,7 @@ func WriteSegmentV2(dir store.Directory, seg *InMemorySegment) ([]string, error)
 
 	// 3. Write stored fields with offset table
 	if err := writeStoredFieldsV2(dir, seg); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	files = append(files, seg.name+".stored")
 
@@ -72,7 +72,7 @@ func WriteSegmentV2(dir store.Directory, seg *InMemorySegment) ([]string, error)
 	for _, fieldName := range meta.Fields {
 		lengths := seg.fieldLengths[fieldName]
 		if err := writeFieldLengthsV2(dir, seg.name, fieldName, lengths, seg.docCount); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		files = append(files, fmt.Sprintf("%s.%s.flen", seg.name, fieldName))
 	}
@@ -81,7 +81,7 @@ func WriteSegmentV2(dir store.Directory, seg *InMemorySegment) ([]string, error)
 	for _, fieldName := range meta.NumericDVFields {
 		values := seg.numericDocValues[fieldName]
 		if err := writeNumericDocValues(dir, seg.name, fieldName, values, seg.docCount); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		files = append(files, fmt.Sprintf("%s.%s.ndv", seg.name, fieldName))
 	}
@@ -90,7 +90,7 @@ func WriteSegmentV2(dir store.Directory, seg *InMemorySegment) ([]string, error)
 	for _, fieldName := range meta.SortedDVFields {
 		values := seg.sortedDocValues[fieldName]
 		if err := writeSortedDocValues(dir, seg.name, fieldName, values, seg.docCount); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		files = append(files,
 			fmt.Sprintf("%s.%s.sdvo", seg.name, fieldName),
@@ -98,7 +98,7 @@ func WriteSegmentV2(dir store.Directory, seg *InMemorySegment) ([]string, error)
 		)
 	}
 
-	return files, nil
+	return files, meta.Fields, nil
 }
 
 // writePostingsToBuffer encodes a slice of postings using delta-encoding and

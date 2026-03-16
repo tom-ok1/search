@@ -323,15 +323,8 @@ func TestDirectoryReaderMultipleCommits(t *testing.T) {
 	}
 	reader1.Close()
 
-	// Second commit with new writer
+	// Second commit with new writer (loads existing state automatically)
 	writer2 := NewIndexWriter(dir, analyzer, 100)
-	// Load existing segment infos
-	si, err := ReadLatestSegmentInfos(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	writer2.segmentInfos = si
-	writer2.segmentCounter = len(si.Segments)
 
 	doc2 := document.NewDocument()
 	doc2.AddField("body", "hello go", document.FieldTypeText)

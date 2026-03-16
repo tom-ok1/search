@@ -2,8 +2,10 @@ package index
 
 import (
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 
 	"gosearch/analysis"
 	"gosearch/document"
@@ -18,42 +20,41 @@ type DeleteTerm struct {
 }
 
 // IndexWriter adds documents to the index and manages segments.
+// It is safe for concurrent use by multiple goroutines.
 type IndexWriter struct {
-	dir                store.Directory
-	analyzer           *analysis.Analyzer
-	segmentInfos       *SegmentInfos
-	buffer             *InMemorySegment // in-memory buffer (not yet a segment)
-	bufferSize         int              // flush threshold (number of documents)
-	segmentCounter     int
-	pendingDeleteTerms []DeleteTerm                  // buffered deletes, resolved at commit time
-	readerMap          map[string]*ReadersAndUpdates // per-segment reader + pending deletes
-	mergePolicy        MergePolicy                   // if set, auto-merge is triggered after flush/commit
+	mu             sync.Mutex
+	dir            store.Directory
+	analyzer       *analysis.Analyzer
+	segmentInfos   *SegmentInfos
+	segmentCounter int32
+	readerMap      map[string]*ReadersAndUpdates
+	mergePolicy    MergePolicy
+	docWriter      *DocumentsWriter
 }
 
+// NewIndexWriter creates a new IndexWriter. bufferSize controls the approximate
+// number of documents buffered in RAM before auto-flushing (converted internally
+// to a RAM byte threshold).
 func NewIndexWriter(dir store.Directory, analyzer *analysis.Analyzer, bufferSize int) *IndexWriter {
 	w := &IndexWriter{
-		dir:        dir,
-		analyzer:   analyzer,
-		bufferSize: bufferSize,
-		readerMap:  make(map[string]*ReadersAndUpdates),
+		dir:       dir,
+		analyzer:  analyzer,
+		readerMap: make(map[string]*ReadersAndUpdates),
 	}
 
 	// Try to load existing committed state from the directory.
 	si, err := ReadLatestSegmentInfos(dir)
 	if err == nil {
 		w.segmentInfos = si
-		// Set segmentCounter past the highest existing segment number
-		// to avoid name collisions.
 		for _, info := range si.Segments {
 			var n int
 			if _, parseErr := fmt.Sscanf(info.Name, "_seg%d", &n); parseErr == nil {
-				if n+1 > w.segmentCounter {
-					w.segmentCounter = n + 1
+				if int32(n+1) > w.segmentCounter {
+					w.segmentCounter = int32(n + 1)
 				}
 			}
 		}
 	} else {
-		// No existing state — start fresh.
 		w.segmentInfos = NewSegmentInfos()
 	}
 
@@ -66,19 +67,31 @@ func NewIndexWriter(dir store.Directory, analyzer *analysis.Analyzer, bufferSize
 		}
 	}
 
-	w.buffer = newInMemorySegment(w.nextSegmentName())
+	// Use a large default RAM buffer; the bufferSize parameter controls
+	// max docs per DWPT for deterministic flush behavior.
+	const defaultRAMBufferSize = 256 * 1024 * 1024 // 256 MB
+
+	w.docWriter = newDocumentsWriter(dir, analyzer, defaultRAMBufferSize, bufferSize, func() string {
+		return w.nextSegmentName()
+	})
+	w.docWriter.onSegmentFlushed = func(info *SegmentCommitInfo) {
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		w.segmentInfos.Segments = append(w.segmentInfos.Segments, info)
+		w.segmentInfos.Version++
+	}
+
 	return w
 }
 
 // SetMergePolicy sets the merge policy for automatic merging.
-// When set, merges are automatically triggered after Flush, Commit, and NRT reader opens,
-// matching Lucene's behavior where segment structure changes trigger merge evaluation.
 func (w *IndexWriter) SetMergePolicy(policy MergePolicy) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	w.mergePolicy = policy
 }
 
 // autoMerge runs the merge policy if one is configured.
-// Called after operations that change segment structure (flush, commit, NRT).
 func (w *IndexWriter) autoMerge() error {
 	if w.mergePolicy == nil {
 		return nil
@@ -87,169 +100,45 @@ func (w *IndexWriter) autoMerge() error {
 }
 
 func (w *IndexWriter) nextSegmentName() string {
-	name := fmt.Sprintf("_seg%d", w.segmentCounter)
-	w.segmentCounter++
-	return name
+	n := atomic.AddInt32(&w.segmentCounter, 1)
+	return fmt.Sprintf("_seg%d", n-1)
 }
 
-// AddDocument adds a document to the in-memory buffer.
-// When the buffer reaches the threshold, it is automatically flushed.
+// AddDocument adds a document to the index. Safe for concurrent use.
 func (w *IndexWriter) AddDocument(doc *document.Document) error {
-	docID := w.buffer.docCount
-	w.buffer.docCount++
-
-	for _, field := range doc.Fields {
-		switch field.Type {
-		case document.FieldTypeText:
-			tokens, err := w.analyzer.Analyze(field.Value)
-			if err != nil {
-				return err
-			}
-			fi := w.getOrCreateFieldIndex(w.buffer, field.Name)
-
-			// Extend the fieldLengths slice with zeros so it can be indexed by docID.
-			if w.buffer.fieldLengths[field.Name] == nil {
-				w.buffer.fieldLengths[field.Name] = make([]int, 0)
-			}
-			for len(w.buffer.fieldLengths[field.Name]) <= docID {
-				w.buffer.fieldLengths[field.Name] = append(w.buffer.fieldLengths[field.Name], 0)
-			}
-			w.buffer.fieldLengths[field.Name][docID] = len(tokens)
-
-			// Build postings
-			termInfo := make(map[string]*Posting)
-			for _, token := range tokens {
-				posting, exists := termInfo[token.Term]
-				if !exists {
-					posting = &Posting{DocID: docID}
-					termInfo[token.Term] = posting
-				}
-				posting.Freq++
-				posting.Positions = append(posting.Positions, token.Position)
-			}
-
-			for term, posting := range termInfo {
-				pl, exists := fi.postings[term]
-				if !exists {
-					pl = &PostingsList{Term: term}
-					fi.postings[term] = pl
-				}
-				pl.Postings = append(pl.Postings, *posting)
-			}
-
-		case document.FieldTypeKeyword:
-			fi := w.getOrCreateFieldIndex(w.buffer, field.Name)
-			pl, exists := fi.postings[field.Value]
-			if !exists {
-				pl = &PostingsList{Term: field.Value}
-				fi.postings[field.Value] = pl
-			}
-			pl.Postings = append(pl.Postings, Posting{
-				DocID: docID, Freq: 1, Positions: []int{0},
-			})
-
-		case document.FieldTypeNumericDocValues:
-			// Fill the numericDocValues slice with zeros up to docID, then set the value.
-			vals := w.buffer.numericDocValues[field.Name]
-			if len(vals) <= docID {
-				vals = append(vals, make([]int64, docID+1-len(vals))...)
-			}
-			vals[docID] = field.NumericValue
-			w.buffer.numericDocValues[field.Name] = vals
-
-		case document.FieldTypeSortedDocValues:
-			// Fill the sortedDocValues slice with empty strings up to docID, then set the value.
-			svals := w.buffer.sortedDocValues[field.Name]
-			if len(svals) <= docID {
-				svals = append(svals, make([]string, docID+1-len(svals))...)
-			}
-			svals[docID] = field.Value
-			w.buffer.sortedDocValues[field.Name] = svals
-		}
-
-		// Stored fields
-		if field.Type == document.FieldTypeStored || field.Type == document.FieldTypeText {
-			if w.buffer.storedFields[docID] == nil {
-				w.buffer.storedFields[docID] = make(map[string]string)
-			}
-			w.buffer.storedFields[docID][field.Name] = field.Value
-		}
-	}
-
-	// Auto flush
-	if w.buffer.docCount >= w.bufferSize {
-		if err := w.Flush(); err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return w.docWriter.addDocument(doc)
 }
 
-// Flush writes the in-memory buffer to disk as a new segment.
+// Flush writes all in-memory buffers to disk as new segments.
 func (w *IndexWriter) Flush() error {
-	if w.buffer.docCount == 0 {
-		return nil
-	}
-
-	// Write segment files to disk (no fsync yet)
-	files, err := WriteSegmentV2(w.dir, w.buffer)
-	if err != nil {
-		return fmt.Errorf("flush segment %s: %w", w.buffer.name, err)
-	}
-
-	// Build SegmentCommitInfo
-	fields := make([]string, 0, len(w.buffer.fields))
-	for f := range w.buffer.fields {
-		fields = append(fields, f)
-	}
-	sort.Strings(fields)
-
-	info := &SegmentCommitInfo{
-		Name:   w.buffer.name,
-		MaxDoc: w.buffer.docCount,
-		Fields: fields,
-		Files:  files,
-	}
-
-	// Transfer any buffer deletions to a ReadersAndUpdates
-	if len(w.buffer.deletedDocs) > 0 {
-		rau := NewReadersAndUpdates(info, w.dir.FilePath(""))
-		for docID := range w.buffer.deletedDocs {
-			rau.Delete(docID)
-		}
-		w.readerMap[info.Name] = rau
-	}
-
-	w.segmentInfos.Segments = append(w.segmentInfos.Segments, info)
-	w.segmentInfos.Version++
-
-	// Apply pending deletes to all existing disk segments
-	if err := w.applyPendingDeletes(); err != nil {
+	if err := w.docWriter.flushAllThreads(); err != nil {
 		return err
 	}
 
-	// Reset buffer — old buffer is now GC'd
-	w.buffer = newInMemorySegment(w.nextSegmentName())
+	w.mu.Lock()
+	defer w.mu.Unlock()
 
-	// Trigger auto-merge if a merge policy is configured (like Lucene's flush → maybeMerge).
-	if err := w.autoMerge(); err != nil {
-		return err
-	}
+	// Apply pending deletes
+	pendingDeletes := w.docWriter.takePendingDeletes()
+	w.applyDeleteTerms(pendingDeletes)
 
-	return nil
+	return w.autoMerge()
 }
 
 // Commit flushes any buffered data, resolves pending deletes, and writes
-// the segment metadata (segments_N) to disk using Lucene's multi-stage
+// the segment metadata (segments_N) to disk.
 func (w *IndexWriter) Commit() error {
-	// 1. Flush buffered data to disk (no fsync)
-	if err := w.Flush(); err != nil {
+	// 1. Flush all threads
+	if err := w.docWriter.flushAllThreads(); err != nil {
 		return err
 	}
 
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
 	// 2. Resolve buffered delete terms against disk segments
-	if err := w.applyPendingDeletes(); err != nil {
+	pendingDeletes := w.docWriter.takePendingDeletes()
+	if err := w.applyDeleteTerms(pendingDeletes); err != nil {
 		return err
 	}
 
@@ -261,7 +150,7 @@ func (w *IndexWriter) Commit() error {
 			if err != nil {
 				return fmt.Errorf("write deletions for %s: %w", info.Name, err)
 			}
-			if delFile != "" && !containsString(info.Files, delFile) {
+			if delFile != "" && !slices.Contains(info.Files, delFile) {
 				info.Files = append(info.Files, delFile)
 			}
 		}
@@ -300,18 +189,13 @@ func (w *IndexWriter) Commit() error {
 	// 9. Best-effort cleanup of stale files
 	w.deleteStaleFiles()
 
-	// 10. Trigger auto-merge if a merge policy is configured (like Lucene's commit → maybeMerge).
-	if err := w.autoMerge(); err != nil {
-		return err
-	}
-
-	return nil
+	// 10. Trigger auto-merge
+	return w.autoMerge()
 }
 
-// applyPendingDeletes resolves all buffered delete terms against disk segments.
-// Each segment is opened once via ReadersAndUpdates and all pending terms are applied.
-func (w *IndexWriter) applyPendingDeletes() error {
-	if len(w.pendingDeleteTerms) == 0 {
+// applyDeleteTerms resolves delete terms against disk segments.
+func (w *IndexWriter) applyDeleteTerms(deleteTerms []DeleteTerm) error {
+	if len(deleteTerms) == 0 {
 		return nil
 	}
 
@@ -322,7 +206,7 @@ func (w *IndexWriter) applyPendingDeletes() error {
 			return fmt.Errorf("open segment %s for delete: %w", info.Name, err)
 		}
 
-		for _, dt := range w.pendingDeleteTerms {
+		for _, dt := range deleteTerms {
 			iter := reader.PostingsIterator(dt.Field, dt.Term)
 			for iter.Next() {
 				rau.Delete(iter.DocID())
@@ -330,12 +214,10 @@ func (w *IndexWriter) applyPendingDeletes() error {
 		}
 	}
 
-	w.pendingDeleteTerms = nil
 	return nil
 }
 
-// getOrCreateRAU returns the ReadersAndUpdates for the given segment,
-// creating one if it doesn't exist yet.
+// getOrCreateRAU returns the ReadersAndUpdates for the given segment.
 func (w *IndexWriter) getOrCreateRAU(info *SegmentCommitInfo) *ReadersAndUpdates {
 	rau, ok := w.readerMap[info.Name]
 	if !ok {
@@ -346,22 +228,22 @@ func (w *IndexWriter) getOrCreateRAU(info *SegmentCommitInfo) *ReadersAndUpdates
 }
 
 // nrtSegments returns all segments for near-real-time reading.
-// Like Lucene's IndexWriter.getReader(), the in-memory buffer is flushed
-// to an immutable disk segment first, then pending deletes are resolved.
-// The returned readers form a point-in-time snapshot; subsequent writes
-// to the IndexWriter are not visible through them.
 func (w *IndexWriter) nrtSegments() ([]SegmentReader, error) {
-	// Flush the in-memory buffer so all data is in immutable disk segments.
-	if err := w.Flush(); err != nil {
+	// Flush all threads
+	if err := w.docWriter.flushAllThreads(); err != nil {
 		return nil, err
 	}
 
-	// Resolve buffered delete terms against all segments (including newly flushed).
-	if err := w.applyPendingDeletes(); err != nil {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	// Resolve buffered delete terms
+	pendingDeletes := w.docWriter.takePendingDeletes()
+	if err := w.applyDeleteTerms(pendingDeletes); err != nil {
 		return nil, err
 	}
 
-	// Trigger auto-merge if a merge policy is configured (like Lucene's getReader → maybeMerge).
+	// Trigger auto-merge
 	if err := w.autoMerge(); err != nil {
 		return nil, err
 	}
@@ -379,28 +261,13 @@ func (w *IndexWriter) nrtSegments() ([]SegmentReader, error) {
 }
 
 // DeleteDocuments buffers a delete-by-term operation.
-// Disk segments are NOT opened here — resolution is deferred to Commit().
-// Only the in-memory buffer is resolved immediately (since it's already in RAM).
 func (w *IndexWriter) DeleteDocuments(field, term string) error {
-	// Buffer the delete term for deferred resolution against disk segments
-	w.pendingDeleteTerms = append(w.pendingDeleteTerms, DeleteTerm{Field: field, Term: term})
-
-	// In-memory buffer: resolve immediately (no disk I/O, already in RAM)
-	if w.buffer.docCount > 0 {
-		fi, exists := w.buffer.fields[field]
-		if exists {
-			pl, exists := fi.postings[term]
-			if exists {
-				for _, posting := range pl.Postings {
-					w.buffer.MarkDeleted(posting.DocID)
-				}
-			}
-		}
-	}
+	w.docWriter.deleteDocuments(field, term)
 	return nil
 }
 
 // MaybeMerge runs the given merge policy and executes any suggested merges.
+// Caller must hold w.mu.
 func (w *IndexWriter) MaybeMerge(policy MergePolicy) error {
 	candidates := policy.FindMerges(w.segmentInfos.Segments)
 	for _, candidate := range candidates {
@@ -419,9 +286,9 @@ func (w *IndexWriter) ForceMerge(maxSegments int) error {
 	if err := w.Flush(); err != nil {
 		return err
 	}
-	if err := w.applyPendingDeletes(); err != nil {
-		return err
-	}
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
 
 	for len(w.segmentInfos.Segments) > maxSegments {
 		candidate := MergeCandidate{
@@ -435,13 +302,12 @@ func (w *IndexWriter) ForceMerge(maxSegments int) error {
 	return nil
 }
 
-// executeMerge performs a single merge operation.
+// executeMerge performs a single merge operation. Caller must hold w.mu.
 func (w *IndexWriter) executeMerge(candidate MergeCandidate) error {
 	if len(candidate.Segments) < 2 {
 		return nil
 	}
 
-	// Build MergeInputs from RAUs
 	inputs := make([]MergeInput, len(candidate.Segments))
 	for i, info := range candidate.Segments {
 		rau := w.getOrCreateRAU(info)
@@ -455,7 +321,6 @@ func (w *IndexWriter) executeMerge(candidate MergeCandidate) error {
 		}
 	}
 
-	// Merge and write directly to disk (streaming).
 	newName := w.nextSegmentName()
 	result, err := MergeSegmentsToDisk(w.dir, inputs, newName)
 	if err != nil {
@@ -469,7 +334,6 @@ func (w *IndexWriter) executeMerge(candidate MergeCandidate) error {
 		Files:  result.Files,
 	}
 
-	// Remove merged segments from segmentInfos and close their RAUs
 	mergedNames := make(map[string]bool)
 	for _, info := range candidate.Segments {
 		mergedNames[info.Name] = true
@@ -494,8 +358,9 @@ func (w *IndexWriter) executeMerge(candidate MergeCandidate) error {
 }
 
 // Close releases all resources held by the IndexWriter.
-// All RAUs (and their underlying DiskSegments) are closed here.
 func (w *IndexWriter) Close() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	for name, rau := range w.readerMap {
 		rau.Close()
 		delete(w.readerMap, name)
@@ -505,7 +370,6 @@ func (w *IndexWriter) Close() error {
 
 // deleteStaleFiles removes old segments_N files, stale pending_segments_* files,
 // and orphaned segment data files not referenced by the current commit.
-// All deletions are best-effort — errors are silently ignored.
 func (w *IndexWriter) deleteStaleFiles() {
 	files, err := w.dir.ListAll()
 	if err != nil {
@@ -538,21 +402,3 @@ func isOldSegmentsFile(f string, currentGen int64) bool {
 	return false
 }
 
-// containsString reports whether slice contains s.
-func containsString(slice []string, s string) bool {
-	for _, v := range slice {
-		if v == s {
-			return true
-		}
-	}
-	return false
-}
-
-func (w *IndexWriter) getOrCreateFieldIndex(seg *InMemorySegment, fieldName string) *FieldIndex {
-	fi, exists := seg.fields[fieldName]
-	if !exists {
-		fi = newFieldIndex()
-		seg.fields[fieldName] = fi
-	}
-	return fi
-}
