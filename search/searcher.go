@@ -23,8 +23,10 @@ func NewIndexSearcher(reader *index.IndexReader) *IndexSearcher {
 // StoredFields are populated on the final results after collection is complete.
 func (s *IndexSearcher) Search(q Query, c Collector) []SearchResult {
 	scoreMode := c.ScoreMode()
+	weight := q.CreateWeight(s, scoreMode)
+
 	for _, leaf := range s.reader.Leaves() {
-		scorer := q.CreateScorer(leaf, scoreMode)
+		scorer := weight.Scorer(leaf)
 		if scorer == nil {
 			continue
 		}
@@ -45,4 +47,38 @@ func (s *IndexSearcher) Search(q Query, c Collector) []SearchResult {
 		results[i].Fields = s.reader.GetStoredFields(results[i].DocID)
 	}
 	return results
+}
+
+// CollectionStatistics aggregates field-level statistics across all segments.
+func (s *IndexSearcher) CollectionStatistics(field string) *CollectionStatistics {
+	var docCount, sumTotalTermFreq int64
+	for _, leaf := range s.reader.Leaves() {
+		seg := leaf.Segment
+		docCount += int64(seg.LiveDocCount())
+		sumTotalTermFreq += int64(seg.TotalFieldLength(field))
+	}
+	if docCount == 0 {
+		return nil
+	}
+	return &CollectionStatistics{
+		Field:            field,
+		MaxDoc:           int64(s.reader.TotalDocCount()),
+		DocCount:         docCount,
+		SumTotalTermFreq: sumTotalTermFreq,
+	}
+}
+
+// TermStatistics aggregates term-level statistics across all segments.
+func (s *IndexSearcher) TermStatistics(field, term string) *TermStatistics {
+	var docFreq int64
+	for _, leaf := range s.reader.Leaves() {
+		docFreq += int64(leaf.Segment.DocFreq(field, term))
+	}
+	if docFreq == 0 {
+		return nil
+	}
+	return &TermStatistics{
+		Term:    term,
+		DocFreq: docFreq,
+	}
 }

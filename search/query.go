@@ -1,10 +1,8 @@
 package search
 
-import "gosearch/index"
-
-// Query represents a search query that can create a Scorer for execution.
+// Query represents a search query that can create a Weight for execution.
 type Query interface {
-	// CreateScorer creates a Scorer for the given segment context.
-	// Returns nil if no documents match in this segment.
-	CreateScorer(ctx index.LeafReaderContext, scoreMode ScoreMode) Scorer
+	// CreateWeight creates a Weight that holds collection-level precomputations.
+	// The searcher is used to access collection-wide statistics across all segments.
+	CreateWeight(searcher *IndexSearcher, scoreMode ScoreMode) Weight
 }

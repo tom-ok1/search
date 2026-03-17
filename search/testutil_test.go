@@ -43,8 +43,11 @@ func setupTestSegment(t *testing.T) index.SegmentReader {
 // collectDocs runs a query against a single segment and returns matched docIDs and their scores.
 func collectDocs(t *testing.T, q Query, seg index.SegmentReader) []SearchResult {
 	t.Helper()
+	reader := index.NewIndexReader([]index.SegmentReader{seg})
+	searcher := NewIndexSearcher(reader)
 	ctx := index.LeafReaderContext{Segment: seg, DocBase: 0}
-	scorer := q.CreateScorer(ctx, ScoreModeComplete)
+	weight := q.CreateWeight(searcher, ScoreModeComplete)
+	scorer := weight.Scorer(ctx)
 	if scorer == nil {
 		return nil
 	}

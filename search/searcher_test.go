@@ -92,8 +92,18 @@ type mockQuery struct {
 	results map[string][]mockDocEntry // segment name -> results
 }
 
-func (q *mockQuery) CreateScorer(ctx index.LeafReaderContext, _ ScoreMode) Scorer {
-	entries, ok := q.results[ctx.Segment.Name()]
+func (q *mockQuery) CreateWeight(_ *IndexSearcher, _ ScoreMode) Weight {
+	return &mockWeight{query: q}
+}
+
+type mockWeight struct {
+	query *mockQuery
+}
+
+func (w *mockWeight) Query() Query { return w.query }
+
+func (w *mockWeight) Scorer(ctx index.LeafReaderContext) Scorer {
+	entries, ok := w.query.results[ctx.Segment.Name()]
 	if !ok || len(entries) == 0 {
 		return nil
 	}

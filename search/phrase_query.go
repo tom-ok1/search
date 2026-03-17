@@ -16,52 +16,61 @@ func NewPhraseQuery(field string, terms ...string) *PhraseQuery {
 	return &PhraseQuery{Field: field, Terms: terms}
 }
 
-// CreateScorer creates a Scorer for this phrase query in the given segment.
-func (q *PhraseQuery) CreateScorer(ctx index.LeafReaderContext, scoreMode ScoreMode) Scorer {
-	if len(q.Terms) == 0 {
+// CreateWeight creates a Weight that precomputes collection-level BM25 statistics.
+func (q *PhraseQuery) CreateWeight(searcher *IndexSearcher, scoreMode ScoreMode) Weight {
+	w := &phraseWeight{query: q}
+	if scoreMode != ScoreModeNone && len(q.Terms) > 0 {
+		collStats := searcher.CollectionStatistics(q.Field)
+		if collStats != nil {
+			w.bm25, w.avgDocLen = ComputeBM25Stats(collStats)
+			w.idfs = make([]float64, len(q.Terms))
+			for i, term := range q.Terms {
+				termStats := searcher.TermStatistics(q.Field, term)
+				if termStats != nil {
+					w.idfs[i] = w.bm25.IDF(int(collStats.DocCount), int(termStats.DocFreq))
+				}
+			}
+		}
+	}
+	return w
+}
+
+// phraseWeight holds precomputed collection-level statistics for PhraseQuery.
+type phraseWeight struct {
+	query     *PhraseQuery
+	bm25      *BM25Scorer
+	avgDocLen float64
+	idfs      []float64
+}
+
+func (w *phraseWeight) Query() Query { return w.query }
+
+func (w *phraseWeight) Scorer(ctx index.LeafReaderContext) Scorer {
+	if len(w.query.Terms) == 0 {
 		return nil
 	}
 
 	seg := ctx.Segment
 
-	// Build PostingsDocIdSetIterators for each term, collecting docFreqs
-	iterators := make([]*PostingsDocIdSetIterator, len(q.Terms))
-	docFreqs := make([]int, len(q.Terms))
-	for i, term := range q.Terms {
-		docFreqs[i] = seg.DocFreq(q.Field, term)
-		if docFreqs[i] == 0 {
-			return nil // Any missing term means no match
+	iterators := make([]*PostingsDocIdSetIterator, len(w.query.Terms))
+	for i, term := range w.query.Terms {
+		docFreq := seg.DocFreq(w.query.Field, term)
+		if docFreq == 0 {
+			return nil
 		}
-		postings := seg.PostingsIterator(q.Field, term)
-		iterators[i] = NewPostingsDocIdSetIterator(postings, int64(docFreqs[i]))
-	}
-
-	// Prepare BM25 scoring parameters if needed
-	var bm25 *BM25Scorer
-	var avgDocLen float64
-	var idfs []float64
-	if scoreMode != ScoreModeNone {
-		bm25 = NewBM25Scorer()
-		docCount := seg.LiveDocCount()
-		totalFieldLen := seg.TotalFieldLength(q.Field)
-		if docCount > 0 {
-			avgDocLen = float64(totalFieldLen) / float64(docCount)
-		}
-		idfs = make([]float64, len(q.Terms))
-		for i := range q.Terms {
-			idfs[i] = bm25.IDF(docCount, docFreqs[i])
-		}
+		postings := seg.PostingsIterator(w.query.Field, term)
+		iterators[i] = NewPostingsDocIdSetIterator(postings, int64(docFreq))
 	}
 
 	return &phraseScorer{
 		iterators:    iterators,
-		field:        q.Field,
+		field:        w.query.Field,
 		seg:          seg,
-		needScore:    scoreMode != ScoreModeNone,
-		bm25:         bm25,
-		avgDocLen:    avgDocLen,
-		idfs:         idfs,
-		positionSets: make([][]int, len(q.Terms)),
+		needScore:    w.bm25 != nil,
+		bm25:         w.bm25,
+		avgDocLen:    w.avgDocLen,
+		idfs:         w.idfs,
+		positionSets: make([][]int, len(w.query.Terms)),
 		docID:        -1,
 	}
 }

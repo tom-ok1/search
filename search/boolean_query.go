@@ -31,19 +31,45 @@ func (q *BooleanQuery) Add(query Query, occur Occur) *BooleanQuery {
 	return q
 }
 
-// CreateScorer creates a Scorer for this boolean query in the given segment.
-func (q *BooleanQuery) CreateScorer(ctx index.LeafReaderContext, scoreMode ScoreMode) Scorer {
+// CreateWeight creates a Weight that recursively creates child Weights for each clause.
+func (q *BooleanQuery) CreateWeight(searcher *IndexSearcher, scoreMode ScoreMode) Weight {
+	w := &booleanWeight{query: q}
+	for _, clause := range q.Clauses {
+		childScoreMode := scoreMode
+		if clause.Occur == OccurMustNot {
+			childScoreMode = ScoreModeNone
+		}
+		cw := clause.Query.CreateWeight(searcher, childScoreMode)
+		w.clauseWeights = append(w.clauseWeights, clauseWeightEntry{weight: cw, occur: clause.Occur})
+	}
+	return w
+}
+
+// booleanWeight holds child Weights for each clause.
+type booleanWeight struct {
+	query         *BooleanQuery
+	clauseWeights []clauseWeightEntry
+}
+
+type clauseWeightEntry struct {
+	weight Weight
+	occur  Occur
+}
+
+func (w *booleanWeight) Query() Query { return w.query }
+
+func (w *booleanWeight) Scorer(ctx index.LeafReaderContext) Scorer {
 	var mustScorers []Scorer
 	var shouldScorers []Scorer
 	var mustNotScorers []Scorer
 
-	for _, clause := range q.Clauses {
-		scorer := clause.Query.CreateScorer(ctx, scoreMode)
+	for _, cw := range w.clauseWeights {
+		scorer := cw.weight.Scorer(ctx)
 
-		switch clause.Occur {
+		switch cw.occur {
 		case OccurMust:
 			if scorer == nil {
-				return nil // MUST with no matches = no results
+				return nil
 			}
 			mustScorers = append(mustScorers, scorer)
 		case OccurShould:
@@ -60,20 +86,16 @@ func (q *BooleanQuery) CreateScorer(ctx index.LeafReaderContext, scoreMode Score
 	var mainScorer Scorer
 
 	if len(mustScorers) > 0 {
-		// AND semantics for MUST
 		mainScorer = NewConjunctionScorer(mustScorers)
-		// Add SHOULD scores as a boost
 		if len(shouldScorers) > 0 {
 			mainScorer = newBoostedScorer(mainScorer, shouldScorers)
 		}
 	} else if len(shouldScorers) > 0 {
-		// OR semantics for SHOULD when no MUST
 		mainScorer = NewDisjunctionScorer(shouldScorers)
 	} else {
 		return nil
 	}
 
-	// Apply MUST_NOT exclusion
 	if len(mustNotScorers) > 0 {
 		excl := NewDisjunctionScorer(mustNotScorers)
 		if excl != nil {

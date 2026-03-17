@@ -12,44 +12,51 @@ func NewTermQuery(field, term string) *TermQuery {
 	return &TermQuery{Field: field, Term: term}
 }
 
-// CreateScorer creates a Scorer for this term query in the given segment.
-func (q *TermQuery) CreateScorer(ctx index.LeafReaderContext, scoreMode ScoreMode) Scorer {
+// CreateWeight creates a Weight that precomputes collection-level BM25 statistics.
+func (q *TermQuery) CreateWeight(searcher *IndexSearcher, scoreMode ScoreMode) Weight {
+	w := &termWeight{query: q}
+
+	if scoreMode == ScoreModeNone {
+		return w
+	}
+
+	collStats := searcher.CollectionStatistics(q.Field)
+	termStats := searcher.TermStatistics(q.Field, q.Term)
+	if collStats != nil && termStats != nil {
+		w.bm25, w.avgDocLen = ComputeBM25Stats(collStats)
+		w.idf = w.bm25.IDF(int(collStats.DocCount), int(termStats.DocFreq))
+	}
+	return w
+}
+
+// termWeight holds precomputed collection-level statistics for TermQuery.
+type termWeight struct {
+	query     *TermQuery
+	bm25      *BM25Scorer
+	idf       float64
+	avgDocLen float64
+}
+
+func (w *termWeight) Query() Query { return w.query }
+
+func (w *termWeight) Scorer(ctx index.LeafReaderContext) Scorer {
 	seg := ctx.Segment
-	docFreq := seg.DocFreq(q.Field, q.Term)
+	docFreq := seg.DocFreq(w.query.Field, w.query.Term)
 	if docFreq == 0 {
 		return nil
 	}
 
-	postings := seg.PostingsIterator(q.Field, q.Term)
+	postings := seg.PostingsIterator(w.query.Field, w.query.Term)
 	iter := NewPostingsDocIdSetIterator(postings, int64(docFreq))
-
-	// Skip BM25 computation if scores not needed
-	if scoreMode == ScoreModeNone {
-		return &termScorer{
-			iter:      iter,
-			needScore: false,
-		}
-	}
-
-	// Prepare BM25 scoring parameters
-	bm25 := NewBM25Scorer()
-	docCount := seg.LiveDocCount()
-	idf := bm25.IDF(docCount, docFreq)
-
-	totalFieldLen := seg.TotalFieldLength(q.Field)
-	avgDocLen := 0.0
-	if docCount > 0 {
-		avgDocLen = float64(totalFieldLen) / float64(docCount)
-	}
 
 	return &termScorer{
 		iter:      iter,
-		needScore: true,
-		bm25:      bm25,
+		needScore: w.bm25 != nil,
+		bm25:      w.bm25,
 		seg:       seg,
-		field:     q.Field,
-		idf:       idf,
-		avgDocLen: avgDocLen,
+		field:     w.query.Field,
+		idf:       w.idf,
+		avgDocLen: w.avgDocLen,
 	}
 }
 

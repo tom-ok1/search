@@ -86,10 +86,12 @@ func TestConjunctionScorer(t *testing.T) {
 		"b": {{DocID: 2, Freq: 1}, {DocID: 3, Freq: 1}, {DocID: 5, Freq: 1}, {DocID: 8, Freq: 1}},
 	}
 
+	reader := index.NewIndexReader([]index.SegmentReader{seg})
+	searcher := NewIndexSearcher(reader)
 	ctx := index.LeafReaderContext{Segment: seg, DocBase: 0}
 
-	scorer1 := NewTermQuery("field", "a").CreateScorer(ctx, ScoreModeNone)
-	scorer2 := NewTermQuery("field", "b").CreateScorer(ctx, ScoreModeNone)
+	scorer1 := NewTermQuery("field", "a").CreateWeight(searcher, ScoreModeNone).Scorer(ctx)
+	scorer2 := NewTermQuery("field", "b").CreateWeight(searcher, ScoreModeNone).Scorer(ctx)
 
 	conj := NewConjunctionScorer([]Scorer{scorer1, scorer2})
 	if conj == nil {
@@ -118,10 +120,12 @@ func TestDisjunctionScorer(t *testing.T) {
 		"b": {{DocID: 2, Freq: 1}, {DocID: 3, Freq: 1}, {DocID: 5, Freq: 1}},
 	}
 
+	reader := index.NewIndexReader([]index.SegmentReader{seg})
+	searcher := NewIndexSearcher(reader)
 	ctx := index.LeafReaderContext{Segment: seg, DocBase: 0}
 
-	scorer1 := NewTermQuery("field", "a").CreateScorer(ctx, ScoreModeNone)
-	scorer2 := NewTermQuery("field", "b").CreateScorer(ctx, ScoreModeNone)
+	scorer1 := NewTermQuery("field", "a").CreateWeight(searcher, ScoreModeNone).Scorer(ctx)
+	scorer2 := NewTermQuery("field", "b").CreateWeight(searcher, ScoreModeNone).Scorer(ctx)
 
 	disj := NewDisjunctionScorer([]Scorer{scorer1, scorer2})
 	if disj == nil {
@@ -151,10 +155,13 @@ func TestTermQueryCreateScorer(t *testing.T) {
 	seg.fieldLens["body"] = map[int]int{0: 5, 2: 5}
 	seg.totalFldLen["body"] = 10
 
+	reader := index.NewIndexReader([]index.SegmentReader{seg})
+	searcher := NewIndexSearcher(reader)
 	ctx := index.LeafReaderContext{Segment: seg, DocBase: 0}
 
 	q := NewTermQuery("body", "fox")
-	scorer := q.CreateScorer(ctx, ScoreModeComplete)
+	weight := q.CreateWeight(searcher, ScoreModeComplete)
+	scorer := weight.Scorer(ctx)
 
 	if scorer == nil {
 		t.Fatal("expected non-nil scorer")
@@ -191,10 +198,13 @@ func TestTermQueryWithScoreModeNone(t *testing.T) {
 		"test": {{DocID: 0, Freq: 1}},
 	}
 
+	reader := index.NewIndexReader([]index.SegmentReader{seg})
+	searcher := NewIndexSearcher(reader)
 	ctx := index.LeafReaderContext{Segment: seg, DocBase: 0}
 
 	q := NewTermQuery("body", "test")
-	scorer := q.CreateScorer(ctx, ScoreModeNone)
+	weight := q.CreateWeight(searcher, ScoreModeNone)
+	scorer := weight.Scorer(ctx)
 
 	if scorer == nil {
 		t.Fatal("expected non-nil scorer")

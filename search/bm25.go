@@ -28,6 +28,20 @@ func (s *BM25Scorer) IDF(docCount, docFreq int) float64 {
 	return math.Log(1 + (float64(docCount-docFreq)+0.5)/(float64(docFreq)+0.5))
 }
 
+// ComputeStats creates a BM25Scorer and computes the average document length
+// from collection-level statistics. Returns (nil, 0) if collStats is nil.
+func ComputeBM25Stats(collStats *CollectionStatistics) (*BM25Scorer, float64) {
+	if collStats == nil {
+		return nil, 0
+	}
+	bm25 := NewBM25Scorer()
+	var avgDocLen float64
+	if collStats.DocCount > 0 {
+		avgDocLen = float64(collStats.SumTotalTermFreq) / float64(collStats.DocCount)
+	}
+	return bm25, avgDocLen
+}
+
 // Score computes the BM25 score for a single term in a document.
 // tf: term frequency in the document
 // docLen: token count of the document field
