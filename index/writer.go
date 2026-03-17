@@ -30,6 +30,7 @@ type IndexWriter struct {
 	readerMap      map[string]*ReadersAndUpdates
 	mergePolicy    MergePolicy
 	docWriter      *DocumentsWriter
+	fileDeleter    *FileDeleter
 }
 
 // NewIndexWriter creates a new IndexWriter. bufferSize controls the approximate
@@ -37,9 +38,10 @@ type IndexWriter struct {
 // to a RAM byte threshold).
 func NewIndexWriter(dir store.Directory, analyzer *analysis.Analyzer, bufferSize int) *IndexWriter {
 	w := &IndexWriter{
-		dir:       dir,
-		analyzer:  analyzer,
-		readerMap: make(map[string]*ReadersAndUpdates),
+		dir:         dir,
+		analyzer:    analyzer,
+		readerMap:   make(map[string]*ReadersAndUpdates),
+		fileDeleter: NewFileDeleter(dir),
 	}
 
 	// Try to load existing committed state from the directory.
@@ -228,10 +230,14 @@ func (w *IndexWriter) getOrCreateRAU(info *SegmentCommitInfo) *ReadersAndUpdates
 }
 
 // nrtSegments returns all segments for near-real-time reading.
-func (w *IndexWriter) nrtSegments() ([]SegmentReader, error) {
+// It opens independent DiskSegments (not shared with the writer) and
+// increments file reference counts so that deleteStaleFiles will not
+// remove files while the returned readers are in use.
+// The caller must call DecRefDeleter(files) when the reader is closed.
+func (w *IndexWriter) nrtSegments() ([]SegmentReader, []string, error) {
 	// Flush all threads
 	if err := w.docWriter.flushAllThreads(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	w.mu.Lock()
@@ -240,24 +246,41 @@ func (w *IndexWriter) nrtSegments() ([]SegmentReader, error) {
 	// Resolve buffered delete terms
 	pendingDeletes := w.docWriter.takePendingDeletes()
 	if err := w.applyDeleteTerms(pendingDeletes); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	// Trigger auto-merge
 	if err := w.autoMerge(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+
+	// Snapshot referenced files and protect them
+	files := w.segmentInfos.AllFiles()
+	w.fileDeleter.IncRef(files)
 
 	segs := make([]SegmentReader, 0, len(w.segmentInfos.Segments))
 	for _, info := range w.segmentInfos.Segments {
 		rau := w.getOrCreateRAU(info)
-		sr, err := rau.GetSegmentReader()
+		reader, err := rau.getReader()
 		if err != nil {
-			return nil, err
+			// Close already opened segments and release refs
+			for _, s := range segs {
+				s.Close()
+			}
+			w.fileDeleter.DecRef(files)
+			return nil, nil, err
 		}
-		segs = append(segs, sr)
+		reader.IncRef()
+
+		// Apply deletion overlay if the segment has deletions
+		liveDocs := rau.GetLiveDocs()
+		if liveDocs != nil {
+			segs = append(segs, &LiveDocsSegmentReader{inner: reader, liveDocs: liveDocs})
+		} else {
+			segs = append(segs, reader)
+		}
 	}
-	return segs, nil
+	return segs, files, nil
 }
 
 // DeleteDocuments buffers a delete-by-term operation.
@@ -368,8 +391,21 @@ func (w *IndexWriter) Close() error {
 	return nil
 }
 
+// IncRefDeleter increments reference counts for the given files,
+// preventing them from being deleted by deleteStaleFiles.
+func (w *IndexWriter) IncRefDeleter(files []string) {
+	w.fileDeleter.IncRef(files)
+}
+
+// DecRefDeleter decrements reference counts for the given files.
+// Files whose count reaches 0 and are pending deletion are deleted immediately.
+func (w *IndexWriter) DecRefDeleter(files []string) {
+	w.fileDeleter.DecRef(files)
+}
+
 // deleteStaleFiles removes old segments_N files, stale pending_segments_* files,
 // and orphaned segment data files not referenced by the current commit.
+// Files with active reader references are deferred until those readers close.
 func (w *IndexWriter) deleteStaleFiles() {
 	files, err := w.dir.ListAll()
 	if err != nil {
@@ -378,15 +414,19 @@ func (w *IndexWriter) deleteStaleFiles() {
 
 	refs := w.segmentInfos.ReferencedFiles()
 
+	var toDelete []string
 	for _, f := range files {
 		switch {
 		case isOldSegmentsFile(f, w.segmentInfos.Generation):
-			_ = w.dir.DeleteFile(f)
+			toDelete = append(toDelete, f)
 		case strings.HasPrefix(f, "pending_segments_"):
-			_ = w.dir.DeleteFile(f)
+			toDelete = append(toDelete, f)
 		case strings.HasPrefix(f, "_seg") && !refs[f]:
-			_ = w.dir.DeleteFile(f)
+			toDelete = append(toDelete, f)
 		}
+	}
+	if len(toDelete) > 0 {
+		w.fileDeleter.DeleteIfUnreferenced(toDelete)
 	}
 }
 

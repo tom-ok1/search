@@ -67,6 +67,16 @@ func (si *SegmentInfos) ReferencedFiles() map[string]bool {
 	return refs
 }
 
+// AllFiles returns a flat slice of all files referenced by this SegmentInfos,
+// including the segments_N file itself.
+func (si *SegmentInfos) AllFiles() []string {
+	files := []string{fmt.Sprintf("segments_%d", si.Generation)}
+	for _, info := range si.Segments {
+		files = append(files, info.Files...)
+	}
+	return files
+}
+
 // ReadLatestSegmentInfos reads the most recent segments_N file from the directory.
 func ReadLatestSegmentInfos(dir store.Directory) (*SegmentInfos, error) {
 	files, err := dir.ListAll()

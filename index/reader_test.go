@@ -1,6 +1,7 @@
 package index
 
 import (
+	"fmt"
 	"testing"
 
 	"gosearch/analysis"
@@ -413,3 +414,76 @@ func TestNRTReaderWithDeletions(t *testing.T) {
 		t.Errorf("LiveDocCount: got %d, want 1", reader.LiveDocCount())
 	}
 }
+
+// TestNRTReaderProtectsFilesFromDeletion verifies that segment files
+// are not deleted while an NRT reader still holds references to them.
+func TestNRTReaderProtectsFilesFromDeletion(t *testing.T) {
+	tmpDir := t.TempDir()
+	dir, _ := store.NewFSDirectory(tmpDir)
+	analyzer := analysis.NewAnalyzer(
+		analysis.NewWhitespaceTokenizer(),
+		&analysis.LowerCaseFilter{},
+	)
+	// bufferSize=1 so each doc creates its own segment
+	writer := NewIndexWriter(dir, analyzer, 1)
+
+	// Add initial documents and commit
+	for i := 0; i < 3; i++ {
+		doc := document.NewDocument()
+		doc.AddField("body", fmt.Sprintf("doc %d", i), document.FieldTypeText)
+		writer.AddDocument(doc)
+	}
+	if err := writer.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Open an NRT reader — this should protect current segment files
+	reader, err := OpenNRTReader(writer)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Collect segment files the reader depends on
+	files, _ := dir.ListAll()
+	var segFiles []string
+	for _, f := range files {
+		if len(f) > 0 && f[0] == '_' {
+			segFiles = append(segFiles, f)
+		}
+	}
+	if len(segFiles) == 0 {
+		t.Fatal("expected segment files to exist")
+	}
+
+	// Force merge to create new segment and make old ones stale
+	if err := writer.ForceMerge(1); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Old segment files should still exist because the reader holds references
+	for _, f := range segFiles {
+		if !dir.FileExists(f) {
+			t.Errorf("expected %s to still exist while reader is open", f)
+		}
+	}
+
+	// The reader should still be functional
+	if reader.TotalDocCount() != 3 {
+		t.Errorf("expected 3 docs, got %d", reader.TotalDocCount())
+	}
+
+	// Close the reader — old files should now be deleted
+	reader.Close()
+
+	for _, f := range segFiles {
+		if dir.FileExists(f) {
+			t.Errorf("expected %s to be deleted after reader closed", f)
+		}
+	}
+
+	writer.Close()
+}
+

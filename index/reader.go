@@ -5,6 +5,8 @@ import "gosearch/store"
 // IndexReader reads across multiple segments.
 type IndexReader struct {
 	segments []SegmentReader
+	onClose  func() // called once on Close; nil for standalone readers
+	closed   bool
 }
 
 // LeafReaderContext holds a single segment and its global DocID base offset.
@@ -49,12 +51,18 @@ func (r *IndexReader) LiveDocCount() int {
 	return total
 }
 
-// Close closes any closeable segments (e.g., DiskSegments with mmap'd files).
+// Close closes any closeable segments (e.g., DiskSegments with mmap'd files)
+// and releases file references held by this reader.
 func (r *IndexReader) Close() error {
+	if r.closed {
+		return nil
+	}
+	r.closed = true
 	for _, seg := range r.segments {
-		if c, ok := seg.(interface{ Close() error }); ok {
-			c.Close()
-		}
+		seg.Close()
+	}
+	if r.onClose != nil {
+		r.onClose()
 	}
 	return nil
 }
@@ -85,9 +93,7 @@ func OpenDirectoryReader(dir store.Directory) (*IndexReader, error) {
 		if err != nil {
 			// Close already opened segments
 			for _, s := range segments {
-				if c, ok := s.(interface{ Close() error }); ok {
-					c.Close()
-				}
+				s.Close()
 			}
 			return nil, err
 		}
@@ -102,9 +108,13 @@ func OpenDirectoryReader(dir store.Directory) (*IndexReader, error) {
 // producing a point-in-time snapshot. Subsequent writes to the writer
 // are not visible through the returned reader.
 func OpenNRTReader(w *IndexWriter) (*IndexReader, error) {
-	segs, err := w.nrtSegments()
+	segs, files, err := w.nrtSegments()
 	if err != nil {
 		return nil, err
 	}
-	return NewIndexReader(segs), nil
+	reader := NewIndexReader(segs)
+	reader.onClose = func() {
+		w.DecRefDeleter(files)
+	}
+	return reader, nil
 }

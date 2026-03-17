@@ -6,12 +6,14 @@ import (
 	"gosearch/fst"
 	"gosearch/store"
 	"os"
+	"sync/atomic"
 )
 
 // DiskSegment is a mmap-based lazy-loading SegmentReader.
 // Only lightweight metadata is held in memory; all data is accessed
 // via mmap'd files and decoded on demand.
 type DiskSegment struct {
+	refCount  atomic.Int32
 	name      string
 	docCount  int
 	fieldList []string
@@ -145,11 +147,22 @@ func OpenDiskSegment(dirPath string, segName string) (*DiskSegment, error) {
 		}
 	}
 
+	ds.refCount.Store(1)
 	return ds, nil
 }
 
-// Close unmaps all memory-mapped files.
+// IncRef increments the reference count. The caller must call Close
+// (which decrements the count) when it no longer needs this segment.
+func (ds *DiskSegment) IncRef() {
+	ds.refCount.Add(1)
+}
+
+// Close decrements the reference count and unmaps all memory-mapped
+// files when the count reaches zero.
 func (ds *DiskSegment) Close() error {
+	if ds.refCount.Add(-1) > 0 {
+		return nil
+	}
 	for _, m := range ds.termIndex {
 		m.Close()
 	}

@@ -62,24 +62,10 @@ func (rau *ReadersAndUpdates) getReader() (*DiskSegment, error) {
 	return ds, nil
 }
 
-// GetSegmentReader returns a SegmentReader that reflects the current
-// deletion state. If there are pending or committed deletions, it wraps
-// the DiskSegment in a LiveDocsSegmentReader with a frozen liveDocs snapshot.
-func (rau *ReadersAndUpdates) GetSegmentReader() (SegmentReader, error) {
-	reader, err := rau.getReader()
-	if err != nil {
-		return nil, fmt.Errorf("get reader for %s: %w", rau.info.Name, err)
-	}
-
-	liveDocs := rau.pendingDeletes.GetLiveDocs()
-	if liveDocs == nil {
-		return reader, nil
-	}
-
-	return &LiveDocsSegmentReader{
-		inner:    reader,
-		liveDocs: liveDocs,
-	}, nil
+// GetLiveDocs returns a read-only snapshot of the current deletion state.
+// Returns nil if all documents are alive.
+func (rau *ReadersAndUpdates) GetLiveDocs() *Bitset {
+	return rau.pendingDeletes.GetLiveDocs()
 }
 
 // WriteLiveDocs persists deletions to disk via PendingDeletes.

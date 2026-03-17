@@ -14,4 +14,5 @@ type SegmentReader interface {
 	PostingsIterator(field, term string) PostingsIterator
 	NumericDocValues(field string) NumericDocValues
 	SortedDocValues(field string) SortedDocValues
+	Close() error
 }

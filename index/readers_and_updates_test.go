@@ -54,58 +54,6 @@ func TestReadersAndUpdatesDelete(t *testing.T) {
 	}
 }
 
-func TestReadersAndUpdatesGetSegmentReaderNoDeletions(t *testing.T) {
-	info, dirPath, _ := setupRAUSegment(t)
-	rau := NewReadersAndUpdates(info, dirPath)
-	defer rau.Close()
-
-	reader, err := rau.GetSegmentReader()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// With no deletions, should return the DiskSegment directly
-	if _, ok := reader.(*DiskSegment); !ok {
-		t.Error("expected DiskSegment (no deletions)")
-	}
-	if reader.DocCount() != 3 {
-		t.Errorf("DocCount: got %d, want 3", reader.DocCount())
-	}
-	if reader.LiveDocCount() != 3 {
-		t.Errorf("LiveDocCount: got %d, want 3", reader.LiveDocCount())
-	}
-}
-
-func TestReadersAndUpdatesGetSegmentReaderWithDeletions(t *testing.T) {
-	info, dirPath, _ := setupRAUSegment(t)
-	rau := NewReadersAndUpdates(info, dirPath)
-	defer rau.Close()
-
-	rau.Delete(1)
-
-	reader, err := rau.GetSegmentReader()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// With deletions, should wrap in LiveDocsSegmentReader
-	ldr, ok := reader.(*LiveDocsSegmentReader)
-	if !ok {
-		t.Fatal("expected LiveDocsSegmentReader (has deletions)")
-	}
-	if ldr.DocCount() != 3 {
-		t.Errorf("DocCount: got %d, want 3", ldr.DocCount())
-	}
-	if ldr.LiveDocCount() != 2 {
-		t.Errorf("LiveDocCount: got %d, want 2", ldr.LiveDocCount())
-	}
-	if !ldr.IsDeleted(1) {
-		t.Error("doc 1 should be deleted")
-	}
-	if ldr.IsDeleted(0) {
-		t.Error("doc 0 should not be deleted")
-	}
-}
 
 func TestReadersAndUpdatesWriteLiveDocs(t *testing.T) {
 	info, dirPath, dir := setupRAUSegment(t)
@@ -147,7 +95,7 @@ func TestReadersAndUpdatesClose(t *testing.T) {
 
 	// Close after opening reader
 	rau2 := NewReadersAndUpdates(info, dirPath)
-	rau2.GetSegmentReader() // force reader open
+	rau2.getReader() // force reader open
 	if err := rau2.Close(); err != nil {
 		t.Errorf("Close with reader: %v", err)
 	}
@@ -169,12 +117,12 @@ func TestReadersAndUpdatesLazyOpen(t *testing.T) {
 		t.Error("reader should still be nil after Delete (lazy)")
 	}
 
-	// GetSegmentReader opens the reader
-	_, err := rau.GetSegmentReader()
+	// getReader opens the reader
+	_, err := rau.getReader()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if rau.reader == nil {
-		t.Error("reader should be opened after GetSegmentReader")
+		t.Error("reader should be opened after getReader")
 	}
 }

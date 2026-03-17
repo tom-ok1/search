@@ -3,9 +3,6 @@ package index
 // LiveDocsSegmentReader wraps a SegmentReader with an immutable liveDocs
 // bitset snapshot from PendingDeletes. Unlike PendingDeletesSegmentReader,
 // the bitset is the complete deletion view (committed + pending).
-//
-// Close() is a no-op because the underlying DiskSegment is owned by
-// ReadersAndUpdates, not by this reader.
 type LiveDocsSegmentReader struct {
 	inner    SegmentReader
 	liveDocs *Bitset // immutable snapshot; set bit = deleted
@@ -64,5 +61,5 @@ func (r *LiveDocsSegmentReader) SortedDocValues(field string) SortedDocValues {
 }
 
 func (r *LiveDocsSegmentReader) Close() error {
-	return nil
+	return r.inner.Close()
 }
