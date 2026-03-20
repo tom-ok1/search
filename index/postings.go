@@ -116,7 +116,7 @@ func (it *DiskPostingsIterator) Next() bool {
 	}
 	it.positions = make([]int, posCount)
 	prevPos := 0
-	for i := 0; i < posCount; i++ {
+	for i := range posCount {
 		posDelta, err := it.input.ReadVInt()
 		if err != nil {
 			it.remaining = 0

@@ -13,6 +13,9 @@ type TopKCollector struct {
 }
 
 func NewTopKCollector(k int) *TopKCollector {
+	if k < 1 {
+		k = 1
+	}
 	return &TopKCollector{
 		k:       k,
 		results: make(minHeap, 0, k),

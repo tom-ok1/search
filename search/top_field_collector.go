@@ -25,6 +25,9 @@ type TopFieldCollector struct {
 }
 
 func NewTopFieldCollector(k int, sort *Sort) *TopFieldCollector {
+	if k < 1 {
+		k = 1
+	}
 	comparators := make([]FieldComparator, len(sort.Fields))
 	reverses := make([]bool, len(sort.Fields))
 	needsScore := false
@@ -65,6 +68,12 @@ func (c *TopFieldCollector) GetLeafCollector(ctx index.LeafReaderContext) LeafCo
 	leafComps := make([]LeafFieldComparator, len(c.comparators))
 	for i, comp := range c.comparators {
 		leafComps[i] = comp.GetLeafComparator(ctx.Segment)
+	}
+	if c.heap.Len() >= c.k {
+		bottom := c.heap.entries[0]
+		for _, leafComp := range leafComps {
+			leafComp.SetBottom(bottom.slot)
+		}
 	}
 	return &topFieldLeafCollector{
 		parent:          c,

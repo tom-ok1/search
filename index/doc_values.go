@@ -135,7 +135,7 @@ func writeNumericDocValues(dir store.Directory, segName, field string, values []
 	}
 	defer out.Close()
 
-	for i := 0; i < docCount; i++ {
+	for i := range docCount {
 		v := int64(0)
 		if i < len(values) {
 			v = values[i]
@@ -184,7 +184,7 @@ func writeSortedDocValues(dir store.Directory, segName, field string, values []s
 	}
 	defer sdvoOut.Close()
 
-	for i := 0; i < docCount; i++ {
+	for i := range docCount {
 		ord := int32(-1) // missing value
 		if i < len(values) && values[i] != "" {
 			ord = ordMap[values[i]]

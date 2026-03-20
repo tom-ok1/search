@@ -227,6 +227,9 @@ func writeStoredFieldsEntry(out store.IndexOutput, fields map[string]string, scr
 //	  position_delta: VInt × N
 //	]
 func writeFieldPostingsV2(dir store.Directory, segName, fieldName string, fi *FieldIndex) error {
+	if len(fi.postings) == 0 {
+		return nil
+	}
 	terms := make([]string, 0, len(fi.postings))
 	for term := range fi.postings {
 		terms = append(terms, term)
