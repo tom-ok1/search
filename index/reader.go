@@ -95,14 +95,8 @@ func (r *IndexReader) GetPositions(globalDocID int, field, term string) []int {
 		return nil
 	}
 	iter := leaf.Segment.PostingsIterator(field, term)
-	for iter.Next() {
-		// TODO: should use advance instead of Next + DocID comparison
-		if iter.DocID() == localDocID {
-			return iter.Positions()
-		}
-		if iter.DocID() > localDocID {
-			break
-		}
+	if iter.Advance(localDocID) && iter.DocID() == localDocID {
+		return iter.Positions()
 	}
 	return nil
 }

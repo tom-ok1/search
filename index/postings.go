@@ -1,6 +1,9 @@
 package index
 
-import "gosearch/store"
+import (
+	"gosearch/store"
+	"sort"
+)
 
 // Posting holds occurrence information for a single term in a single document.
 type Posting struct {
@@ -26,6 +29,9 @@ type PostingsIterator interface {
 	Freq() int
 	// Positions returns the term positions in the current document.
 	Positions() []int
+	// Advance advances to the first posting with DocID >= target.
+	// Returns true if such a posting exists.
+	Advance(target int) bool
 }
 
 // ---------------------------------------------------------------------------
@@ -59,6 +65,15 @@ func (it *SlicePostingsIterator) Positions() []int {
 	return it.postings[it.idx].Positions
 }
 
+func (it *SlicePostingsIterator) Advance(target int) bool {
+	start := it.idx + 1
+	i := sort.Search(len(it.postings)-start, func(i int) bool {
+		return it.postings[start+i].DocID >= target
+	})
+	it.idx = start + i
+	return it.idx < len(it.postings)
+}
+
 // ---------------------------------------------------------------------------
 // EmptyPostingsIterator
 // ---------------------------------------------------------------------------
@@ -69,7 +84,8 @@ type EmptyPostingsIterator struct{}
 func (EmptyPostingsIterator) Next() bool       { return false }
 func (EmptyPostingsIterator) DocID() int       { return -1 }
 func (EmptyPostingsIterator) Freq() int        { return 0 }
-func (EmptyPostingsIterator) Positions() []int { return nil }
+func (EmptyPostingsIterator) Positions() []int  { return nil }
+func (EmptyPostingsIterator) Advance(int) bool  { return false }
 
 // ---------------------------------------------------------------------------
 // DiskPostingsIterator (mmap-based)
@@ -132,3 +148,12 @@ func (it *DiskPostingsIterator) Next() bool {
 func (it *DiskPostingsIterator) DocID() int       { return it.docID }
 func (it *DiskPostingsIterator) Freq() int        { return it.freq }
 func (it *DiskPostingsIterator) Positions() []int { return it.positions }
+
+func (it *DiskPostingsIterator) Advance(target int) bool {
+	for it.Next() {
+		if it.docID >= target {
+			return true
+		}
+	}
+	return false
+}
