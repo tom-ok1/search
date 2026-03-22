@@ -31,6 +31,16 @@ func (q *BooleanQuery) Add(query Query, occur Occur) *BooleanQuery {
 	return q
 }
 
+func (q *BooleanQuery) ExtractTerms() []FieldTerm {
+	var terms []FieldTerm
+	for _, clause := range q.Clauses {
+		if clause.Occur != OccurMustNot {
+			terms = append(terms, clause.Query.ExtractTerms()...)
+		}
+	}
+	return terms
+}
+
 // CreateWeight creates a Weight that recursively creates child Weights for each clause.
 func (q *BooleanQuery) CreateWeight(searcher *IndexSearcher, scoreMode ScoreMode) Weight {
 	w := &booleanWeight{query: q}

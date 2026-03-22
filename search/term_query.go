@@ -12,6 +12,10 @@ func NewTermQuery(field, term string) *TermQuery {
 	return &TermQuery{Field: field, Term: term}
 }
 
+func (q *TermQuery) ExtractTerms() []FieldTerm {
+	return []FieldTerm{{Field: q.Field, Term: q.Term}}
+}
+
 // CreateWeight creates a Weight that precomputes collection-level BM25 statistics.
 func (q *TermQuery) CreateWeight(searcher *IndexSearcher, scoreMode ScoreMode) Weight {
 	w := &termWeight{query: q}

@@ -67,13 +67,41 @@ func (r *IndexReader) Close() error {
 	return nil
 }
 
-// GetStoredFields returns stored fields for a global DocID.
-func (r *IndexReader) GetStoredFields(globalDocID int) map[string]string {
+// findLeaf returns the leaf and local DocID for a global DocID.
+func (r *IndexReader) findLeaf(globalDocID int) (LeafReaderContext, int, bool) {
 	for _, leaf := range r.Leaves() {
 		localDocID := globalDocID - leaf.DocBase
 		if localDocID >= 0 && localDocID < leaf.Segment.DocCount() {
-			fields, _ := leaf.Segment.StoredFields(localDocID)
-			return fields
+			return leaf, localDocID, true
+		}
+	}
+	return LeafReaderContext{}, 0, false
+}
+
+// GetStoredFields returns stored fields for a global DocID.
+func (r *IndexReader) GetStoredFields(globalDocID int) map[string]string {
+	leaf, localDocID, ok := r.findLeaf(globalDocID)
+	if !ok {
+		return nil
+	}
+	fields, _ := leaf.Segment.StoredFields(localDocID)
+	return fields
+}
+
+// GetPositions returns term positions for a global DocID in the given field/term.
+func (r *IndexReader) GetPositions(globalDocID int, field, term string) []int {
+	leaf, localDocID, ok := r.findLeaf(globalDocID)
+	if !ok {
+		return nil
+	}
+	iter := leaf.Segment.PostingsIterator(field, term)
+	for iter.Next() {
+		// TODO: should use advance instead of Next + DocID comparison
+		if iter.DocID() == localDocID {
+			return iter.Positions()
+		}
+		if iter.DocID() > localDocID {
+			break
 		}
 	}
 	return nil

@@ -6,8 +6,9 @@ import "gosearch/index"
 type SearchResult struct {
 	DocID      int // global DocID
 	Score      float64
-	Fields     map[string]string // stored fields
-	SortValues []any             // populated by TopFieldCollector
+	Fields     map[string]string           // stored fields
+	SortValues []any                       // populated by TopFieldCollector
+	Positions  map[string]map[string][]int // field -> term -> positions
 }
 
 // IndexSearcher searches across multiple segments.
@@ -43,8 +44,30 @@ func (s *IndexSearcher) Search(q Query, c Collector) []SearchResult {
 	}
 
 	results := c.Results()
+	terms := deduplicateTerms(q.ExtractTerms())
 	for i := range results {
 		results[i].Fields = s.reader.GetStoredFields(results[i].DocID)
+	}
+
+	if len(terms) == 0 {
+		return results
+	}
+
+	for i := range results {
+		var positions map[string]map[string][]int
+		for _, ft := range terms {
+			pos := s.reader.GetPositions(results[i].DocID, ft.Field, ft.Term)
+			if pos != nil {
+				if positions == nil {
+					positions = make(map[string]map[string][]int)
+				}
+				if positions[ft.Field] == nil {
+					positions[ft.Field] = make(map[string][]int)
+				}
+				positions[ft.Field][ft.Term] = pos
+			}
+		}
+		results[i].Positions = positions
 	}
 	return results
 }
@@ -66,6 +89,18 @@ func (s *IndexSearcher) CollectionStatistics(field string) *CollectionStatistics
 		DocCount:         docCount,
 		SumTotalTermFreq: sumTotalTermFreq,
 	}
+}
+
+func deduplicateTerms(terms []FieldTerm) []FieldTerm {
+	seen := make(map[FieldTerm]struct{}, len(terms))
+	result := make([]FieldTerm, 0, len(terms))
+	for _, ft := range terms {
+		if _, ok := seen[ft]; !ok {
+			seen[ft] = struct{}{}
+			result = append(result, ft)
+		}
+	}
+	return result
 }
 
 // TermStatistics aggregates term-level statistics across all segments.

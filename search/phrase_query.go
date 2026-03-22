@@ -16,6 +16,14 @@ func NewPhraseQuery(field string, terms ...string) *PhraseQuery {
 	return &PhraseQuery{Field: field, Terms: terms}
 }
 
+func (q *PhraseQuery) ExtractTerms() []FieldTerm {
+	terms := make([]FieldTerm, len(q.Terms))
+	for i, t := range q.Terms {
+		terms[i] = FieldTerm{Field: q.Field, Term: t}
+	}
+	return terms
+}
+
 // CreateWeight creates a Weight that precomputes collection-level BM25 statistics.
 func (q *PhraseQuery) CreateWeight(searcher *IndexSearcher, scoreMode ScoreMode) Weight {
 	w := &phraseWeight{query: q}

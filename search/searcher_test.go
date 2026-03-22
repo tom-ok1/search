@@ -97,6 +97,10 @@ func (q *mockQuery) CreateWeight(_ *IndexSearcher, _ ScoreMode) Weight {
 	return &mockWeight{query: q}
 }
 
+func (q *mockQuery) ExtractTerms() []FieldTerm {
+	return nil
+}
+
 type mockWeight struct {
 	query *mockQuery
 }
@@ -434,5 +438,126 @@ func TestSearchDeletedDocsNotCountedInTopK(t *testing.T) {
 	if results[0].Score != 2.0 || results[1].Score != 1.0 {
 		t.Errorf("expected scores [2.0, 1.0], got [%f, %f]",
 			results[0].Score, results[1].Score)
+	}
+}
+
+func TestSearchPositionsWithTermQuery(t *testing.T) {
+	seg := newMockSegment("seg0", 2)
+	seg.stored[0] = map[string]string{"title": "doc0"}
+	seg.stored[1] = map[string]string{"title": "doc1"}
+	seg.postings["body"] = map[string][]index.Posting{
+		"hello": {
+			{DocID: 0, Freq: 2, Positions: []int{0, 5}},
+			{DocID: 1, Freq: 1, Positions: []int{3}},
+		},
+	}
+	seg.fieldLens["body"] = map[int]int{0: 10, 1: 8}
+	seg.totalFldLen["body"] = 18
+
+	reader := index.NewIndexReader([]index.SegmentReader{seg})
+	searcher := NewIndexSearcher(reader)
+
+	q := NewTermQuery("body", "hello")
+	results := searcher.Search(q, NewTopKCollector(10))
+
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(results))
+	}
+
+	for _, r := range results {
+		if r.Positions == nil {
+			t.Fatalf("expected positions for docID %d, got nil", r.DocID)
+		}
+		pos := r.Positions["body"]["hello"]
+		switch r.DocID {
+		case 0:
+			if len(pos) != 2 || pos[0] != 0 || pos[1] != 5 {
+				t.Errorf("docID 0: expected positions [0, 5], got %v", pos)
+			}
+		case 1:
+			if len(pos) != 1 || pos[0] != 3 {
+				t.Errorf("docID 1: expected positions [3], got %v", pos)
+			}
+		}
+	}
+}
+
+func TestSearchPositionsWithPhraseQuery(t *testing.T) {
+	seg := newMockSegment("seg0", 1)
+	seg.stored[0] = map[string]string{"title": "doc0"}
+	seg.postings["body"] = map[string][]index.Posting{
+		"quick": {{DocID: 0, Freq: 1, Positions: []int{0}}},
+		"fox":   {{DocID: 0, Freq: 1, Positions: []int{1}}},
+	}
+	seg.fieldLens["body"] = map[int]int{0: 5}
+	seg.totalFldLen["body"] = 5
+
+	reader := index.NewIndexReader([]index.SegmentReader{seg})
+	searcher := NewIndexSearcher(reader)
+
+	q := NewPhraseQuery("body", "quick", "fox")
+	results := searcher.Search(q, NewTopKCollector(10))
+
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+
+	r := results[0]
+	if r.Positions == nil {
+		t.Fatal("expected positions, got nil")
+	}
+	quickPos := r.Positions["body"]["quick"]
+	foxPos := r.Positions["body"]["fox"]
+	if len(quickPos) != 1 || quickPos[0] != 0 {
+		t.Errorf("expected quick positions [0], got %v", quickPos)
+	}
+	if len(foxPos) != 1 || foxPos[0] != 1 {
+		t.Errorf("expected fox positions [1], got %v", foxPos)
+	}
+}
+
+func TestSearchPositionsBooleanQueryExcludesMustNot(t *testing.T) {
+	seg := newMockSegment("seg0", 2)
+	seg.stored[0] = map[string]string{"title": "doc0"}
+	seg.stored[1] = map[string]string{"title": "doc1"}
+	seg.postings["body"] = map[string][]index.Posting{
+		"hello": {
+			{DocID: 0, Freq: 1, Positions: []int{0}},
+			{DocID: 1, Freq: 1, Positions: []int{2}},
+		},
+		"world": {
+			{DocID: 1, Freq: 1, Positions: []int{3}},
+		},
+	}
+	seg.fieldLens["body"] = map[int]int{0: 5, 1: 5}
+	seg.totalFldLen["body"] = 10
+
+	reader := index.NewIndexReader([]index.SegmentReader{seg})
+	searcher := NewIndexSearcher(reader)
+
+	q := NewBooleanQuery().
+		Add(NewTermQuery("body", "hello"), OccurMust).
+		Add(NewTermQuery("body", "world"), OccurMustNot)
+
+	results := searcher.Search(q, NewTopKCollector(10))
+
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+
+	r := results[0]
+	if r.DocID != 0 {
+		t.Fatalf("expected docID 0, got %d", r.DocID)
+	}
+	if r.Positions == nil {
+		t.Fatal("expected positions, got nil")
+	}
+	helloPos := r.Positions["body"]["hello"]
+	if len(helloPos) != 1 || helloPos[0] != 0 {
+		t.Errorf("expected hello positions [0], got %v", helloPos)
+	}
+	// "world" should not be in positions since it's MustNot
+	if _, ok := r.Positions["body"]["world"]; ok {
+		t.Error("MustNot term 'world' should not appear in positions")
 	}
 }
