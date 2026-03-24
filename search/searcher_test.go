@@ -78,10 +78,10 @@ func (m *mockSegment) PostingsIterator(field, term string) index.PostingsIterato
 	return index.EmptyPostingsIterator{}
 }
 
-func (m *mockSegment) NumericDocValues(field string) index.NumericDocValues         { return nil }
-func (m *mockSegment) NumericDocValuesSkipper(field string) *index.DocValuesSkipper { return nil }
-func (m *mockSegment) SortedDocValues(field string) index.SortedDocValues           { return nil }
-func (m *mockSegment) Close() error                                                 { return nil }
+func (m *mockSegment) NumericDocValues(field string) index.NumericDocValues  { return nil }
+func (m *mockSegment) DocValuesSkipper(field string) *index.DocValuesSkipper { return nil }
+func (m *mockSegment) SortedDocValues(field string) index.SortedDocValues    { return nil }
+func (m *mockSegment) Close() error                                          { return nil }
 
 // mockDocEntry represents a document with its score for mockQuery.
 type mockDocEntry struct {

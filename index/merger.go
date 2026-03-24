@@ -145,9 +145,13 @@ func MergeSegmentsToDisk(dir store.Directory, inputs []MergeInput, newName strin
 		if err := mergeSortedDocValuesToDisk(dir, newName, field, inputs, mapper); err != nil {
 			return nil, err
 		}
+		if err := writeSortedDocValuesSkipIndexFromOrd(dir, newName, field, docCount); err != nil {
+			return nil, err
+		}
 		files = append(files,
 			fmt.Sprintf("%s.%s.sdvo", newName, field),
 			fmt.Sprintf("%s.%s.sdvd", newName, field),
+			fmt.Sprintf("%s.%s.sdvs", newName, field),
 		)
 	}
 

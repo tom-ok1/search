@@ -41,7 +41,7 @@ func createSkipperForTest(t *testing.T, prices []int64) *index.DocValuesSkipper 
 		t.Fatalf("expected 1 segment, got %d", len(leaves))
 	}
 
-	return leaves[0].Segment.NumericDocValuesSkipper("price")
+	return leaves[0].Segment.DocValuesSkipper("price")
 }
 
 func TestSkipBlockRangeIteratorStartsAtMinusOne(t *testing.T) {

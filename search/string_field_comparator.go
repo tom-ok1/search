@@ -45,21 +45,31 @@ func (c *StringFieldComparator) Value(slot int) any {
 
 func (c *StringFieldComparator) GetLeafComparator(seg index.SegmentReader) LeafFieldComparator {
 	return &stringLeafComparator{
-		parent: c,
-		dvs:    seg.SortedDocValues(c.field),
+		parent:  c,
+		dvs:     seg.SortedDocValues(c.field),
+		skipper: seg.DocValuesSkipper(c.field),
 	}
 }
 
 type stringLeafComparator struct {
-	parent    *StringFieldComparator
-	dvs       index.SortedDocValues
-	bottom    string
-	bottomHas bool
+	parent          *StringFieldComparator
+	dvs             index.SortedDocValues
+	skipper         *index.DocValuesSkipper
+	bottom          string
+	bottomHas       bool
+	competitiveIter DocIdSetIterator
+	iterDirty       bool
 }
 
 func (lc *stringLeafComparator) SetBottom(slot int) {
-	lc.bottom = lc.parent.values[slot]
-	lc.bottomHas = lc.parent.hasValue[slot]
+	newBottom := lc.parent.values[slot]
+	newHas := lc.parent.hasValue[slot]
+	if lc.bottomHas == newHas && lc.bottom == newBottom {
+		return
+	}
+	lc.bottom = newBottom
+	lc.bottomHas = newHas
+	lc.iterDirty = true
 }
 
 func (lc *stringLeafComparator) CompareBottom(docID int) int {
@@ -82,7 +92,37 @@ func (lc *stringLeafComparator) Copy(slot int, docID int) {
 
 func (lc *stringLeafComparator) SetScorer(score float64) {}
 
-func (lc *stringLeafComparator) CompetitiveIterator() DocIdSetIterator { return nil }
+func (lc *stringLeafComparator) CompetitiveIterator() DocIdSetIterator {
+	if lc.iterDirty {
+		lc.rebuildCompetitiveIterator()
+		lc.iterDirty = false
+	}
+	return lc.competitiveIter
+}
+
+func (lc *stringLeafComparator) rebuildCompetitiveIterator() {
+	if lc.skipper == nil || lc.dvs == nil || !lc.bottomHas {
+		return
+	}
+
+	// Convert bottom string to ordinal. If exact match, use that ord;
+	// if not found, LookupTerm returns -(insertionPoint+1), so the
+	// max competitive ordinal is insertionPoint-1.
+	bottomOrd := lc.dvs.LookupTerm([]byte(lc.bottom))
+	var maxOrd int
+	if bottomOrd >= 0 {
+		maxOrd = bottomOrd
+	} else {
+		maxOrd = -(bottomOrd + 1) - 1
+	}
+	if maxOrd < 0 {
+		// All values are greater than bottom, nothing is competitive
+		lc.competitiveIter = emptyIterator{}
+		return
+	}
+
+	lc.competitiveIter = NewSkipBlockRangeIterator(lc.skipper, 0, int64(maxOrd))
+}
 
 func (lc *stringLeafComparator) resolveDoc(docID int) (string, bool) {
 	if lc.dvs == nil {
@@ -98,3 +138,11 @@ func (lc *stringLeafComparator) resolveDoc(docID int) (string, bool) {
 	}
 	return string(val), true
 }
+
+// emptyIterator is a DocIdSetIterator that matches no documents.
+type emptyIterator struct{}
+
+func (emptyIterator) DocID() int      { return NoMoreDocs }
+func (emptyIterator) NextDoc() int    { return NoMoreDocs }
+func (emptyIterator) Advance(int) int { return NoMoreDocs }
+func (emptyIterator) Cost() int64     { return 0 }

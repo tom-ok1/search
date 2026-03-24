@@ -23,8 +23,10 @@ type skipLevelMeta struct {
 	blockCount int
 }
 
-// DocValuesSkipper provides block-level min/max metadata for numeric doc values,
+// DocValuesSkipper provides block-level min/max metadata for doc values,
 // enabling efficient skipping of non-competitive blocks during sorted collection.
+// For numeric doc values, min/max are raw int64 values.
+// For sorted doc values, min/max are ordinal values.
 type DocValuesSkipper struct {
 	data       *store.MMapIndexInput
 	blockSize  int
@@ -47,10 +49,10 @@ type DocValuesSkipper struct {
 	cachedMaxValue int64
 }
 
-// NewDocValuesSkipper creates a skipper from a memory-mapped .ndvs file.
+// NewDocValuesSkipper creates a skipper from a memory-mapped skip index file (.ndvs or .sdvs).
 func NewDocValuesSkipper(data *store.MMapIndexInput) (*DocValuesSkipper, error) {
 	if data.Length() < skipHeaderSize {
-		return nil, fmt.Errorf("ndvs file too small: %d bytes", data.Length())
+		return nil, fmt.Errorf("skip index file too small: %d bytes", data.Length())
 	}
 
 	blockSize, err := data.ReadUint32At(0)
@@ -333,6 +335,44 @@ func (s *DocValuesSkipper) trySkipHigherLevels(minValue, maxValue int64) bool {
 
 // --- Write functions ---
 
+// skipBlockAccumulator streams doc/value pairs into level-0 skipBlocks
+// without requiring all values to be held in memory at once.
+type skipBlockAccumulator struct {
+	blocks  []skipBlock
+	current skipBlock
+	started bool
+}
+
+func (a *skipBlockAccumulator) Add(docID int, value int64) {
+	if !a.started {
+		a.current = skipBlock{
+			minDocID: docID,
+			minValue: math.MaxInt64,
+			maxValue: math.MinInt64,
+		}
+		a.started = true
+	}
+	a.current.maxDocID = docID
+	a.current.docCount++
+	if value < a.current.minValue {
+		a.current.minValue = value
+	}
+	if value > a.current.maxValue {
+		a.current.maxValue = value
+	}
+	if a.current.docCount == skipBlockSize {
+		a.blocks = append(a.blocks, a.current)
+		a.started = false
+	}
+}
+
+func (a *skipBlockAccumulator) Finish() []skipBlock {
+	if a.started {
+		a.blocks = append(a.blocks, a.current)
+	}
+	return a.blocks
+}
+
 type skipBlock struct {
 	minDocID int
 	maxDocID int
@@ -341,18 +381,22 @@ type skipBlock struct {
 	maxValue int64
 }
 
-// writeNumericDocValuesSkipIndex writes the .ndvs skip index for a numeric doc values field.
+// writeDocValuesSkipIndex writes a skip index file for a doc values field.
+// ext is the file extension (e.g., "ndvs" for numeric, "sdvs" for sorted).
 // docIDs and values are parallel slices representing which docs have values.
-func writeNumericDocValuesSkipIndex(dir store.Directory, segName, field string, docIDs []int, values []int64) error {
+func writeDocValuesSkipIndex(dir store.Directory, segName, field, ext string, docIDs []int, values []int64) error {
 	if len(docIDs) == 0 {
-		return writeEmptySkipIndex(dir, segName, field)
+		return writeEmptySkipIndex(dir, segName, field, ext)
 	}
 
-	l0Blocks := buildLevel0Blocks(docIDs, values)
-	return buildAndWriteSkipIndex(dir, segName, field, l0Blocks, len(docIDs))
+	var acc skipBlockAccumulator
+	for i, docID := range docIDs {
+		acc.Add(docID, values[i])
+	}
+	return buildAndWriteSkipIndex(dir, segName, field, ext, acc.Finish(), len(docIDs))
 }
 
-func buildAndWriteSkipIndex(dir store.Directory, segName, field string, l0Blocks []skipBlock, docCount int) error {
+func buildAndWriteSkipIndex(dir store.Directory, segName, field, ext string, l0Blocks []skipBlock, docCount int) error {
 	// Build higher levels
 	allLevels := [][]skipBlock{l0Blocks}
 	for len(allLevels) < skipMaxLevels {
@@ -376,14 +420,13 @@ func buildAndWriteSkipIndex(dir store.Directory, segName, field string, l0Blocks
 		}
 	}
 
-	return writeSkipIndexFile(dir, segName, field, allLevels, docCount, globalMin, globalMax)
+	return writeSkipIndexFile(dir, segName, field, ext, allLevels, docCount, globalMin, globalMax)
 }
 
-// writeNumericDocValuesSkipIndexFromNDV builds the skip index by streaming over an existing .ndv file,
-// computing block stats without loading all values into memory.
+// writeNumericDocValuesSkipIndexFromNDV builds the skip index from an existing .ndv file.
 func writeNumericDocValuesSkipIndexFromNDV(dir store.Directory, segName, field string, docCount int) error {
 	if docCount == 0 {
-		return writeEmptySkipIndex(dir, segName, field)
+		return writeEmptySkipIndex(dir, segName, field, "ndvs")
 	}
 
 	ndvPath := dir.FilePath(fmt.Sprintf("%s.%s.ndv", segName, field))
@@ -393,38 +436,48 @@ func writeNumericDocValuesSkipIndexFromNDV(dir store.Directory, segName, field s
 	}
 	defer ndv.Close()
 
-	numBlocks := (docCount + skipBlockSize - 1) / skipBlockSize
-	l0Blocks := make([]skipBlock, numBlocks)
-
-	for i := range numBlocks {
-		start := i * skipBlockSize
-		end := min(start+skipBlockSize, docCount)
-
-		minV := int64(math.MaxInt64)
-		maxV := int64(math.MinInt64)
-		for j := start; j < end; j++ {
-			v, err := ndv.ReadInt64At(j * 8)
-			if err != nil {
-				return fmt.Errorf("read ndv value %d: %w", j, err)
-			}
-			if v < minV {
-				minV = v
-			}
-			if v > maxV {
-				maxV = v
-			}
+	var acc skipBlockAccumulator
+	for i := range docCount {
+		v, err := ndv.ReadInt64At(i * 8)
+		if err != nil {
+			return fmt.Errorf("read ndv value %d: %w", i, err)
 		}
-
-		l0Blocks[i] = skipBlock{
-			minDocID: start,
-			maxDocID: end - 1,
-			docCount: end - start,
-			minValue: minV,
-			maxValue: maxV,
-		}
+		acc.Add(i, v)
 	}
 
-	return buildAndWriteSkipIndex(dir, segName, field, l0Blocks, docCount)
+	return buildAndWriteSkipIndex(dir, segName, field, "ndvs", acc.Finish(), docCount)
+}
+
+// writeSortedDocValuesSkipIndexFromOrd builds the .sdvs skip index by streaming
+// over an existing .sdvo file, using ordinals as values and skipping missing docs (ord == -1).
+func writeSortedDocValuesSkipIndexFromOrd(dir store.Directory, segName, field string, docCount int) error {
+	if docCount == 0 {
+		return writeEmptySkipIndex(dir, segName, field, "sdvs")
+	}
+
+	sdvoPath := dir.FilePath(fmt.Sprintf("%s.%s.sdvo", segName, field))
+	sdvo, err := store.OpenMMap(sdvoPath)
+	if err != nil {
+		return fmt.Errorf("open sdvo for skip index: %w", err)
+	}
+	defer sdvo.Close()
+
+	var acc skipBlockAccumulator
+	valueCount := 0
+	for i := range docCount {
+		raw, err := sdvo.ReadUint32At(i * 4)
+		if err != nil {
+			return fmt.Errorf("read sdvo ordinal %d: %w", i, err)
+		}
+		ord := int32(raw)
+		if ord < 0 {
+			continue // missing value
+		}
+		acc.Add(i, int64(ord))
+		valueCount++
+	}
+
+	return buildAndWriteSkipIndex(dir, segName, field, "sdvs", acc.Finish(), valueCount)
 }
 
 func writeSkipIndexHeader(out store.IndexOutput, numLevels, docCount int, globalMin, globalMax int64) error {
@@ -446,47 +499,13 @@ func writeSkipIndexHeader(out store.IndexOutput, numLevels, docCount int, global
 	return out.WriteUint64(uint64(globalMax))
 }
 
-func writeEmptySkipIndex(dir store.Directory, segName, field string) error {
-	out, err := dir.CreateOutput(fmt.Sprintf("%s.%s.ndvs", segName, field))
+func writeEmptySkipIndex(dir store.Directory, segName, field, ext string) error {
+	out, err := dir.CreateOutput(fmt.Sprintf("%s.%s.%s", segName, field, ext))
 	if err != nil {
 		return err
 	}
 	defer out.Close()
 	return writeSkipIndexHeader(out, 0, 0, 0, 0)
-}
-
-func buildLevel0Blocks(docIDs []int, values []int64) []skipBlock {
-	valueCount := len(docIDs)
-	if valueCount == 0 {
-		return nil
-	}
-	numBlocks := (valueCount + skipBlockSize - 1) / skipBlockSize
-	blocks := make([]skipBlock, numBlocks)
-
-	for i := range numBlocks {
-		start := i * skipBlockSize
-		end := min(start+skipBlockSize, valueCount)
-
-		minV := int64(math.MaxInt64)
-		maxV := int64(math.MinInt64)
-		for j := start; j < end; j++ {
-			if values[j] < minV {
-				minV = values[j]
-			}
-			if values[j] > maxV {
-				maxV = values[j]
-			}
-		}
-
-		blocks[i] = skipBlock{
-			minDocID: docIDs[start],
-			maxDocID: docIDs[end-1],
-			docCount: end - start,
-			minValue: minV,
-			maxValue: maxV,
-		}
-	}
-	return blocks
 }
 
 func buildHigherLevel(prev []skipBlock) []skipBlock {
@@ -527,8 +546,8 @@ func buildHigherLevel(prev []skipBlock) []skipBlock {
 	return blocks
 }
 
-func writeSkipIndexFile(dir store.Directory, segName, field string, allLevels [][]skipBlock, docCount int, globalMin, globalMax int64) error {
-	out, err := dir.CreateOutput(fmt.Sprintf("%s.%s.ndvs", segName, field))
+func writeSkipIndexFile(dir store.Directory, segName, field, ext string, allLevels [][]skipBlock, docCount int, globalMin, globalMax int64) error {
+	out, err := dir.CreateOutput(fmt.Sprintf("%s.%s.%s", segName, field, ext))
 	if err != nil {
 		return err
 	}

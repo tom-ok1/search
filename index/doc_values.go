@@ -1,6 +1,7 @@
 package index
 
 import (
+	"bytes"
 	"fmt"
 	gosort "sort"
 
@@ -25,6 +26,7 @@ type NumericDocValues interface {
 type SortedDocValues interface {
 	OrdValue(docID int) (int, error)
 	LookupOrd(ord int) ([]byte, error)
+	LookupTerm(term []byte) int // returns ord if exact match, or -(insertionPoint+1) if not found
 	ValueCount() int
 }
 
@@ -120,6 +122,26 @@ func (dv *diskSortedDocValues) LookupOrd(ord int) ([]byte, error) {
 		return nil, fmt.Errorf("slice dict for ord %d: %w", ord, err)
 	}
 	return slice.ReadBytes(length)
+}
+
+func (dv *diskSortedDocValues) LookupTerm(term []byte) int {
+	lo, hi := 0, dv.valueCount
+	for lo < hi {
+		mid := lo + (hi-lo)/2
+		val, err := dv.LookupOrd(mid)
+		if err != nil {
+			return -(lo + 1)
+		}
+		c := bytes.Compare(val, term)
+		if c < 0 {
+			lo = mid + 1
+		} else if c > 0 {
+			hi = mid
+		} else {
+			return mid
+		}
+	}
+	return -(lo + 1)
 }
 
 func (dv *diskSortedDocValues) ValueCount() int {

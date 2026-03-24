@@ -34,7 +34,7 @@ func (c *NumericFieldComparator) GetLeafComparator(seg index.SegmentReader) Leaf
 	lc := &numericLeafComparator{
 		parent:  c,
 		dvs:     seg.NumericDocValues(c.field),
-		skipper: seg.NumericDocValuesSkipper(c.field),
+		skipper: seg.DocValuesSkipper(c.field),
 	}
 	return lc
 }

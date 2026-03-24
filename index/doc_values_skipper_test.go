@@ -14,7 +14,7 @@ func createSkipper(t *testing.T, docIDs []int, values []int64) *DocValuesSkipper
 		t.Fatal(err)
 	}
 
-	if err := writeNumericDocValuesSkipIndex(dir, "seg0", "f", docIDs, values); err != nil {
+	if err := writeDocValuesSkipIndex(dir, "seg0", "f", "ndvs", docIDs, values); err != nil {
 		t.Fatal(err)
 	}
 
@@ -317,6 +317,134 @@ func TestSkipperSparseMultipleBlocks(t *testing.T) {
 	}
 	if skipper.BlockDocCount() != 72 {
 		t.Errorf("block 1 docCount = %d, want 72", skipper.BlockDocCount())
+	}
+}
+
+func TestSortedDocValuesSkipIndexRoundtrip(t *testing.T) {
+	tmpDir := t.TempDir()
+	dir, err := store.NewFSDirectory(tmpDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 5 docs with string values: "cherry", "apple", "banana", "apple", "cherry"
+	// Sorted unique: apple(0), banana(1), cherry(2)
+	// Ordinals: [2, 0, 1, 0, 2]
+	values := []string{"cherry", "apple", "banana", "apple", "cherry"}
+	if err := writeSortedDocValues(dir, "seg0", "f", values, 5); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeSortedDocValuesSkipIndexFromOrd(dir, "seg0", "f", 5); err != nil {
+		t.Fatal(err)
+	}
+
+	path := dir.FilePath("seg0.f.sdvs")
+	data, err := store.OpenMMap(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer data.Close()
+
+	skipper, err := NewDocValuesSkipper(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if skipper.DocCount() != 5 {
+		t.Errorf("docCount = %d, want 5", skipper.DocCount())
+	}
+	if skipper.GlobalMin() != 0 {
+		t.Errorf("globalMin = %d, want 0 (apple)", skipper.GlobalMin())
+	}
+	if skipper.GlobalMax() != 2 {
+		t.Errorf("globalMax = %d, want 2 (cherry)", skipper.GlobalMax())
+	}
+	if skipper.BlockCount(0) != 1 {
+		t.Errorf("level 0 blockCount = %d, want 1", skipper.BlockCount(0))
+	}
+}
+
+func TestSortedDocValuesSkipIndexWithMissingValues(t *testing.T) {
+	tmpDir := t.TempDir()
+	dir, err := store.NewFSDirectory(tmpDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 5 docs, docs 1 and 3 have no value (empty string)
+	values := []string{"banana", "", "apple", "", "cherry"}
+	if err := writeSortedDocValues(dir, "seg0", "f", values, 5); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeSortedDocValuesSkipIndexFromOrd(dir, "seg0", "f", 5); err != nil {
+		t.Fatal(err)
+	}
+
+	path := dir.FilePath("seg0.f.sdvs")
+	data, err := store.OpenMMap(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer data.Close()
+
+	skipper, err := NewDocValuesSkipper(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Only 3 docs have values
+	if skipper.DocCount() != 3 {
+		t.Errorf("docCount = %d, want 3", skipper.DocCount())
+	}
+	// apple=0, banana=1, cherry=2
+	if skipper.GlobalMin() != 0 {
+		t.Errorf("globalMin = %d, want 0", skipper.GlobalMin())
+	}
+	if skipper.GlobalMax() != 2 {
+		t.Errorf("globalMax = %d, want 2", skipper.GlobalMax())
+	}
+}
+
+func TestSortedDocValuesSkipIndexFromOrd(t *testing.T) {
+	tmpDir := t.TempDir()
+	dir, err := store.NewFSDirectory(tmpDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Write sorted doc values first to create .sdvo file
+	values := []string{"cherry", "apple", "", "banana", "apple"}
+	if err := writeSortedDocValues(dir, "seg0", "f", values, 5); err != nil {
+		t.Fatal(err)
+	}
+
+	// Build skip index from the .sdvo file
+	if err := writeSortedDocValuesSkipIndexFromOrd(dir, "seg0", "f", 5); err != nil {
+		t.Fatal(err)
+	}
+
+	path := dir.FilePath("seg0.f.sdvs")
+	data, err := store.OpenMMap(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer data.Close()
+
+	skipper, err := NewDocValuesSkipper(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Doc 2 has no value, so only 4 docs
+	if skipper.DocCount() != 4 {
+		t.Errorf("docCount = %d, want 4", skipper.DocCount())
+	}
+	// apple=0, banana=1, cherry=2
+	if skipper.GlobalMin() != 0 {
+		t.Errorf("globalMin = %d, want 0", skipper.GlobalMin())
+	}
+	if skipper.GlobalMax() != 2 {
+		t.Errorf("globalMax = %d, want 2", skipper.GlobalMax())
 	}
 }
 

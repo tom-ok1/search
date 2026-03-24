@@ -85,11 +85,7 @@ func WriteSegmentV2(dir store.Directory, seg *InMemorySegment) ([]string, []stri
 		}
 		files = append(files, fmt.Sprintf("%s.%s.ndv", seg.name, fieldName))
 
-		docIDs := make([]int, len(values))
-		for i := range docIDs {
-			docIDs[i] = i
-		}
-		if err := writeNumericDocValuesSkipIndex(dir, seg.name, fieldName, docIDs, values); err != nil {
+		if err := writeNumericDocValuesSkipIndexFromNDV(dir, seg.name, fieldName, len(values)); err != nil {
 			return nil, nil, err
 		}
 		files = append(files, fmt.Sprintf("%s.%s.ndvs", seg.name, fieldName))
@@ -101,9 +97,13 @@ func WriteSegmentV2(dir store.Directory, seg *InMemorySegment) ([]string, []stri
 		if err := writeSortedDocValues(dir, seg.name, fieldName, values, seg.docCount); err != nil {
 			return nil, nil, err
 		}
+		if err := writeSortedDocValuesSkipIndexFromOrd(dir, seg.name, fieldName, seg.docCount); err != nil {
+			return nil, nil, err
+		}
 		files = append(files,
 			fmt.Sprintf("%s.%s.sdvo", seg.name, fieldName),
 			fmt.Sprintf("%s.%s.sdvd", seg.name, fieldName),
+			fmt.Sprintf("%s.%s.sdvs", seg.name, fieldName),
 		)
 	}
 
