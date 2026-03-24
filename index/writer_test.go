@@ -713,7 +713,7 @@ func TestNewWriterSegmentNameContinuity(t *testing.T) {
 
 	// Session 1: add docs across multiple segments (bufferSize=1 forces flush per doc)
 	w1 := NewIndexWriter(dir, analyzer, 1)
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		doc := document.NewDocument()
 		doc.AddField("body", "hello", document.FieldTypeText)
 		w1.AddDocument(doc) // auto-flush creates _seg0, _seg1, _seg2
@@ -1079,7 +1079,7 @@ func TestMaybeMergeWithTieredPolicy(t *testing.T) {
 	writer := NewIndexWriter(dir, analyzer, 1) // flush every doc
 
 	// Create many small segments to trigger merge
-	for i := 0; i < 15; i++ {
+	for i := range 15 {
 		doc := document.NewDocument()
 		doc.AddField("body", fmt.Sprintf("term%d common", i), document.FieldTypeText)
 		writer.AddDocument(doc) // auto-flush

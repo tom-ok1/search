@@ -43,10 +43,7 @@ func (p *TieredMergePolicy) FindMerges(infos []*SegmentCommitInfo) []MergeCandid
 	}
 
 	// Slide a window of up to MaxMergeAtOnce segments and find the best scoring merge.
-	windowSize := p.MaxMergeAtOnce
-	if windowSize > len(eligible) {
-		windowSize = len(eligible)
-	}
+	windowSize := min(p.MaxMergeAtOnce, len(eligible))
 	if windowSize < 2 {
 		return nil
 	}

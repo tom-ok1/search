@@ -89,7 +89,7 @@ func TestReadLatestSegmentInfosPicksHighestGeneration(t *testing.T) {
 	si := NewSegmentInfos()
 
 	// Write 3 generations
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		si.Segments = []*SegmentCommitInfo{
 			{Name: "_seg0", MaxDoc: (i + 1) * 10},
 		}

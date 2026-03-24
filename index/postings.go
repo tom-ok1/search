@@ -84,8 +84,8 @@ type EmptyPostingsIterator struct{}
 func (EmptyPostingsIterator) Next() bool       { return false }
 func (EmptyPostingsIterator) DocID() int       { return -1 }
 func (EmptyPostingsIterator) Freq() int        { return 0 }
-func (EmptyPostingsIterator) Positions() []int  { return nil }
-func (EmptyPostingsIterator) Advance(int) bool  { return false }
+func (EmptyPostingsIterator) Positions() []int { return nil }
+func (EmptyPostingsIterator) Advance(int) bool { return false }
 
 // ---------------------------------------------------------------------------
 // DiskPostingsIterator (mmap-based)

@@ -32,7 +32,7 @@ func TestAutoMergeOnCommit(t *testing.T) {
 	writer, dir := newTestWriterWithPolicy(t, 100, policy)
 
 	// Create 10 segments by flushing each doc individually
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		doc := document.NewDocument()
 		doc.AddField("body", fmt.Sprintf("term%d common", i), document.FieldTypeText)
 		writer.AddDocument(doc)
@@ -76,7 +76,7 @@ func TestAutoMergeOnFlush(t *testing.T) {
 	// bufferSize=1 means every AddDocument triggers auto-flush
 	writer, _ := newTestWriterWithPolicy(t, 1, policy)
 
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		doc := document.NewDocument()
 		doc.AddField("body", fmt.Sprintf("term%d common", i), document.FieldTypeText)
 		writer.AddDocument(doc) // auto-flush after each doc
@@ -112,7 +112,7 @@ func TestAutoMergeOnNRTReader(t *testing.T) {
 
 	// Add 10 docs, flushing each manually (merge policy won't run yet
 	// if we set mergePolicy after creating segments... but we set it upfront)
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		doc := document.NewDocument()
 		doc.AddField("body", fmt.Sprintf("term%d common", i), document.FieldTypeText)
 		writer.AddDocument(doc)
@@ -141,7 +141,7 @@ func TestNoAutoMergeWithoutPolicy(t *testing.T) {
 	// No merge policy set
 	writer, dir := newTestWriter(t, 1) // bufferSize=1 → auto-flush every doc
 
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		doc := document.NewDocument()
 		doc.AddField("body", fmt.Sprintf("term%d common", i), document.FieldTypeText)
 		writer.AddDocument(doc) // auto-flush

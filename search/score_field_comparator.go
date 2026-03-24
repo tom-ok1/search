@@ -50,3 +50,5 @@ func (c *ScoreFieldComparator) Copy(slot int, docID int) {
 func (c *ScoreFieldComparator) SetScorer(score float64) {
 	c.currentScore = score
 }
+
+func (c *ScoreFieldComparator) CompetitiveIterator() DocIdSetIterator { return nil }

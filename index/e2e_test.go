@@ -755,7 +755,7 @@ func TestFindCommonDocsSortedOutput(t *testing.T) {
 	writer, dir := newTestWriter(t, 100)
 
 	// Create enough documents so that map iteration order is likely non-sorted.
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		addTextDoc(t, writer, "body", "common shared term")
 	}
 
@@ -1106,7 +1106,7 @@ func TestPhraseQueryDeterministicResults(t *testing.T) {
 	writer, dir := newTestWriter(t, 100)
 
 	// Create multiple docs matching the same phrase to exercise map iteration
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		addTextDoc(t, writer, "body", "hello world test")
 	}
 
@@ -1115,7 +1115,7 @@ func TestPhraseQueryDeterministicResults(t *testing.T) {
 
 	// Run the same query multiple times — results should be deterministic
 	var firstDocIDs []int
-	for attempt := 0; attempt < 5; attempt++ {
+	for attempt := range 5 {
 		results := searcher.Search(search.NewPhraseQuery("body", "hello", "world"), search.NewTopKCollector(100))
 		if len(results) != 10 {
 			t.Fatalf("attempt %d: expected 10 results, got %d", attempt, len(results))

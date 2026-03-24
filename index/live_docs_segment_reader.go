@@ -56,6 +56,10 @@ func (r *LiveDocsSegmentReader) NumericDocValues(field string) NumericDocValues 
 	return r.inner.NumericDocValues(field)
 }
 
+func (r *LiveDocsSegmentReader) NumericDocValuesSkipper(field string) *DocValuesSkipper {
+	return r.inner.NumericDocValuesSkipper(field)
+}
+
 func (r *LiveDocsSegmentReader) SortedDocValues(field string) SortedDocValues {
 	return r.inner.SortedDocValues(field)
 }

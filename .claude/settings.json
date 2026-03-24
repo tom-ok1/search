@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cat - > /tmp/claude_hook_input.json; file=$(jq -r '.tool_input.file_path // empty' /tmp/claude_hook_input.json); if [ -n \"$file\" ] && echo \"$file\" | grep -q '\\.go$'; then while gopls codeaction -kind=quickfix -exec -w \"$file\" 2>/dev/null; do :; done; fi; true"
+          }
+        ]
+      }
+    ]
+  }
+}

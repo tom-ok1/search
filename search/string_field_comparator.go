@@ -82,6 +82,8 @@ func (lc *stringLeafComparator) Copy(slot int, docID int) {
 
 func (lc *stringLeafComparator) SetScorer(score float64) {}
 
+func (lc *stringLeafComparator) CompetitiveIterator() DocIdSetIterator { return nil }
+
 func (lc *stringLeafComparator) resolveDoc(docID int) (string, bool) {
 	if lc.dvs == nil {
 		return "", false

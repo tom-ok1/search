@@ -428,7 +428,7 @@ func TestNRTReaderProtectsFilesFromDeletion(t *testing.T) {
 	writer := NewIndexWriter(dir, analyzer, 1)
 
 	// Add initial documents and commit
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		doc := document.NewDocument()
 		doc.AddField("body", fmt.Sprintf("doc %d", i), document.FieldTypeText)
 		writer.AddDocument(doc)
@@ -486,4 +486,3 @@ func TestNRTReaderProtectsFilesFromDeletion(t *testing.T) {
 
 	writer.Close()
 }
-

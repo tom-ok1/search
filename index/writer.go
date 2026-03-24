@@ -441,4 +441,3 @@ func isOldSegmentsFile(f string, currentGen int64) bool {
 	}
 	return false
 }
-

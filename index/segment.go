@@ -13,6 +13,7 @@ type SegmentReader interface {
 	StoredFields(docID int) (map[string]string, error)
 	PostingsIterator(field, term string) PostingsIterator
 	NumericDocValues(field string) NumericDocValues
+	NumericDocValuesSkipper(field string) *DocValuesSkipper
 	SortedDocValues(field string) SortedDocValues
 	Close() error
 }

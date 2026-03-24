@@ -36,10 +36,25 @@ func (s *IndexSearcher) Search(q Query, c Collector) []SearchResult {
 		lc.SetScorer(scorer)
 
 		iter := scorer.Iterator()
-		for iter.NextDoc() != NoMoreDocs {
-			if !leaf.Segment.IsDeleted(iter.DocID()) {
-				lc.Collect(iter.DocID())
+		compIter := lc.CompetitiveIterator()
+
+		doc := iter.NextDoc()
+		for doc != NoMoreDocs {
+			if compIter != nil {
+				cd := compIter.Advance(doc)
+				if cd == NoMoreDocs {
+					break
+				}
+				if cd > doc {
+					doc = iter.Advance(cd)
+					continue
+				}
 			}
+			if !leaf.Segment.IsDeleted(doc) {
+				lc.Collect(doc)
+			}
+			compIter = lc.CompetitiveIterator()
+			doc = iter.NextDoc()
 		}
 	}
 

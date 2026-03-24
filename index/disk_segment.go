@@ -30,9 +30,10 @@ type DiskSegment struct {
 	deleted *store.MMapIndexInput // .del (nil if no deletions)
 
 	// Doc values mmap'd files
-	numericDV    map[string]*store.MMapIndexInput // field → .ndv
-	sortedDVOrd  map[string]*store.MMapIndexInput // field → .sdvo
-	sortedDVDict map[string]*store.MMapIndexInput // field → .sdvd
+	numericDV     map[string]*store.MMapIndexInput // field → .ndv
+	numericDVSkip map[string]*store.MMapIndexInput // field → .ndvs
+	sortedDVOrd   map[string]*store.MMapIndexInput // field → .sdvo
+	sortedDVDict  map[string]*store.MMapIndexInput // field → .sdvd
 }
 
 // OpenDiskSegment opens a V2 segment from the given directory path.
@@ -48,17 +49,18 @@ func OpenDiskSegment(dirPath string, segName string) (*DiskSegment, error) {
 	}
 
 	ds := &DiskSegment{
-		name:         meta.Name,
-		docCount:     meta.DocCount,
-		fieldList:    meta.Fields,
-		termIndex:    make(map[string]*store.MMapIndexInput),
-		termFSTFiles: make(map[string]*store.MMapIndexInput),
-		termData:     make(map[string]*store.MMapIndexInput),
-		fieldLens:    make(map[string]*store.MMapIndexInput),
-		termFSTs:     make(map[string]*fst.FST),
-		numericDV:    make(map[string]*store.MMapIndexInput),
-		sortedDVOrd:  make(map[string]*store.MMapIndexInput),
-		sortedDVDict: make(map[string]*store.MMapIndexInput),
+		name:          meta.Name,
+		docCount:      meta.DocCount,
+		fieldList:     meta.Fields,
+		termIndex:     make(map[string]*store.MMapIndexInput),
+		termFSTFiles:  make(map[string]*store.MMapIndexInput),
+		termData:      make(map[string]*store.MMapIndexInput),
+		fieldLens:     make(map[string]*store.MMapIndexInput),
+		termFSTs:      make(map[string]*fst.FST),
+		numericDV:     make(map[string]*store.MMapIndexInput),
+		numericDVSkip: make(map[string]*store.MMapIndexInput),
+		sortedDVOrd:   make(map[string]*store.MMapIndexInput),
+		sortedDVDict:  make(map[string]*store.MMapIndexInput),
 	}
 
 	// Mmap per-field files
@@ -118,6 +120,13 @@ func OpenDiskSegment(dirPath string, segName string) (*DiskSegment, error) {
 			return nil, fmt.Errorf("mmap ndv for %s: %w", field, err)
 		}
 		ds.numericDV[field] = ndv
+
+		ndvs, err := store.OpenMMap(fmt.Sprintf("%s/%s.%s.ndvs", dirPath, segName, field))
+		if err != nil {
+			ds.Close()
+			return nil, fmt.Errorf("mmap ndvs for %s: %w", field, err)
+		}
+		ds.numericDVSkip[field] = ndvs
 	}
 
 	// Mmap sorted doc values files
@@ -182,6 +191,9 @@ func (ds *DiskSegment) Close() error {
 		ds.deleted.Close()
 	}
 	for _, m := range ds.numericDV {
+		m.Close()
+	}
+	for _, m := range ds.numericDVSkip {
 		m.Close()
 	}
 	for _, m := range ds.sortedDVOrd {
@@ -401,6 +413,18 @@ func (ds *DiskSegment) SortedDVFields() []string {
 		fields = append(fields, f)
 	}
 	return fields
+}
+
+func (ds *DiskSegment) NumericDocValuesSkipper(field string) *DocValuesSkipper {
+	data := ds.numericDVSkip[field]
+	if data == nil {
+		return nil
+	}
+	skipper, err := NewDocValuesSkipper(data)
+	if err != nil {
+		return nil
+	}
+	return skipper
 }
 
 func (ds *DiskSegment) NumericDocValues(field string) NumericDocValues {

@@ -124,7 +124,7 @@ func TestFlushControlMarkForFullFlush(t *testing.T) {
 
 	// Create several DWPTs with documents
 	var dwpts []*DocumentsWriterPerThread
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		dwpt := pool.getAndLock()
 		doc := document.NewDocument()
 		doc.AddField("body", fmt.Sprintf("doc %d content", i), document.FieldTypeText)

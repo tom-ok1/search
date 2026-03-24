@@ -39,7 +39,7 @@ func NewTopFieldCollector(k int, sort *Sort) *TopFieldCollector {
 			comparators[i] = NewScoreFieldComparator(k)
 			needsScore = true
 		case SortFieldNumeric:
-			comparators[i] = NewNumericFieldComparator(sf.Field, k)
+			comparators[i] = NewNumericFieldComparator(sf.Field, k, sf.Reverse)
 		case SortFieldString:
 			comparators[i] = NewStringFieldComparator(sf.Field, k)
 		default:
@@ -173,6 +173,13 @@ type topFieldLeafCollector struct {
 
 func (lc *topFieldLeafCollector) SetScorer(scorer Scorable) {
 	lc.scorer = scorer
+}
+
+func (lc *topFieldLeafCollector) CompetitiveIterator() DocIdSetIterator {
+	if len(lc.leafComparators) > 0 {
+		return lc.leafComparators[0].CompetitiveIterator()
+	}
+	return nil
 }
 
 func (lc *topFieldLeafCollector) Collect(docID int) {

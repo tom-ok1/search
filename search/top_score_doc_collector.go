@@ -50,6 +50,8 @@ func (lc *topKLeafCollector) SetScorer(scorer Scorable) {
 	lc.scorer = scorer
 }
 
+func (lc *topKLeafCollector) CompetitiveIterator() DocIdSetIterator { return nil }
+
 func (lc *topKLeafCollector) Collect(docID int) {
 	score := lc.scorer.Score()
 	globalDocID := lc.docBase + docID

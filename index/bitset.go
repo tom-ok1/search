@@ -114,13 +114,10 @@ func (b *Bitset) BuildRankTable() {
 	nBlocks := (len(b.bits) + rankBlockBytes - 1) / rankBlockBytes
 	b.rankTable = make([]int, nBlocks+1)
 	cumulative := 0
-	for block := 0; block < nBlocks; block++ {
+	for block := range nBlocks {
 		b.rankTable[block] = cumulative
 		start := block * rankBlockBytes
-		end := start + rankBlockBytes
-		if end > len(b.bits) {
-			end = len(b.bits)
-		}
+		end := min(start + rankBlockBytes, len(b.bits))
 		for _, v := range b.bits[start:end] {
 			cumulative += bits.OnesCount8(v)
 		}

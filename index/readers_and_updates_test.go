@@ -54,7 +54,6 @@ func TestReadersAndUpdatesDelete(t *testing.T) {
 	}
 }
 
-
 func TestReadersAndUpdatesWriteLiveDocs(t *testing.T) {
 	info, dirPath, dir := setupRAUSegment(t)
 	rau := NewReadersAndUpdates(info, dirPath)

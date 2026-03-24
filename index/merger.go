@@ -39,7 +39,7 @@ func NewDocIDMapper(inputs []MergeInput) *DocIDMapper {
 		seg := &m.segments[i]
 		seg.offset = m.liveCount
 		seg.liveDocs = NewBitset(n)
-		for oldDoc := 0; oldDoc < n; oldDoc++ {
+		for oldDoc := range n {
 			if !input.IsDeleted(oldDoc) {
 				seg.liveDocs.Set(oldDoc)
 				m.liveCount++
@@ -133,6 +133,11 @@ func MergeSegmentsToDisk(dir store.Directory, inputs []MergeInput, newName strin
 			return nil, err
 		}
 		files = append(files, fmt.Sprintf("%s.%s.ndv", newName, field))
+
+		if err := writeNumericDocValuesSkipIndexFromNDV(dir, newName, field, docCount); err != nil {
+			return nil, err
+		}
+		files = append(files, fmt.Sprintf("%s.%s.ndvs", newName, field))
 	}
 
 	// Merge sorted doc values.

@@ -44,7 +44,7 @@ func TestPoolConcurrentCheckout(t *testing.T) {
 
 	// All goroutines checkout simultaneously
 	barrier := make(chan struct{})
-	for i := 0; i < N; i++ {
+	for i := range N {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()

@@ -27,7 +27,7 @@ func TestDocumentsWriterAddDocument(t *testing.T) {
 	}
 
 	// Add enough docs to trigger at least one flush
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		doc := document.NewDocument()
 		doc.AddField("body", fmt.Sprintf("document number %d with some text to generate bytes", i), document.FieldTypeText)
 		if err := dw.addDocument(doc); err != nil {
@@ -72,11 +72,11 @@ func TestDocumentsWriterConcurrentAdd(t *testing.T) {
 	const docsPerGoroutine = 500
 	var wg sync.WaitGroup
 
-	for g := 0; g < goroutines; g++ {
+	for g := range goroutines {
 		wg.Add(1)
 		go func(gid int) {
 			defer wg.Done()
-			for i := 0; i < docsPerGoroutine; i++ {
+			for i := range docsPerGoroutine {
 				doc := document.NewDocument()
 				doc.AddField("body", fmt.Sprintf("goroutine %d document %d text content", gid, i), document.FieldTypeText)
 				if err := dw.addDocument(doc); err != nil {
@@ -122,7 +122,7 @@ func TestDocumentsWriterFlushAllThreads(t *testing.T) {
 		mu.Unlock()
 	}
 
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		doc := document.NewDocument()
 		doc.AddField("body", fmt.Sprintf("doc %d", i), document.FieldTypeText)
 		dw.addDocument(doc)

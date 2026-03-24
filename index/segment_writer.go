@@ -84,6 +84,15 @@ func WriteSegmentV2(dir store.Directory, seg *InMemorySegment) ([]string, []stri
 			return nil, nil, err
 		}
 		files = append(files, fmt.Sprintf("%s.%s.ndv", seg.name, fieldName))
+
+		docIDs := make([]int, len(values))
+		for i := range docIDs {
+			docIDs[i] = i
+		}
+		if err := writeNumericDocValuesSkipIndex(dir, seg.name, fieldName, docIDs, values); err != nil {
+			return nil, nil, err
+		}
+		files = append(files, fmt.Sprintf("%s.%s.ndvs", seg.name, fieldName))
 	}
 
 	// 6. Write sorted doc values
@@ -161,7 +170,7 @@ func writeStoredFieldsFromMap(dir store.Directory, segName string, docCount int,
 	var pos uint64
 	scratch := &bytes.Buffer{}
 
-	for docID := 0; docID < docCount; docID++ {
+	for docID := range docCount {
 		offsets[docID] = pos
 		fields := storedFields[docID]
 		n, err := writeStoredFieldsEntry(out, fields, scratch)
@@ -311,7 +320,7 @@ func writeFieldLengthsV2(dir store.Directory, segName, fieldName string, lengths
 	if err := out.WriteUint32(uint32(docCount)); err != nil {
 		return fmt.Errorf("write flen doc count: %w", err)
 	}
-	for i := 0; i < docCount; i++ {
+	for i := range docCount {
 		l := 0
 		if i < len(lengths) {
 			l = lengths[i]

@@ -218,7 +218,7 @@ func TestBitsetCountRange(t *testing.T) {
 func TestBitsetAllBitsSet(t *testing.T) {
 	size := 16
 	bs := NewBitset(size)
-	for i := 0; i < size; i++ {
+	for i := range size {
 		bs.Set(i)
 	}
 	if bs.Count() != size {

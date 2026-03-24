@@ -11,4 +11,7 @@ type LeafFieldComparator interface {
 	// SetScorer sets the current document's score.
 	// Must be called before CompareBottom or Copy for score-based comparators.
 	SetScorer(score float64)
+	// CompetitiveIterator returns an iterator over competitive doc IDs
+	// for block-level skipping, or nil if not supported.
+	CompetitiveIterator() DocIdSetIterator
 }

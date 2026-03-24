@@ -12,11 +12,11 @@ type perThreadPool struct {
 	mu             sync.Mutex
 	free           []*DocumentsWriterPerThread
 	active         map[*DocumentsWriterPerThread]bool
-	fullFlush      bool                        // true during full flush
+	fullFlush      bool                               // true during full flush
 	flushingActive map[*DocumentsWriterPerThread]bool // DWPTs that were active when full flush started
-	flushOnReturn  []*DocumentsWriterPerThread  // DWPTs returned during full flush
-	flushRemaining int                          // number of flushingActive DWPTs not yet returned
-	fullFlushDone  chan struct{}                // closed when flushRemaining reaches 0
+	flushOnReturn  []*DocumentsWriterPerThread        // DWPTs returned during full flush
+	flushRemaining int                                // number of flushingActive DWPTs not yet returned
+	fullFlushDone  chan struct{}                      // closed when flushRemaining reaches 0
 	nameFunc       func() string
 	analyzer       *analysis.Analyzer
 }

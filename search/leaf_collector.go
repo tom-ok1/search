@@ -9,4 +9,8 @@ type LeafCollector interface {
 	// Collect collects a matching document.
 	// The score can be retrieved from the Scorable set via SetScorer.
 	Collect(docID int)
+
+	// CompetitiveIterator returns an iterator over competitive doc IDs
+	// for block-level skipping, or nil if not supported.
+	CompetitiveIterator() DocIdSetIterator
 }
