@@ -174,7 +174,7 @@ func TestManyKeys(t *testing.T) {
 	n := 1000
 	// Generate sorted keys: "term0000", "term0001", ...
 	keys := make([]string, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		keys[i] = fmt.Sprintf("term%04d", i)
 	}
 

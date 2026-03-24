@@ -35,7 +35,7 @@ func TestBitsetSetAndGet(t *testing.T) {
 	bs := NewBitset(16)
 
 	// All bits should be unset initially
-	for i := 0; i < 16; i++ {
+	for i := range 16 {
 		if bs.Get(i) {
 			t.Errorf("bit %d should be unset initially", i)
 		}
@@ -48,7 +48,7 @@ func TestBitsetSetAndGet(t *testing.T) {
 	bs.Set(8)
 	bs.Set(15)
 
-	for i := 0; i < 16; i++ {
+	for i := range 16 {
 		expected := i == 0 || i == 3 || i == 7 || i == 8 || i == 15
 		if bs.Get(i) != expected {
 			t.Errorf("bit %d: got %v, want %v", i, bs.Get(i), expected)
@@ -150,7 +150,7 @@ func TestBitsetBytesRoundtrip(t *testing.T) {
 	raw := bs.Bytes()
 	reconstructed := BitsetFromBytes(raw, 24)
 
-	for i := 0; i < 24; i++ {
+	for i := range 24 {
 		if bs.Get(i) != reconstructed.Get(i) {
 			t.Errorf("bit %d: original=%v, reconstructed=%v", i, bs.Get(i), reconstructed.Get(i))
 		}

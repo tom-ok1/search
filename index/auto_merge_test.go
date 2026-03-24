@@ -2,6 +2,7 @@ package index_test
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"gosearch/analysis"
@@ -249,21 +250,21 @@ func TestAutoMergePreservesStoredFields(t *testing.T) {
 	searcher := search.NewIndexSearcher(reader)
 	for _, text := range texts {
 		// Search for first word of each text
-		term := ""
+		var term strings.Builder
 		for _, c := range text {
 			if c == ' ' {
 				break
 			}
-			term += string(c)
+			term.WriteString(string(c))
 		}
-		results := searcher.Search(search.NewTermQuery("body", term), search.NewTopKCollector(10))
+		results := searcher.Search(search.NewTermQuery("body", term.String()), search.NewTopKCollector(10))
 		if len(results) != 1 {
-			t.Errorf("expected 1 result for %q, got %d", term, len(results))
+			t.Errorf("expected 1 result for %q, got %d", term.String(), len(results))
 			continue
 		}
 		if results[0].Fields["body"] != text {
 			t.Errorf("stored field mismatch for %q: got %q, want %q",
-				term, results[0].Fields["body"], text)
+				term.String(), results[0].Fields["body"], text)
 		}
 	}
 }

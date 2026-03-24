@@ -12,12 +12,12 @@ import (
 
 func TestDocumentsWriterAddDocument(t *testing.T) {
 	dir, _ := store.NewFSDirectory(t.TempDir())
-	var counter int32
+	var counter atomic.Int32
 	var segments []*SegmentCommitInfo
 	var mu sync.Mutex
 
 	dw := newDocumentsWriter(dir, newTestAnalyzer(), 500, 0, func() string {
-		n := atomic.AddInt32(&counter, 1)
+		n := counter.Add(1)
 		return fmt.Sprintf("_seg%d", n)
 	})
 	dw.onSegmentFlushed = func(info *SegmentCommitInfo) {
@@ -54,12 +54,12 @@ func TestDocumentsWriterAddDocument(t *testing.T) {
 
 func TestDocumentsWriterConcurrentAdd(t *testing.T) {
 	dir, _ := store.NewFSDirectory(t.TempDir())
-	var counter int32
+	var counter atomic.Int32
 	var segments []*SegmentCommitInfo
 	var mu sync.Mutex
 
 	dw := newDocumentsWriter(dir, newTestAnalyzer(), 2000, 0, func() string {
-		n := atomic.AddInt32(&counter, 1)
+		n := counter.Add(1)
 		return fmt.Sprintf("_seg%d", n)
 	})
 	dw.onSegmentFlushed = func(info *SegmentCommitInfo) {
@@ -107,13 +107,13 @@ func TestDocumentsWriterConcurrentAdd(t *testing.T) {
 
 func TestDocumentsWriterFlushAllThreads(t *testing.T) {
 	dir, _ := store.NewFSDirectory(t.TempDir())
-	var counter int32
+	var counter atomic.Int32
 	var segments []*SegmentCommitInfo
 	var mu sync.Mutex
 
 	// Large buffer so nothing auto-flushes
 	dw := newDocumentsWriter(dir, newTestAnalyzer(), 1<<30, 0, func() string {
-		n := atomic.AddInt32(&counter, 1)
+		n := counter.Add(1)
 		return fmt.Sprintf("_seg%d", n)
 	})
 	dw.onSegmentFlushed = func(info *SegmentCommitInfo) {
@@ -146,10 +146,10 @@ func TestDocumentsWriterFlushAllThreads(t *testing.T) {
 
 func TestDocumentsWriterDeleteDocuments(t *testing.T) {
 	dir, _ := store.NewFSDirectory(t.TempDir())
-	var counter int32
+	var counter atomic.Int32
 
 	dw := newDocumentsWriter(dir, newTestAnalyzer(), 1<<30, 0, func() string {
-		n := atomic.AddInt32(&counter, 1)
+		n := counter.Add(1)
 		return fmt.Sprintf("_seg%d", n)
 	})
 

@@ -32,9 +32,9 @@ func TestPoolGetAndReturn(t *testing.T) {
 }
 
 func TestPoolConcurrentCheckout(t *testing.T) {
-	var counter int32
+	var counter atomic.Int32
 	pool := newPerThreadPool(func() string {
-		n := atomic.AddInt32(&counter, 1)
+		n := counter.Add(1)
 		return fmt.Sprintf("_seg%d", n)
 	}, newTestAnalyzer())
 
@@ -225,9 +225,9 @@ func TestPoolFullFlushRemoveCountsAsReturn(t *testing.T) {
 }
 
 func TestPoolFullFlushIgnoresNewDWPTs(t *testing.T) {
-	var counter int32
+	var counter atomic.Int32
 	pool := newPerThreadPool(func() string {
-		n := atomic.AddInt32(&counter, 1)
+		n := counter.Add(1)
 		return fmt.Sprintf("_seg%d", n)
 	}, newTestAnalyzer())
 

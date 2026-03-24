@@ -172,7 +172,7 @@ func TestFSTIteratorLargeDataset(t *testing.T) {
 	// Build FST with many keys to stress-test the iterator
 	n := 1000
 	builder := newTestBuilder()
-	for i := 0; i < n; i++ {
+	for i := range n {
 		key := fmt.Sprintf("key_%05d", i)
 		if err := builder.Add([]byte(key), uint64(i)); err != nil {
 			t.Fatal(err)

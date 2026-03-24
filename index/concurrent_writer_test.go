@@ -17,11 +17,11 @@ func TestConcurrentAddAndCommit(t *testing.T) {
 	const docsPerGoroutine = 1000
 
 	var wg sync.WaitGroup
-	for g := 0; g < goroutines; g++ {
+	for g := range goroutines {
 		wg.Add(1)
 		go func(gid int) {
 			defer wg.Done()
-			for i := 0; i < docsPerGoroutine; i++ {
+			for i := range docsPerGoroutine {
 				doc := document.NewDocument()
 				doc.AddField("body", fmt.Sprintf("goroutine %d document %d content", gid, i), document.FieldTypeText)
 				doc.AddField("id", fmt.Sprintf("g%d_d%d", gid, i), document.FieldTypeKeyword)
@@ -55,7 +55,7 @@ func TestConcurrentAddAndNRTRead(t *testing.T) {
 	defer writer.Close()
 
 	// Add some initial docs
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		doc := document.NewDocument()
 		doc.AddField("body", fmt.Sprintf("initial document %d", i), document.FieldTypeText)
 		writer.AddDocument(doc)
@@ -74,7 +74,7 @@ func TestConcurrentAddAndNRTRead(t *testing.T) {
 	}
 
 	// Add more docs after snapshot
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		doc := document.NewDocument()
 		doc.AddField("body", fmt.Sprintf("post-snapshot document %d", i), document.FieldTypeText)
 		writer.AddDocument(doc)
@@ -102,11 +102,11 @@ func TestConcurrentAddWithDelete(t *testing.T) {
 	const docsPerGoroutine = 200
 
 	var wg sync.WaitGroup
-	for g := 0; g < goroutines; g++ {
+	for g := range goroutines {
 		wg.Add(1)
 		go func(gid int) {
 			defer wg.Done()
-			for i := 0; i < docsPerGoroutine; i++ {
+			for i := range docsPerGoroutine {
 				doc := document.NewDocument()
 				doc.AddField("body", fmt.Sprintf("g%d doc %d text", gid, i), document.FieldTypeText)
 				doc.AddField("group", fmt.Sprintf("group%d", gid), document.FieldTypeKeyword)
@@ -151,11 +151,11 @@ func TestConcurrentAddRaceDetector(t *testing.T) {
 	const docsPerGoroutine = 50
 
 	var wg sync.WaitGroup
-	for g := 0; g < goroutines; g++ {
+	for g := range goroutines {
 		wg.Add(1)
 		go func(gid int) {
 			defer wg.Done()
-			for i := 0; i < docsPerGoroutine; i++ {
+			for i := range docsPerGoroutine {
 				doc := document.NewDocument()
 				doc.AddField("body", fmt.Sprintf("race test g%d d%d", gid, i), document.FieldTypeText)
 				writer.AddDocument(doc)
@@ -185,11 +185,11 @@ func TestConcurrentFlushUnderPressure(t *testing.T) {
 	const docsPerGoroutine = 100
 
 	var wg sync.WaitGroup
-	for g := 0; g < goroutines; g++ {
+	for g := range goroutines {
 		wg.Add(1)
 		go func(gid int) {
 			defer wg.Done()
-			for i := 0; i < docsPerGoroutine; i++ {
+			for i := range docsPerGoroutine {
 				doc := document.NewDocument()
 				doc.AddField("body", fmt.Sprintf("pressure test g%d d%d with extra words", gid, i), document.FieldTypeText)
 				if err := writer.AddDocument(doc); err != nil {
