@@ -11,15 +11,15 @@ Building an Elasticsearch-compatible server layer on top of GoSearch's Lucene-li
 
 ## Step 1: Core Infrastructure
 **Plan:** `docs/superpowers/plans/2026-03-25-step1-core-infrastructure.md`
-**Status:** NOT STARTED
+**Status:** COMPLETE
 
-- [ ] Task 1: Cluster State & Metadata (`server/cluster/`)
-- [ ] Task 2: Transport Action Registry (`server/transport/`)
-- [ ] Task 3: REST Controller (`server/rest/`)
-- [ ] Task 4: Node Lifecycle (`server/node/`)
-- [ ] Task 5: End-to-end integration test
+- [x] Task 1: Cluster State & Metadata (`server/cluster/`)
+- [x] Task 2: Transport Action Registry (`server/transport/`)
+- [x] Task 3: REST Controller (`server/rest/`)
+- [x] Task 4: Node Lifecycle (`server/node/`)
+- [x] Task 5: End-to-end integration test
 
-**Deliverable:** Node starts, listens on HTTP, returns 404 JSON for all routes.
+**Deliverable:** Node starts, listens on HTTP, returns 404 JSON for all routes. (13 tests passing)
 
 ---
 
