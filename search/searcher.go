@@ -20,6 +20,11 @@ func NewIndexSearcher(reader *index.IndexReader) *IndexSearcher {
 	return &IndexSearcher{reader: reader}
 }
 
+// Reader returns the underlying IndexReader.
+func (s *IndexSearcher) Reader() *index.IndexReader {
+	return s.reader
+}
+
 // Search executes a Query across all segments, collecting results into the given Collector.
 // StoredFields are populated on the final results after collection is complete.
 func (s *IndexSearcher) Search(q Query, c Collector) []SearchResult {
