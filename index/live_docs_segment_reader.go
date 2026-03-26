@@ -44,7 +44,7 @@ func (r *LiveDocsSegmentReader) TotalFieldLength(field string) int {
 	return total
 }
 
-func (r *LiveDocsSegmentReader) StoredFields(docID int) (map[string]string, error) {
+func (r *LiveDocsSegmentReader) StoredFields(docID int) (map[string][]byte, error) {
 	return r.inner.StoredFields(docID)
 }
 

@@ -11,6 +11,12 @@ This document describes the design for an Elasticsearch-compatible server layer 
 - Build on existing GoSearch packages (`index/`, `search/`, `analysis/`, `document/`, `store/`, `fst/`)
 - Design for single-node first, with abstractions that enable multi-node extension without rewrites
 
+### Implementation Policy
+
+- **Strict ES/Lucene fidelity:** Every component must follow the real Elasticsearch and Lucene logic — layer boundaries, data flow, naming, and semantics. Do not invent custom approaches where ES/Lucene has an established pattern.
+- **Document divergences:** When a v1 simplification diverges from ES/Lucene, it must be recorded in the [Known Limitations](#known-limitations--divergences-from-elasticsearch) section with: v1 behavior, real ES behavior, impact, and resolution phase.
+- **Living document:** This design doc is maintained throughout the project. Newly discovered gaps or considerations are added as they are found during implementation.
+
 ### Non-Goals (v1)
 
 - Cluster coordination, node discovery, shard replication
@@ -177,8 +183,8 @@ func ParseDocument(id string, source []byte, mapping *MappingDefinition) (*docum
 |---|---|
 | `text` | `FieldTypeText` (analyzed with configured analyzer) |
 | `keyword` | `FieldTypeKeyword` (single term, not analyzed) |
-| `long` | `FieldTypeKeyword` (indexed for term queries) + `FieldTypeNumericDocValues` (for sorting) |
-| `double` | `FieldTypeKeyword` (indexed) + `FieldTypeNumericDocValues` (for sorting) |
+| `long` | `FieldTypeKeyword` (indexed for term queries) + `FieldTypeNumericDocValues` (for sorting). See [Known Limitations](#known-limitations--divergences-from-elasticsearch). |
+| `double` | `FieldTypeKeyword` (indexed) + `FieldTypeNumericDocValues` (for sorting). See [Known Limitations](#known-limitations--divergences-from-elasticsearch). |
 | `boolean` | `FieldTypeKeyword` (indexed as `"true"` / `"false"`) |
 
 Additionally, every document gets:
@@ -526,9 +532,12 @@ Translates JSON query DSL into GoSearch's existing `search.Query` types.
 
 | Query DSL | GoSearch Query | Description |
 |---|---|---|
+| `{"match_all": {}}` | `MatchAllQuery` | Matches every document with score 1.0 |
 | `{"term": {"field": "value"}}` | `TermQuery` | Exact term match, no analysis |
 | `{"match": {"field": "text"}}` | `BooleanQuery(SHOULD, [TermQuery...])` | Analyzed text match |
 | `{"bool": {"must":[], "should":[], "must_not":[]}}` | `BooleanQuery` | Boolean combination |
+
+> **Note:** `match_all` is the most commonly used ES query (browsing, filters-only searches, testing). It is trivially implemented as a scorer that matches every non-deleted document with score 1.0.
 
 ### Parser Design
 
@@ -740,18 +749,91 @@ Harden the system with end-to-end tests and proper error responses.
 
 ---
 
+## Known Limitations & Divergences from Elasticsearch
+
+This section documents deliberate simplifications in v1 and what needs to change to close the gap with real Elasticsearch behavior. Each item notes which future phase addresses it.
+
+### 1. Numeric Fields Use Inverted Index Instead of BKD Trees
+
+**v1 behavior:** `long` and `double` fields are indexed as keyword strings (inverted index) for term queries, plus `NumericDocValues` for sorting.
+
+**Real ES/Lucene behavior:** Numeric fields use **BKD trees (point values)** — a k-d tree data structure optimized for range queries and multi-dimensional point lookups. The inverted index is not used for numerics at all.
+
+**Impact:**
+- `{"term": {"count": 42}}` works, but string-based matching means `42` and `42.0` are different terms
+- **Range queries (`{"range": {"count": {"gte": 10, "lte": 100}}}`) cannot work** without BKD trees — they would require a full scan of keyword terms
+- Numeric precision edge cases (e.g., `42.0` vs `42` in JSON) may produce unexpected misses
+
+**Resolution:** Phase 2 — add a `PointValues` data structure to the Lucene layer (similar to Lucene's `IntPoint`/`LongPoint`/`DoublePoint`). Numeric fields would then be indexed as point values instead of keyword terms. This is a prerequisite for `range` query support.
+
+### 2. No `_source` Byte-Level Storage
+
+**v1 behavior:** `_source` is stored as a Go `string` via `document.Field.Value`, since the document model uses `string` for all field values.
+
+**Real ES/Lucene behavior:** Stored fields in Lucene are `byte[]`. ES stores `_source` as compressed bytes (LZ4 or DEFLATE) with no string conversion overhead.
+
+**Impact:** For large documents, the `[]byte` → `string` → `[]byte` round-trip is wasteful (extra allocation + copy). No correctness issue, but a performance concern at scale.
+
+**Resolution:** Phase 2 — consider adding a `BytesValue []byte` field to `document.Field` for stored fields, or change the stored fields codec to operate on raw bytes.
+
+### 3. No Document Versioning / Optimistic Concurrency
+
+**v1 behavior:** Re-indexing a document with the same `_id` overwrites it unconditionally (after delete-by-term + re-add).
+
+**Real ES behavior:** Every document has `_version`, `_seq_no`, and `_primary_term`. Clients can use `if_seq_no` + `if_primary_term` parameters for optimistic concurrency control. ES also maintains a `LiveVersionMap` for real-time version lookups of un-refreshed documents.
+
+**Impact:** No conflict detection for concurrent writers. Acceptable for single-user / testing scenarios, but problematic for production use.
+
+**Resolution:** Phase 2 — add a `_version` counter per document. Phase 3+ — add `_seq_no` / `_primary_term` when building toward distributed writes.
+
+### 4. No Real-Time Get
+
+**v1 behavior:** `GET /{index}/_doc/{id}` requires a prior `_refresh` to find the document (it searches via `_id` term query against the reader).
+
+**Real ES behavior:** GET-by-ID is **real-time** — ES checks the in-memory translog / `LiveVersionMap` before falling back to the Lucene reader. Documents are immediately visible to GET without refresh.
+
+**Impact:** Clients must call `_refresh` before GET, which is unintuitive and diverges from ES behavior.
+
+**Resolution:** Phase 2 — implement a `LiveVersionMap` (in-memory map of `_id` → latest version + source) that is checked before the Lucene reader. Cleared on refresh.
+
+### 5. JSON Number Precision for Large Integers
+
+**v1 behavior:** `json.Unmarshal` into `map[string]any` represents all JSON numbers as `float64`. For `long` fields, `int64(float64Value)` silently truncates values beyond 2^53.
+
+**Real ES behavior:** ES uses a custom JSON parser (based on Jackson) that preserves integer precision by parsing numbers directly as `long` when the target type is known.
+
+**Impact:** Documents with `long` field values > 9,007,199,254,740,992 (2^53) will lose precision silently.
+
+**Resolution:** Phase 2 — use `json.NewDecoder` with `UseNumber()` to get `json.Number`, then parse directly to `int64` via `strconv.ParseInt`. Alternatively, use a two-pass parse: first determine field types from the mapping, then parse values with known types.
+
+### 6. No Translog (Write-Ahead Log)
+
+**v1 behavior:** Documents are buffered in memory until flush/commit. A crash between indexing and commit loses data.
+
+**Real ES behavior:** Every index operation is written to a **translog** (write-ahead log) before acknowledgment. On crash recovery, uncommitted operations are replayed from the translog.
+
+**Impact:** Data loss on crash between indexing and commit.
+
+**Resolution:** Phase 2 — implement a translog that appends serialized index/delete operations to a file before returning success. On startup, replay uncommitted translog entries.
+
+---
+
 ## Future Roadmap
 
 This design explicitly supports the following extensions:
 
 ### Phase 2: Enhanced Single-Node
+- **BKD trees / point values**: Replace keyword-based numeric indexing with a proper `PointValues` data structure for `long`/`double` fields. Prerequisite for `range` queries. (Addresses [Limitation #1](#1-numeric-fields-use-inverted-index-instead-of-bkd-trees))
+- **Translog**: Write-ahead log for crash recovery — append index/delete ops to file before ack, replay on startup. (Addresses [Limitation #6](#6-no-translog-write-ahead-log))
+- **Real-time get**: In-memory `LiveVersionMap` (`_id` → source + version) checked before Lucene reader, cleared on refresh. (Addresses [Limitation #4](#4-no-real-time-get))
+- **Document versioning**: `_version` counter per document for optimistic concurrency control. (Addresses [Limitation #3](#3-no-document-versioning--optimistic-concurrency))
+- **Byte-level `_source` storage**: Store `_source` as raw `[]byte` with compression (LZ4) instead of Go string. (Addresses [Limitation #2](#2-no-_source-byte-level-storage))
+- **JSON number precision**: Use `json.Decoder` with `UseNumber()` to avoid float64 truncation of large integers. (Addresses [Limitation #5](#5-json-number-precision-for-large-integers))
 - **Dynamic mapping**: Auto-detect field types from document values
-- **Real-time get**: In-memory version map for un-refreshed documents (like ES's `LiveVersionMap`)
 - **Auto-refresh**: Configurable `refresh_interval` setting with background timer
-- **More query types**: `match_phrase` (→ PhraseQuery), `range`, `multi_match`, `exists`
+- **More query types**: `match_phrase` (→ PhraseQuery), `range` (requires BKD trees), `multi_match`, `exists`
 - **Aggregations**: Leverage existing NumericDocValues/SortedDocValues for terms/range aggs
 - **`_cat` APIs**: Human-readable status endpoints
-- **Translog**: Write-ahead log for crash recovery
 
 ### Phase 3: Multi-Shard
 - **Multiple shards per index**: Actual shard routing, per-shard directories
@@ -788,3 +870,5 @@ The following packages from the existing codebase are used directly:
 | `fst/` | FST builder/reader | Used internally by index package |
 
 No modifications to existing packages are expected for v1. The `server/` package is purely additive.
+
+**Future phases will require Lucene-layer additions:** BKD trees (point values) for numeric fields, byte-level stored fields, and a `MatchAllQuery` type. See [Known Limitations](#known-limitations--divergences-from-elasticsearch) for details.

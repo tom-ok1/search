@@ -6,7 +6,7 @@ import "gosearch/index"
 type SearchResult struct {
 	DocID      int // global DocID
 	Score      float64
-	Fields     map[string]string           // stored fields
+	Fields     map[string][]byte           // stored fields
 	SortValues []any                       // populated by TopFieldCollector
 	Positions  map[string]map[string][]int // field -> term -> positions
 }

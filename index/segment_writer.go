@@ -159,7 +159,7 @@ func writeSegmentMeta(dir store.Directory, meta SegmentMeta) (string, error) {
 //	[data: per-doc VInt-encoded fields]
 //	[offset_table: doc_count × uint64]  — docID → byte offset into data section
 //	[doc_count: uint32]                 — footer
-func writeStoredFieldsFromMap(dir store.Directory, segName string, docCount int, storedFields map[int]map[string]string) error {
+func writeStoredFieldsFromMap(dir store.Directory, segName string, docCount int, storedFields map[int]map[string][]byte) error {
 	out, err := dir.CreateOutput(segName + ".stored")
 	if err != nil {
 		return err
@@ -196,16 +196,15 @@ func writeStoredFieldsFromMap(dir store.Directory, segName string, docCount int,
 // writeStoredFieldsEntry writes a single document's stored fields to out
 // using the provided scratch buffer, and returns the number of bytes written.
 // The caller must provide a non-nil scratch buffer; it will be Reset before use.
-func writeStoredFieldsEntry(out store.IndexOutput, fields map[string]string, scratch *bytes.Buffer) (uint64, error) {
+func writeStoredFieldsEntry(out store.IndexOutput, fields map[string][]byte, scratch *bytes.Buffer) (uint64, error) {
 	scratch.Reset()
 	writeVIntToBuffer(scratch, len(fields))
 	for name, value := range fields {
 		nameBytes := []byte(name)
 		writeVIntToBuffer(scratch, len(nameBytes))
 		scratch.Write(nameBytes)
-		valueBytes := []byte(value)
-		writeVIntToBuffer(scratch, len(valueBytes))
-		scratch.Write(valueBytes)
+		writeVIntToBuffer(scratch, len(value))
+		scratch.Write(value)
 	}
 	if _, err := out.Write(scratch.Bytes()); err != nil {
 		return 0, err

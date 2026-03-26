@@ -126,7 +126,7 @@ func TestLiveDocsSegmentReaderStoredFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	innerFields, _ := ds.StoredFields(0)
-	if fields["body"] != innerFields["body"] {
+	if string(fields["body"]) != string(innerFields["body"]) {
 		t.Errorf("StoredFields delegation mismatch")
 	}
 }

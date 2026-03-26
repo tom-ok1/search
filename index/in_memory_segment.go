@@ -19,7 +19,7 @@ type InMemorySegment struct {
 	name         string
 	fields       map[string]*FieldIndex
 	docCount     int
-	storedFields map[int]map[string]string
+	storedFields map[int]map[string][]byte
 	fieldLengths map[string][]int
 	// Deletion marks: localDocID -> deleted
 	deletedDocs map[int]bool
@@ -32,7 +32,7 @@ func newInMemorySegment(name string) *InMemorySegment {
 	return &InMemorySegment{
 		name:             name,
 		fields:           make(map[string]*FieldIndex),
-		storedFields:     make(map[int]map[string]string),
+		storedFields:     make(map[int]map[string][]byte, 0),
 		fieldLengths:     make(map[string][]int),
 		deletedDocs:      make(map[int]bool),
 		numericDocValues: make(map[string][]int64),

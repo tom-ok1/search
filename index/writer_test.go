@@ -255,7 +255,7 @@ func TestStoredFieldForTextType(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fields["body"] != "hello world" {
+	if string(fields["body"]) != "hello world" {
 		t.Errorf("stored body: got %q, want %q", fields["body"], "hello world")
 	}
 }
@@ -284,7 +284,7 @@ func TestStoredFieldType(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fields["url"] != "https://example.com" {
+	if string(fields["url"]) != "https://example.com" {
 		t.Errorf("stored url: got %q, want %q", fields["url"], "https://example.com")
 	}
 	// Stored field should NOT be in the inverted index

@@ -262,9 +262,9 @@ func TestAutoMergePreservesStoredFields(t *testing.T) {
 			t.Errorf("expected 1 result for %q, got %d", term.String(), len(results))
 			continue
 		}
-		if results[0].Fields["body"] != text {
+		if string(results[0].Fields["body"]) != text {
 			t.Errorf("stored field mismatch for %q: got %q, want %q",
-				term.String(), results[0].Fields["body"], text)
+				term.String(), string(results[0].Fields["body"]), text)
 		}
 	}
 }

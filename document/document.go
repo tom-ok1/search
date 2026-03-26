@@ -20,6 +20,7 @@ const (
 type Field struct {
 	Name         string
 	Value        string
+	BytesValue   []byte // used for binary stored fields (e.g. _source)
 	Type         FieldType
 	NumericValue int64 // used when Type == FieldTypeNumericDocValues
 }
@@ -46,6 +47,14 @@ func (d *Document) AddNumericDocValuesField(name string, value int64) {
 		Name:         name,
 		Type:         FieldTypeNumericDocValues,
 		NumericValue: value,
+	})
+}
+
+func (d *Document) AddBytesField(name string, value []byte, fieldType FieldType) {
+	d.Fields = append(d.Fields, Field{
+		Name:       name,
+		BytesValue: value,
+		Type:       fieldType,
 	})
 }
 

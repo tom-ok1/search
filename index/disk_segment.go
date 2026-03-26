@@ -325,7 +325,7 @@ func (ds *DiskSegment) TotalFieldLength(field string) int {
 //	[data: per-doc VInt-encoded fields]
 //	[offset_table: doc_count × uint64]
 //	[doc_count: uint32]
-func (ds *DiskSegment) StoredFields(docID int) (map[string]string, error) {
+func (ds *DiskSegment) StoredFields(docID int) (map[string][]byte, error) {
 	if ds.stored == nil || docID >= ds.docCount {
 		return nil, nil
 	}
@@ -343,7 +343,7 @@ func (ds *DiskSegment) StoredFields(docID int) (map[string]string, error) {
 		return nil, fmt.Errorf("read field count: %w", err)
 	}
 
-	fields := make(map[string]string, fieldCount)
+	fields := make(map[string][]byte, fieldCount)
 	for range fieldCount {
 		nameLen, err := ds.stored.ReadVInt()
 		if err != nil {
@@ -361,7 +361,7 @@ func (ds *DiskSegment) StoredFields(docID int) (map[string]string, error) {
 		if err != nil {
 			return nil, fmt.Errorf("read field value: %w", err)
 		}
-		fields[string(nameBytes)] = string(valueBytes)
+		fields[string(nameBytes)] = valueBytes
 	}
 	return fields, nil
 }

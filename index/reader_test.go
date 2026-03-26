@@ -137,7 +137,7 @@ func TestIndexReaderGetStoredFields(t *testing.T) {
 	if fields == nil {
 		t.Fatal("expected stored fields for global docID 0")
 	}
-	if fields["body"] != "hello world" {
+	if string(fields["body"]) != "hello world" {
 		t.Errorf("global doc 0 body: got %q, want %q", fields["body"], "hello world")
 	}
 
@@ -146,7 +146,7 @@ func TestIndexReaderGetStoredFields(t *testing.T) {
 	if fields == nil {
 		t.Fatal("expected stored fields for global docID 2")
 	}
-	if fields["body"] != "world go" {
+	if string(fields["body"]) != "world go" {
 		t.Errorf("global doc 2 body: got %q, want %q", fields["body"], "world go")
 	}
 
@@ -376,7 +376,7 @@ func TestNRTReaderReflectsRecentWrites(t *testing.T) {
 	}
 
 	fields := reader.GetStoredFields(0)
-	if fields["body"] != "hello world" {
+	if string(fields["body"]) != "hello world" {
 		t.Errorf("NRT stored field: got %q, want %q", fields["body"], "hello world")
 	}
 }

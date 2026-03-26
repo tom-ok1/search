@@ -107,10 +107,16 @@ func (dwpt *DocumentsWriterPerThread) addDocument(doc *document.Document) (int64
 		// Stored fields
 		if field.Type == document.FieldTypeStored || field.Type == document.FieldTypeText {
 			if seg.storedFields[docID] == nil {
-				seg.storedFields[docID] = make(map[string]string)
+				seg.storedFields[docID] = make(map[string][]byte)
 			}
-			seg.storedFields[docID][field.Name] = field.Value
-			bytesAdded += int64(len(field.Name) + len(field.Value))
+			var storedValue []byte
+			if field.BytesValue != nil {
+				storedValue = field.BytesValue
+			} else {
+				storedValue = []byte(field.Value)
+			}
+			seg.storedFields[docID][field.Name] = storedValue
+			bytesAdded += int64(len(field.Name) + len(storedValue))
 		}
 	}
 

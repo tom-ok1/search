@@ -77,7 +77,7 @@ func TestE2EDiskSegmentSearch(t *testing.T) {
 
 	// Verify stored fields are accessible
 	for _, r := range results {
-		if r.Fields == nil || r.Fields["body"] == "" {
+		if r.Fields == nil || len(r.Fields["body"]) == 0 {
 			t.Errorf("missing stored fields for docID %d", r.DocID)
 		}
 	}
@@ -136,7 +136,7 @@ func TestE2EDeleteAndSearch(t *testing.T) {
 		t.Errorf("expected 2 results after deletion, got %d", len(results))
 	}
 	for _, r := range results {
-		if r.Fields["body"] == "the lazy brown dog" {
+		if string(r.Fields["body"]) == "the lazy brown dog" {
 			t.Errorf("deleted document should not appear in results")
 		}
 	}
@@ -320,7 +320,7 @@ func TestE2EForceMergeWithDeletions(t *testing.T) {
 
 	// Verify deleted doc is truly gone from stored fields
 	for _, r := range results {
-		if r.Fields["body"] == "alpha delta" {
+		if string(r.Fields["body"]) == "alpha delta" {
 			t.Errorf("deleted document 'alpha delta' should not appear after merge")
 		}
 	}
@@ -421,9 +421,9 @@ func TestE2EScoreOrdering(t *testing.T) {
 	}
 
 	// doc1 (fox fox fox) should score higher than doc0 (one fox)
-	if results[0].Fields["body"] != "fox fox fox dog" {
+	if string(results[0].Fields["body"]) != "fox fox fox dog" {
 		t.Errorf("expected highest scoring doc to be 'fox fox fox dog', got '%s'",
-			results[0].Fields["body"])
+			string(results[0].Fields["body"]))
 	}
 }
 
@@ -468,7 +468,7 @@ func TestE2EMultiFieldDocument(t *testing.T) {
 
 	// Verify stored fields from multiple fields are accessible
 	if len(results) == 1 {
-		if results[0].Fields["title"] == "" || results[0].Fields["body"] == "" {
+		if len(results[0].Fields["title"]) == 0 || len(results[0].Fields["body"]) == 0 {
 			t.Errorf("expected both title and body stored fields, got title=%q body=%q",
 				results[0].Fields["title"], results[0].Fields["body"])
 		}
@@ -527,8 +527,8 @@ func TestE2EThreeTermPhraseQuery(t *testing.T) {
 	if len(results) != 1 {
 		t.Errorf("expected 1 result for 3-term phrase 'quick brown fox', got %d", len(results))
 	}
-	if len(results) == 1 && results[0].Fields["body"] != "the quick brown fox jumps" {
-		t.Errorf("wrong doc matched: %s", results[0].Fields["body"])
+	if len(results) == 1 && string(results[0].Fields["body"]) != "the quick brown fox jumps" {
+		t.Errorf("wrong doc matched: %s", string(results[0].Fields["body"]))
 	}
 }
 
@@ -654,9 +654,9 @@ func TestE2EBooleanQueryMustWithShould(t *testing.T) {
 	}
 
 	// doc0 (matches both MUST and SHOULD) should rank higher
-	if results[0].Fields["body"] != "alpha beta gamma" {
+	if string(results[0].Fields["body"]) != "alpha beta gamma" {
 		t.Errorf("expected doc matching MUST+SHOULD to rank first, got '%s'",
-			results[0].Fields["body"])
+			string(results[0].Fields["body"]))
 	}
 	if results[0].Score <= results[1].Score {
 		t.Errorf("MUST+SHOULD doc should score higher: %f <= %f",
@@ -953,10 +953,10 @@ func TestStoredFieldsReadable(t *testing.T) {
 		if err != nil {
 			t.Fatalf("StoredFields returned error: %v", err)
 		}
-		if fields["title"] != "Test Title" {
+		if string(fields["title"]) != "Test Title" {
 			t.Errorf("title: got %q, want %q", fields["title"], "Test Title")
 		}
-		if fields["body"] != "Test body content here" {
+		if string(fields["body"]) != "Test body content here" {
 			t.Errorf("body: got %q, want %q", fields["body"], "Test body content here")
 		}
 	}

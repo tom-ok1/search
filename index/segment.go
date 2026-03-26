@@ -10,7 +10,7 @@ type SegmentReader interface {
 	DocFreq(field, term string) int
 	FieldLength(field string, docID int) int
 	TotalFieldLength(field string) int
-	StoredFields(docID int) (map[string]string, error)
+	StoredFields(docID int) (map[string][]byte, error)
 	PostingsIterator(field, term string) PostingsIterator
 	NumericDocValues(field string) NumericDocValues
 	DocValuesSkipper(field string) *DocValuesSkipper

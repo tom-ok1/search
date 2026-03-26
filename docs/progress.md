@@ -26,11 +26,11 @@ Building an Elasticsearch-compatible server layer on top of GoSearch's Lucene-li
 ## Step 2: Mapping & Document Parsing
 **Status:** NOT STARTED
 
-- [ ] Define `mapping.FieldType` constants and `mapping.MappingDefinition`
-- [ ] Implement `mapping.ParseDocument` (JSON source + mapping → `document.Document`)
-- [ ] Handle text, keyword, long, double, boolean field types
-- [ ] Add `_id` and `_source` fields
-- [ ] Unit tests for each field type
+- [x] Define `mapping.FieldType` constants and `mapping.MappingDefinition`
+- [x] Implement `mapping.ParseDocument` (JSON source + mapping → `document.Document`)
+- [x] Handle text, keyword, long, double, boolean field types
+- [x] Add `_id` and `_source` fields
+- [x] Unit tests for each field type
 
 **Deliverable:** Given a mapping and JSON doc, produces correct Lucene document.
 

@@ -58,10 +58,10 @@ func TestDWPTAddMultipleDocuments(t *testing.T) {
 	}
 
 	// Check stored fields
-	if dwpt.segment.storedFields[0]["url"] != "https://example.com" {
+	if string(dwpt.segment.storedFields[0]["url"]) != "https://example.com" {
 		t.Error("stored field 'url' missing for doc0")
 	}
-	if dwpt.segment.storedFields[0]["title"] != "Go Programming" {
+	if string(dwpt.segment.storedFields[0]["title"]) != "Go Programming" {
 		t.Error("stored field 'title' missing for doc0")
 	}
 

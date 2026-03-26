@@ -142,7 +142,7 @@ func TestDiskSegmentStoredFields(t *testing.T) {
 		if err != nil {
 			t.Fatalf("StoredFields(%d) error: %v", docID, err)
 		}
-		if got["title"] != want["title"] {
+		if string(got["title"]) != string(want["title"]) {
 			t.Errorf("StoredFields(%d)[title]: got %q, want %q", docID, got["title"], want["title"])
 		}
 	}

@@ -79,7 +79,7 @@ func (r *IndexReader) findLeaf(globalDocID int) (LeafReaderContext, int, bool) {
 }
 
 // GetStoredFields returns stored fields for a global DocID.
-func (r *IndexReader) GetStoredFields(globalDocID int) map[string]string {
+func (r *IndexReader) GetStoredFields(globalDocID int) map[string][]byte {
 	leaf, localDocID, ok := r.findLeaf(globalDocID)
 	if !ok {
 		return nil

@@ -12,7 +12,7 @@ type mockSegment struct {
 	name        string
 	docCount    int
 	deleted     map[int]bool
-	stored      map[int]map[string]string
+	stored      map[int]map[string][]byte
 	postings    map[string]map[string][]index.Posting
 	fieldLens   map[string]map[int]int
 	totalFldLen map[string]int
@@ -23,7 +23,7 @@ func newMockSegment(name string, docCount int) *mockSegment {
 		name:        name,
 		docCount:    docCount,
 		deleted:     make(map[int]bool),
-		stored:      make(map[int]map[string]string),
+		stored:      make(map[int]map[string][]byte),
 		postings:    make(map[string]map[string][]index.Posting),
 		fieldLens:   make(map[string]map[int]int),
 		totalFldLen: make(map[string]int),
@@ -62,7 +62,7 @@ func (m *mockSegment) TotalFieldLength(field string) int {
 	return m.totalFldLen[field]
 }
 
-func (m *mockSegment) StoredFields(docID int) (map[string]string, error) {
+func (m *mockSegment) StoredFields(docID int) (map[string][]byte, error) {
 	if fields, ok := m.stored[docID]; ok {
 		return fields, nil
 	}
@@ -156,9 +156,9 @@ func (s *mockScorer) Cost() int64 { return int64(len(s.entries)) }
 
 func TestSearchSingleSegment(t *testing.T) {
 	seg := newMockSegment("seg0", 3)
-	seg.stored[0] = map[string]string{"title": "first"}
-	seg.stored[1] = map[string]string{"title": "second"}
-	seg.stored[2] = map[string]string{"title": "third"}
+	seg.stored[0] = map[string][]byte{"title": []byte("first")}
+	seg.stored[1] = map[string][]byte{"title": []byte("second")}
+	seg.stored[2] = map[string][]byte{"title": []byte("third")}
 
 	reader := index.NewIndexReader([]index.SegmentReader{seg})
 	searcher := NewIndexSearcher(reader)
@@ -183,20 +183,20 @@ func TestSearchSingleSegment(t *testing.T) {
 			results[0].Score, results[1].Score, results[2].Score)
 	}
 
-	if results[0].Fields["title"] != "first" {
+	if string(results[0].Fields["title"]) != "first" {
 		t.Errorf("expected title 'first', got %q", results[0].Fields["title"])
 	}
 }
 
 func TestSearchMultipleSegments(t *testing.T) {
 	seg0 := newMockSegment("seg0", 2)
-	seg0.stored[0] = map[string]string{"title": "doc0"}
-	seg0.stored[1] = map[string]string{"title": "doc1"}
+	seg0.stored[0] = map[string][]byte{"title": []byte("doc0")}
+	seg0.stored[1] = map[string][]byte{"title": []byte("doc1")}
 
 	seg1 := newMockSegment("seg1", 3)
-	seg1.stored[0] = map[string]string{"title": "doc2"}
-	seg1.stored[1] = map[string]string{"title": "doc3"}
-	seg1.stored[2] = map[string]string{"title": "doc4"}
+	seg1.stored[0] = map[string][]byte{"title": []byte("doc2")}
+	seg1.stored[1] = map[string][]byte{"title": []byte("doc3")}
+	seg1.stored[2] = map[string][]byte{"title": []byte("doc4")}
 
 	reader := index.NewIndexReader([]index.SegmentReader{seg0, seg1})
 	searcher := NewIndexSearcher(reader)
@@ -229,9 +229,9 @@ func TestSearchMultipleSegments(t *testing.T) {
 
 func TestSearchSkipsDeletedDocs(t *testing.T) {
 	seg := newMockSegment("seg0", 3)
-	seg.stored[0] = map[string]string{"title": "alive"}
-	seg.stored[1] = map[string]string{"title": "deleted"}
-	seg.stored[2] = map[string]string{"title": "alive2"}
+	seg.stored[0] = map[string][]byte{"title": []byte("alive")}
+	seg.stored[1] = map[string][]byte{"title": []byte("deleted")}
+	seg.stored[2] = map[string][]byte{"title": []byte("alive2")}
 	seg.deleted[1] = true
 
 	reader := index.NewIndexReader([]index.SegmentReader{seg})
@@ -262,7 +262,7 @@ func TestSearchSkipsDeletedDocs(t *testing.T) {
 func TestSearchTopK(t *testing.T) {
 	seg := newMockSegment("seg0", 5)
 	for i := range 5 {
-		seg.stored[i] = map[string]string{}
+		seg.stored[i] = map[string][]byte{}
 	}
 
 	reader := index.NewIndexReader([]index.SegmentReader{seg})
@@ -343,9 +343,9 @@ func TestSearchAllDocsDeleted(t *testing.T) {
 
 func TestSearchStoredFieldsPopulated(t *testing.T) {
 	seg := newMockSegment("seg0", 1)
-	seg.stored[0] = map[string]string{
-		"title": "Hello World",
-		"url":   "https://example.com",
+	seg.stored[0] = map[string][]byte{
+		"title": []byte("Hello World"),
+		"url":   []byte("https://example.com"),
 	}
 
 	reader := index.NewIndexReader([]index.SegmentReader{seg})
@@ -362,10 +362,10 @@ func TestSearchStoredFieldsPopulated(t *testing.T) {
 		t.Fatalf("expected 1 result, got %d", len(results))
 	}
 
-	if results[0].Fields["title"] != "Hello World" {
+	if string(results[0].Fields["title"]) != "Hello World" {
 		t.Errorf("expected title 'Hello World', got %q", results[0].Fields["title"])
 	}
-	if results[0].Fields["url"] != "https://example.com" {
+	if string(results[0].Fields["url"]) != "https://example.com" {
 		t.Errorf("expected url 'https://example.com', got %q", results[0].Fields["url"])
 	}
 }
@@ -374,8 +374,8 @@ func TestSearchTopKAcrossMultipleSegments(t *testing.T) {
 	seg0 := newMockSegment("seg0", 3)
 	seg1 := newMockSegment("seg1", 3)
 	for i := range 3 {
-		seg0.stored[i] = map[string]string{}
-		seg1.stored[i] = map[string]string{}
+		seg0.stored[i] = map[string][]byte{}
+		seg1.stored[i] = map[string][]byte{}
 	}
 
 	reader := index.NewIndexReader([]index.SegmentReader{seg0, seg1})
@@ -412,7 +412,7 @@ func TestSearchTopKAcrossMultipleSegments(t *testing.T) {
 func TestSearchDeletedDocsNotCountedInTopK(t *testing.T) {
 	seg := newMockSegment("seg0", 4)
 	for i := range 4 {
-		seg.stored[i] = map[string]string{}
+		seg.stored[i] = map[string][]byte{}
 	}
 	seg.deleted[1] = true
 	seg.deleted[3] = true
@@ -444,8 +444,8 @@ func TestSearchDeletedDocsNotCountedInTopK(t *testing.T) {
 
 func TestSearchPositionsWithTermQuery(t *testing.T) {
 	seg := newMockSegment("seg0", 2)
-	seg.stored[0] = map[string]string{"title": "doc0"}
-	seg.stored[1] = map[string]string{"title": "doc1"}
+	seg.stored[0] = map[string][]byte{"title": []byte("doc0")}
+	seg.stored[1] = map[string][]byte{"title": []byte("doc1")}
 	seg.postings["body"] = map[string][]index.Posting{
 		"hello": {
 			{DocID: 0, Freq: 2, Positions: []int{0, 5}},
@@ -485,7 +485,7 @@ func TestSearchPositionsWithTermQuery(t *testing.T) {
 
 func TestSearchPositionsWithPhraseQuery(t *testing.T) {
 	seg := newMockSegment("seg0", 1)
-	seg.stored[0] = map[string]string{"title": "doc0"}
+	seg.stored[0] = map[string][]byte{"title": []byte("doc0")}
 	seg.postings["body"] = map[string][]index.Posting{
 		"quick": {{DocID: 0, Freq: 1, Positions: []int{0}}},
 		"fox":   {{DocID: 0, Freq: 1, Positions: []int{1}}},
@@ -519,8 +519,8 @@ func TestSearchPositionsWithPhraseQuery(t *testing.T) {
 
 func TestSearchPositionsBooleanQueryExcludesMustNot(t *testing.T) {
 	seg := newMockSegment("seg0", 2)
-	seg.stored[0] = map[string]string{"title": "doc0"}
-	seg.stored[1] = map[string]string{"title": "doc1"}
+	seg.stored[0] = map[string][]byte{"title": []byte("doc0")}
+	seg.stored[1] = map[string][]byte{"title": []byte("doc1")}
 	seg.postings["body"] = map[string][]index.Posting{
 		"hello": {
 			{DocID: 0, Freq: 1, Positions: []int{0}},
