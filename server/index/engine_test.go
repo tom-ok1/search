@@ -361,6 +361,138 @@ func TestRouteShard(t *testing.T) {
 	}
 }
 
+func TestEngine_IndexAndSearchSpecialChars(t *testing.T) {
+	dir, err := store.NewFSDirectory(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	eng, err := index.NewEngine(dir, newTestFieldAnalyzers())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+
+	doc0 := document.NewDocument()
+	doc0.AddField("_id", "1", document.FieldTypeKeyword)
+	doc0.AddField("title", "café résumé", document.FieldTypeText)
+	eng.Index(doc0)
+
+	doc1 := document.NewDocument()
+	doc1.AddField("_id", "2", document.FieldTypeKeyword)
+	doc1.AddField("title", "hello 🔍 world", document.FieldTypeText)
+	eng.Index(doc1)
+
+	doc2 := document.NewDocument()
+	doc2.AddField("_id", "3", document.FieldTypeKeyword)
+	doc2.AddField("title", "𠮷野家 テスト", document.FieldTypeText)
+	eng.Index(doc2)
+
+	if err := eng.Refresh(); err != nil {
+		t.Fatal(err)
+	}
+
+	searcher := eng.Searcher()
+
+	tests := []struct {
+		term     string
+		expected int
+	}{
+		{"café", 1},
+		{"résumé", 1},
+		{"🔍", 1},
+		{"𠮷野家", 1},
+		{"テスト", 1},
+	}
+	for _, tt := range tests {
+		results := searcher.Search(search.NewTermQuery("title", tt.term), search.NewTopKCollector(10))
+		if len(results) != tt.expected {
+			t.Errorf("term %q: expected %d results, got %d", tt.term, tt.expected, len(results))
+		}
+	}
+}
+
+func TestEngine_DeleteSpecialCharID(t *testing.T) {
+	dir, err := store.NewFSDirectory(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	eng, err := index.NewEngine(dir, newTestFieldAnalyzers())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+
+	doc := document.NewDocument()
+	doc.AddField("_id", "user@example.com", document.FieldTypeKeyword)
+	doc.AddField("title", "test doc", document.FieldTypeText)
+	eng.Index(doc)
+	eng.Refresh()
+
+	if eng.Searcher().Reader().LiveDocCount() != 1 {
+		t.Fatal("expected 1 doc")
+	}
+
+	eng.Delete("_id", "user@example.com")
+	eng.Refresh()
+
+	if eng.Searcher().Reader().LiveDocCount() != 0 {
+		t.Fatalf("expected 0 docs after delete, got %d", eng.Searcher().Reader().LiveDocCount())
+	}
+}
+
+func TestIndexShard_SpecialCharsRoundtrip(t *testing.T) {
+	m := &mapping.MappingDefinition{
+		Properties: map[string]mapping.FieldMapping{
+			"title":    {Type: mapping.FieldTypeText},
+			"category": {Type: mapping.FieldTypeKeyword},
+		},
+	}
+
+	dir, err := store.NewFSDirectory(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	shard, err := index.NewIndexShard(0, "test-index", dir, m, newTestRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer shard.Close()
+
+	shard.Index("1", []byte(`{"title": "café résumé", "category": "New York"}`))
+	shard.Index("2", []byte(`{"title": "🔍 search 🔎", "category": "C++"}`))
+	shard.Index("3", []byte(`{"title": "𠮷野家 テスト", "category": "user@example.com"}`))
+	shard.Refresh()
+
+	searcher := shard.Searcher()
+
+	// Text field search
+	results := searcher.Search(search.NewTermQuery("title", "café"), search.NewTopKCollector(10))
+	if len(results) != 1 {
+		t.Errorf("expected 1 result for 'café', got %d", len(results))
+	}
+
+	// Keyword field exact match with spaces
+	results = searcher.Search(search.NewTermQuery("category", "New York"), search.NewTopKCollector(10))
+	if len(results) != 1 {
+		t.Errorf("expected 1 result for keyword 'New York', got %d", len(results))
+	}
+
+	// Keyword partial should not match
+	results = searcher.Search(search.NewTermQuery("category", "New"), search.NewTopKCollector(10))
+	if len(results) != 0 {
+		t.Errorf("expected 0 results for partial keyword 'New', got %d", len(results))
+	}
+
+	// Keyword with special chars
+	results = searcher.Search(search.NewTermQuery("category", "C++"), search.NewTopKCollector(10))
+	if len(results) != 1 {
+		t.Errorf("expected 1 result for keyword 'C++', got %d", len(results))
+	}
+}
+
 func TestIntegration_IndexLifecycle(t *testing.T) {
 	dataPath := t.TempDir()
 	meta := &cluster.IndexMetadata{
