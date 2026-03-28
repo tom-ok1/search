@@ -91,6 +91,130 @@ func TestNGramTokenizerJapanese(t *testing.T) {
 	}
 }
 
+func TestNGramTokenizerExactMinGram(t *testing.T) {
+	tokenizer := NewNGramTokenizer(2, 3)
+	tokens, err := tokenizer.Tokenize(strings.NewReader("ab"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Input length == minGram: should produce exactly one token
+	if len(tokens) != 1 {
+		t.Fatalf("expected 1 token, got %d", len(tokens))
+	}
+	if tokens[0].Term != "ab" {
+		t.Errorf("expected %q, got %q", "ab", tokens[0].Term)
+	}
+	if tokens[0].StartOffset != 0 || tokens[0].EndOffset != 2 {
+		t.Errorf("offsets: expected [0,2], got [%d,%d]", tokens[0].StartOffset, tokens[0].EndOffset)
+	}
+}
+
+func TestNGramTokenizerMixedByteWidth(t *testing.T) {
+	tokenizer := NewNGramTokenizer(2, 2)
+	// "aあ🔍" = a(1 byte) + あ(3 bytes) + 🔍(4 bytes) = 8 bytes, 3 runes
+	tokens, err := tokenizer.Tokenize(strings.NewReader("aあ🔍"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// bigrams: "aあ", "あ🔍"
+	if len(tokens) != 2 {
+		t.Fatalf("expected 2 tokens, got %d", len(tokens))
+	}
+	if tokens[0].Term != "aあ" {
+		t.Errorf("token 0: expected %q, got %q", "aあ", tokens[0].Term)
+	}
+	// "aあ" = 1 + 3 = 4 bytes
+	if tokens[0].StartOffset != 0 || tokens[0].EndOffset != 4 {
+		t.Errorf("token 0 offsets: expected [0,4], got [%d,%d]", tokens[0].StartOffset, tokens[0].EndOffset)
+	}
+	if tokens[1].Term != "あ🔍" {
+		t.Errorf("token 1: expected %q, got %q", "あ🔍", tokens[1].Term)
+	}
+	// "あ🔍" starts at byte 1, ends at byte 8
+	if tokens[1].StartOffset != 1 || tokens[1].EndOffset != 8 {
+		t.Errorf("token 1 offsets: expected [1,8], got [%d,%d]", tokens[1].StartOffset, tokens[1].EndOffset)
+	}
+}
+
+func TestNGramTokenizerEmojiOffsets(t *testing.T) {
+	tokenizer := NewNGramTokenizer(2, 2)
+	// "🔍🔎" = 4 + 4 = 8 bytes, 2 runes
+	tokens, err := tokenizer.Tokenize(strings.NewReader("🔍🔎"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tokens) != 1 {
+		t.Fatalf("expected 1 token, got %d", len(tokens))
+	}
+	if tokens[0].Term != "🔍🔎" {
+		t.Errorf("expected %q, got %q", "🔍🔎", tokens[0].Term)
+	}
+	if tokens[0].StartOffset != 0 || tokens[0].EndOffset != 8 {
+		t.Errorf("offsets: expected [0,8], got [%d,%d]", tokens[0].StartOffset, tokens[0].EndOffset)
+	}
+}
+
+func TestNGramTokenizerCJKExtensionB(t *testing.T) {
+	tokenizer := NewNGramTokenizer(2, 2)
+	// 𠮷(4 bytes) + 野(3 bytes) + 家(3 bytes) = 10 bytes, 3 runes
+	tokens, err := tokenizer.Tokenize(strings.NewReader("𠮷野家"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// bigrams: "𠮷野", "野家"
+	if len(tokens) != 2 {
+		t.Fatalf("expected 2 tokens, got %d", len(tokens))
+	}
+	if tokens[0].Term != "𠮷野" {
+		t.Errorf("token 0: expected %q, got %q", "𠮷野", tokens[0].Term)
+	}
+	// "𠮷野" = 4 + 3 = 7 bytes
+	if tokens[0].StartOffset != 0 || tokens[0].EndOffset != 7 {
+		t.Errorf("token 0 offsets: expected [0,7], got [%d,%d]", tokens[0].StartOffset, tokens[0].EndOffset)
+	}
+	if tokens[1].Term != "野家" {
+		t.Errorf("token 1: expected %q, got %q", "野家", tokens[1].Term)
+	}
+	// "野家" starts at byte 4, ends at byte 10
+	if tokens[1].StartOffset != 4 || tokens[1].EndOffset != 10 {
+		t.Errorf("token 1 offsets: expected [4,10], got [%d,%d]", tokens[1].StartOffset, tokens[1].EndOffset)
+	}
+}
+
+func TestNGramTokenizerWhitespaceInInput(t *testing.T) {
+	tokenizer := NewNGramTokenizer(2, 2)
+	// NGram tokenizer doesn't split on whitespace - it generates ngrams of the whole input
+	tokens, err := tokenizer.Tokenize(strings.NewReader("a b"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// "a b" = 3 runes, bigrams: "a ", " b"
+	if len(tokens) != 2 {
+		t.Fatalf("expected 2 tokens, got %d", len(tokens))
+	}
+	if tokens[0].Term != "a " {
+		t.Errorf("token 0: expected %q, got %q", "a ", tokens[0].Term)
+	}
+	if tokens[1].Term != " b" {
+		t.Errorf("token 1: expected %q, got %q", " b", tokens[1].Term)
+	}
+}
+
+func TestNGramTokenizerSpecialChars(t *testing.T) {
+	tokenizer := NewNGramTokenizer(2, 2)
+	tokens, err := tokenizer.Tokenize(strings.NewReader("@#$"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// bigrams: "@#", "#$"
+	if len(tokens) != 2 {
+		t.Fatalf("expected 2 tokens, got %d", len(tokens))
+	}
+	if tokens[0].Term != "@#" || tokens[1].Term != "#$" {
+		t.Errorf("unexpected terms: %q, %q", tokens[0].Term, tokens[1].Term)
+	}
+}
+
 func TestNGramTokenizerJapaneseOffsets(t *testing.T) {
 	tokenizer := NewNGramTokenizer(2, 2)
 	// Each Japanese character is 3 bytes in UTF-8
