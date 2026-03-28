@@ -10,12 +10,12 @@ import (
 )
 
 func TestInvertedIndex(t *testing.T) {
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
-	)
+	))
 	dir, _ := store.NewFSDirectory(t.TempDir())
-	writer := NewIndexWriter(dir, analyzer, 100)
+	writer := NewIndexWriter(dir, fa, 100)
 
 	doc0 := document.NewDocument()
 	doc0.AddField("title", "The Quick Brown Fox", document.FieldTypeText)
@@ -59,12 +59,12 @@ func TestInvertedIndex(t *testing.T) {
 }
 
 func TestPostingFreqAndPositions(t *testing.T) {
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
-	)
+	))
 	dir, _ := store.NewFSDirectory(t.TempDir())
-	writer := NewIndexWriter(dir, analyzer, 100)
+	writer := NewIndexWriter(dir, fa, 100)
 
 	doc := document.NewDocument()
 	doc.AddField("body", "the fox and the fox", document.FieldTypeText)
@@ -95,13 +95,13 @@ func TestPostingFreqAndPositions(t *testing.T) {
 }
 
 func TestSegmentFlush(t *testing.T) {
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
-	)
+	))
 	dir, _ := store.NewFSDirectory(t.TempDir())
 	// Buffer size 2: auto-flush after 2 documents
-	writer := NewIndexWriter(dir, analyzer, 2)
+	writer := NewIndexWriter(dir, fa, 2)
 
 	doc0 := document.NewDocument()
 	doc0.AddField("body", "hello world", document.FieldTypeText)
@@ -137,12 +137,12 @@ func TestSegmentFlush(t *testing.T) {
 }
 
 func TestDeleteDocument(t *testing.T) {
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
-	)
+	))
 	dir, _ := store.NewFSDirectory(t.TempDir())
-	writer := NewIndexWriter(dir, analyzer, 100)
+	writer := NewIndexWriter(dir, fa, 100)
 
 	doc0 := document.NewDocument()
 	doc0.AddField("id", "1", document.FieldTypeKeyword)
@@ -174,12 +174,12 @@ func TestDeleteDocument(t *testing.T) {
 }
 
 func TestFlushEmptyBuffer(t *testing.T) {
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
-	)
+	))
 	dir, _ := store.NewFSDirectory(t.TempDir())
-	writer := NewIndexWriter(dir, analyzer, 100)
+	writer := NewIndexWriter(dir, fa, 100)
 
 	// Flush with no documents should be a no-op
 	if err := writer.Flush(); err != nil {
@@ -191,12 +191,12 @@ func TestFlushEmptyBuffer(t *testing.T) {
 }
 
 func TestKeywordField(t *testing.T) {
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
-	)
+	))
 	dir, _ := store.NewFSDirectory(t.TempDir())
-	writer := NewIndexWriter(dir, analyzer, 100)
+	writer := NewIndexWriter(dir, fa, 100)
 
 	doc := document.NewDocument()
 	doc.AddField("status", "active", document.FieldTypeKeyword)
@@ -233,12 +233,12 @@ func TestKeywordField(t *testing.T) {
 }
 
 func TestStoredFieldForTextType(t *testing.T) {
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
-	)
+	))
 	dir, _ := store.NewFSDirectory(t.TempDir())
-	writer := NewIndexWriter(dir, analyzer, 100)
+	writer := NewIndexWriter(dir, fa, 100)
 
 	doc := document.NewDocument()
 	doc.AddField("body", "hello world", document.FieldTypeText)
@@ -261,12 +261,12 @@ func TestStoredFieldForTextType(t *testing.T) {
 }
 
 func TestStoredFieldType(t *testing.T) {
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
-	)
+	))
 	dir, _ := store.NewFSDirectory(t.TempDir())
-	writer := NewIndexWriter(dir, analyzer, 100)
+	writer := NewIndexWriter(dir, fa, 100)
 
 	doc := document.NewDocument()
 	doc.AddField("url", "https://example.com", document.FieldTypeStored)
@@ -294,12 +294,12 @@ func TestStoredFieldType(t *testing.T) {
 }
 
 func TestDeleteInBufferBeforeFlush(t *testing.T) {
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
-	)
+	))
 	dir, _ := store.NewFSDirectory(t.TempDir())
-	writer := NewIndexWriter(dir, analyzer, 100)
+	writer := NewIndexWriter(dir, fa, 100)
 
 	doc0 := document.NewDocument()
 	doc0.AddField("id", "1", document.FieldTypeKeyword)
@@ -326,12 +326,12 @@ func TestDeleteInBufferBeforeFlush(t *testing.T) {
 }
 
 func TestDeleteMultipleMatchingDocs(t *testing.T) {
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
-	)
+	))
 	dir, _ := store.NewFSDirectory(t.TempDir())
-	writer := NewIndexWriter(dir, analyzer, 100)
+	writer := NewIndexWriter(dir, fa, 100)
 
 	// Add docs with duplicate keyword values
 	for _, text := range []string{"hello world", "hello go", "hello rust"} {
@@ -365,12 +365,12 @@ func TestDeleteMultipleMatchingDocs(t *testing.T) {
 }
 
 func TestWriterClose(t *testing.T) {
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
-	)
+	))
 	dir, _ := store.NewFSDirectory(t.TempDir())
-	writer := NewIndexWriter(dir, analyzer, 100)
+	writer := NewIndexWriter(dir, fa, 100)
 
 	doc := document.NewDocument()
 	doc.AddField("body", "hello", document.FieldTypeText)
@@ -383,12 +383,12 @@ func TestWriterClose(t *testing.T) {
 }
 
 func TestMultiFieldDocument(t *testing.T) {
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
-	)
+	))
 	dir, _ := store.NewFSDirectory(t.TempDir())
-	writer := NewIndexWriter(dir, analyzer, 100)
+	writer := NewIndexWriter(dir, fa, 100)
 
 	doc := document.NewDocument()
 	doc.AddField("title", "Go Programming", document.FieldTypeText)
@@ -421,12 +421,12 @@ func TestMultiFieldDocument(t *testing.T) {
 }
 
 func TestDeleteAcrossMultipleSegments(t *testing.T) {
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
-	)
+	))
 	dir, _ := store.NewFSDirectory(t.TempDir())
-	writer := NewIndexWriter(dir, analyzer, 2)
+	writer := NewIndexWriter(dir, fa, 2)
 
 	// Segment 0: docs with id=a
 	doc := document.NewDocument()
@@ -464,12 +464,12 @@ func TestDeleteAcrossMultipleSegments(t *testing.T) {
 }
 
 func TestCommitPersistsDeletes(t *testing.T) {
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
-	)
+	))
 	dir, _ := store.NewFSDirectory(t.TempDir())
-	writer := NewIndexWriter(dir, analyzer, 100)
+	writer := NewIndexWriter(dir, fa, 100)
 
 	doc0 := document.NewDocument()
 	doc0.AddField("id", "1", document.FieldTypeKeyword)
@@ -519,14 +519,14 @@ func TestCommitPersistsDeletes(t *testing.T) {
 // TestNewWriterLoadsExistingSegments verifies that a new IndexWriter
 // loads committed segments from disk and can read them via NRT reader.
 func TestNewWriterLoadsExistingSegments(t *testing.T) {
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
-	)
+	))
 	dir, _ := store.NewFSDirectory(t.TempDir())
 
 	// Session 1: add documents and commit
-	w1 := NewIndexWriter(dir, analyzer, 100)
+	w1 := NewIndexWriter(dir, fa, 100)
 	doc0 := document.NewDocument()
 	doc0.AddField("body", "hello world", document.FieldTypeText)
 	w1.AddDocument(doc0)
@@ -541,7 +541,7 @@ func TestNewWriterLoadsExistingSegments(t *testing.T) {
 	w1.Close()
 
 	// Session 2: open a new writer on the same directory
-	w2 := NewIndexWriter(dir, analyzer, 100)
+	w2 := NewIndexWriter(dir, fa, 100)
 	defer w2.Close()
 
 	// The new writer should have loaded the committed segments
@@ -564,14 +564,14 @@ func TestNewWriterLoadsExistingSegments(t *testing.T) {
 // existing state, the writer can add new documents without segment
 // name collisions and the new documents are queryable alongside old ones.
 func TestNewWriterCanAddDocumentsAfterLoad(t *testing.T) {
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
-	)
+	))
 	dir, _ := store.NewFSDirectory(t.TempDir())
 
 	// Session 1: add and commit
-	w1 := NewIndexWriter(dir, analyzer, 100)
+	w1 := NewIndexWriter(dir, fa, 100)
 	doc0 := document.NewDocument()
 	doc0.AddField("body", "hello world", document.FieldTypeText)
 	w1.AddDocument(doc0)
@@ -581,7 +581,7 @@ func TestNewWriterCanAddDocumentsAfterLoad(t *testing.T) {
 	w1.Close()
 
 	// Session 2: open, add more, commit
-	w2 := NewIndexWriter(dir, analyzer, 100)
+	w2 := NewIndexWriter(dir, fa, 100)
 	doc1 := document.NewDocument()
 	doc1.AddField("body", "hello go", document.FieldTypeText)
 	w2.AddDocument(doc1)
@@ -591,7 +591,7 @@ func TestNewWriterCanAddDocumentsAfterLoad(t *testing.T) {
 	w2.Close()
 
 	// Session 3: verify all documents are visible
-	w3 := NewIndexWriter(dir, analyzer, 100)
+	w3 := NewIndexWriter(dir, fa, 100)
 	defer w3.Close()
 
 	reader, err := OpenNRTReader(w3)
@@ -611,14 +611,14 @@ func TestNewWriterCanAddDocumentsAfterLoad(t *testing.T) {
 // TestNewWriterPreservesDeletes verifies that deletions committed in
 // a prior session are visible after reopening the writer.
 func TestNewWriterPreservesDeletes(t *testing.T) {
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
-	)
+	))
 	dir, _ := store.NewFSDirectory(t.TempDir())
 
 	// Session 1: add docs, delete one, commit
-	w1 := NewIndexWriter(dir, analyzer, 100)
+	w1 := NewIndexWriter(dir, fa, 100)
 	doc0 := document.NewDocument()
 	doc0.AddField("id", "1", document.FieldTypeKeyword)
 	doc0.AddField("body", "hello world", document.FieldTypeText)
@@ -636,7 +636,7 @@ func TestNewWriterPreservesDeletes(t *testing.T) {
 	w1.Close()
 
 	// Session 2: reopen and verify deletion is preserved
-	w2 := NewIndexWriter(dir, analyzer, 100)
+	w2 := NewIndexWriter(dir, fa, 100)
 	defer w2.Close()
 
 	reader, err := OpenNRTReader(w2)
@@ -656,14 +656,14 @@ func TestNewWriterPreservesDeletes(t *testing.T) {
 // TestNewWriterDeletesAcrossSessions verifies that a new writer can
 // delete documents from segments committed in a prior session.
 func TestNewWriterDeletesAcrossSessions(t *testing.T) {
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
-	)
+	))
 	dir, _ := store.NewFSDirectory(t.TempDir())
 
 	// Session 1: add docs and commit
-	w1 := NewIndexWriter(dir, analyzer, 100)
+	w1 := NewIndexWriter(dir, fa, 100)
 	doc0 := document.NewDocument()
 	doc0.AddField("id", "1", document.FieldTypeKeyword)
 	doc0.AddField("body", "hello world", document.FieldTypeText)
@@ -680,7 +680,7 @@ func TestNewWriterDeletesAcrossSessions(t *testing.T) {
 	w1.Close()
 
 	// Session 2: delete a document from the prior session's segment
-	w2 := NewIndexWriter(dir, analyzer, 100)
+	w2 := NewIndexWriter(dir, fa, 100)
 	w2.DeleteDocuments("id", "1")
 	if err := w2.Commit(); err != nil {
 		t.Fatal(err)
@@ -713,14 +713,14 @@ func TestNewWriterDeletesAcrossSessions(t *testing.T) {
 // TestNewWriterSegmentNameContinuity verifies that the segment counter
 // continues from the highest existing segment number, avoiding name collisions.
 func TestNewWriterSegmentNameContinuity(t *testing.T) {
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
-	)
+	))
 	dir, _ := store.NewFSDirectory(t.TempDir())
 
 	// Session 1: add docs across multiple segments (bufferSize=1 forces flush per doc)
-	w1 := NewIndexWriter(dir, analyzer, 1)
+	w1 := NewIndexWriter(dir, fa, 1)
 	for range 3 {
 		doc := document.NewDocument()
 		doc.AddField("body", "hello", document.FieldTypeText)
@@ -732,7 +732,7 @@ func TestNewWriterSegmentNameContinuity(t *testing.T) {
 	w1.Close()
 
 	// Session 2: add another doc — its segment name must not collide
-	w2 := NewIndexWriter(dir, analyzer, 100)
+	w2 := NewIndexWriter(dir, fa, 100)
 	doc := document.NewDocument()
 	doc.AddField("body", "world", document.FieldTypeText)
 	w2.AddDocument(doc)
@@ -770,14 +770,14 @@ func TestNewWriterSegmentNameContinuity(t *testing.T) {
 // TestNewWriterMultipleSegmentsLoad verifies that a writer correctly
 // loads multiple segments committed in a prior session.
 func TestNewWriterMultipleSegmentsLoad(t *testing.T) {
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
-	)
+	))
 	dir, _ := store.NewFSDirectory(t.TempDir())
 
 	// Session 1: create multiple segments (bufferSize=2)
-	w1 := NewIndexWriter(dir, analyzer, 2)
+	w1 := NewIndexWriter(dir, fa, 2)
 	for i, text := range []string{"hello world", "hello go", "world go"} {
 		doc := document.NewDocument()
 		doc.AddField("id", fmt.Sprintf("%d", i), document.FieldTypeKeyword)
@@ -790,7 +790,7 @@ func TestNewWriterMultipleSegmentsLoad(t *testing.T) {
 	w1.Close()
 
 	// Session 2: load and verify
-	w2 := NewIndexWriter(dir, analyzer, 100)
+	w2 := NewIndexWriter(dir, fa, 100)
 	defer w2.Close()
 
 	reader, err := OpenNRTReader(w2)
@@ -810,13 +810,13 @@ func TestNewWriterMultipleSegmentsLoad(t *testing.T) {
 // TestNewWriterEmptyDirectory verifies that creating a writer on a
 // fresh directory (no existing segments) still works as before.
 func TestNewWriterEmptyDirectory(t *testing.T) {
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
-	)
+	))
 	dir, _ := store.NewFSDirectory(t.TempDir())
 
-	w := NewIndexWriter(dir, analyzer, 100)
+	w := NewIndexWriter(dir, fa, 100)
 	defer w.Close()
 
 	doc := document.NewDocument()
@@ -842,14 +842,14 @@ func TestNewWriterEmptyDirectory(t *testing.T) {
 // reopening use the correct generation number (continuing from the
 // prior session's generation, not restarting from 0).
 func TestNewWriterGenerationContinuity(t *testing.T) {
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
-	)
+	))
 	dir, _ := store.NewFSDirectory(t.TempDir())
 
 	// Session 1: commit (generation becomes 1)
-	w1 := NewIndexWriter(dir, analyzer, 100)
+	w1 := NewIndexWriter(dir, fa, 100)
 	doc := document.NewDocument()
 	doc.AddField("body", "hello", document.FieldTypeText)
 	w1.AddDocument(doc)
@@ -859,7 +859,7 @@ func TestNewWriterGenerationContinuity(t *testing.T) {
 	w1.Close()
 
 	// Session 2: commit again (generation should become 2, not 1)
-	w2 := NewIndexWriter(dir, analyzer, 100)
+	w2 := NewIndexWriter(dir, fa, 100)
 	doc2 := document.NewDocument()
 	doc2.AddField("body", "world", document.FieldTypeText)
 	w2.AddDocument(doc2)
@@ -890,12 +890,12 @@ func TestNewWriterGenerationContinuity(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCommitCleansUpOldSegmentsFile(t *testing.T) {
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
-	)
+	))
 	dir, _ := store.NewFSDirectory(t.TempDir())
-	writer := NewIndexWriter(dir, analyzer, 100)
+	writer := NewIndexWriter(dir, fa, 100)
 
 	// First commit → segments_1
 	doc := document.NewDocument()
@@ -925,10 +925,10 @@ func TestCommitCleansUpOldSegmentsFile(t *testing.T) {
 }
 
 func TestCommitCleansUpStalePendingFiles(t *testing.T) {
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
-	)
+	))
 	dir, _ := store.NewFSDirectory(t.TempDir())
 
 	// Simulate a leftover pending file from a prior crash
@@ -936,7 +936,7 @@ func TestCommitCleansUpStalePendingFiles(t *testing.T) {
 	out.Write([]byte("stale"))
 	out.Close()
 
-	writer := NewIndexWriter(dir, analyzer, 100)
+	writer := NewIndexWriter(dir, fa, 100)
 
 	doc := document.NewDocument()
 	doc.AddField("body", "hello", document.FieldTypeText)
@@ -951,10 +951,10 @@ func TestCommitCleansUpStalePendingFiles(t *testing.T) {
 }
 
 func TestNewWriterCleansUpStalePendingFiles(t *testing.T) {
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
-	)
+	))
 	dir, _ := store.NewFSDirectory(t.TempDir())
 
 	// Simulate leftover pending files
@@ -966,7 +966,7 @@ func TestNewWriterCleansUpStalePendingFiles(t *testing.T) {
 	out2.Close()
 
 	// Creating a new writer should clean up pending files
-	_ = NewIndexWriter(dir, analyzer, 100)
+	_ = NewIndexWriter(dir, fa, 100)
 
 	if dir.FileExists("pending_segments_1") {
 		t.Error("pending_segments_1 should have been cleaned up on writer startup")
@@ -981,12 +981,12 @@ func TestNewWriterCleansUpStalePendingFiles(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestForceMergeToOneSegment(t *testing.T) {
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
-	)
+	))
 	dir, _ := store.NewFSDirectory(t.TempDir())
-	writer := NewIndexWriter(dir, analyzer, 2)
+	writer := NewIndexWriter(dir, fa, 2)
 
 	// Create 3 segments
 	for _, text := range []string{"hello world", "hello go", "world go"} {
@@ -1032,12 +1032,12 @@ func TestForceMergeToOneSegment(t *testing.T) {
 }
 
 func TestForceMergeWithDeletions(t *testing.T) {
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
-	)
+	))
 	dir, _ := store.NewFSDirectory(t.TempDir())
-	writer := NewIndexWriter(dir, analyzer, 2)
+	writer := NewIndexWriter(dir, fa, 2)
 
 	// Add 3 docs across 2 segments
 	doc0 := document.NewDocument()
@@ -1079,12 +1079,12 @@ func TestForceMergeWithDeletions(t *testing.T) {
 }
 
 func TestMaybeMergeWithTieredPolicy(t *testing.T) {
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
-	)
+	))
 	dir, _ := store.NewFSDirectory(t.TempDir())
-	writer := NewIndexWriter(dir, analyzer, 1) // flush every doc
+	writer := NewIndexWriter(dir, fa, 1) // flush every doc
 
 	// Create many small segments to trigger merge
 	for i := range 15 {
@@ -1112,12 +1112,12 @@ func TestMaybeMergeWithTieredPolicy(t *testing.T) {
 }
 
 func TestForceMergeAndCommit(t *testing.T) {
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
-	)
+	))
 	dir, _ := store.NewFSDirectory(t.TempDir())
-	writer := NewIndexWriter(dir, analyzer, 2)
+	writer := NewIndexWriter(dir, fa, 2)
 
 	for _, text := range []string{"hello world", "hello go", "world go"} {
 		doc := document.NewDocument()
@@ -1150,12 +1150,12 @@ func TestForceMergeAndCommit(t *testing.T) {
 }
 
 func TestCommitPreservesCurrentSegmentFiles(t *testing.T) {
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
-	)
+	))
 	dir, _ := store.NewFSDirectory(t.TempDir())
-	writer := NewIndexWriter(dir, analyzer, 100)
+	writer := NewIndexWriter(dir, fa, 100)
 
 	doc := document.NewDocument()
 	doc.AddField("body", "hello world", document.FieldTypeText)
@@ -1176,10 +1176,10 @@ func TestCommitPreservesCurrentSegmentFiles(t *testing.T) {
 }
 
 func TestCommitCleansUpOrphanedSegmentFiles(t *testing.T) {
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
-	)
+	))
 	dir, _ := store.NewFSDirectory(t.TempDir())
 
 	// Create an orphaned segment file (not referenced by any commit)
@@ -1187,7 +1187,7 @@ func TestCommitCleansUpOrphanedSegmentFiles(t *testing.T) {
 	out.Write([]byte("orphaned"))
 	out.Close()
 
-	writer := NewIndexWriter(dir, analyzer, 100)
+	writer := NewIndexWriter(dir, fa, 100)
 
 	doc := document.NewDocument()
 	doc.AddField("body", "hello", document.FieldTypeText)
@@ -1213,12 +1213,12 @@ func TestCommitCleansUpOrphanedSegmentFiles(t *testing.T) {
 // TestDeleteThenAdd verifies that when a delete is issued before an add with the
 // same ID, the newly added document survives (the delete only affects prior docs).
 func TestDeleteThenAdd(t *testing.T) {
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
-	)
+	))
 	dir, _ := store.NewFSDirectory(t.TempDir())
-	writer := NewIndexWriter(dir, analyzer, 100)
+	writer := NewIndexWriter(dir, fa, 100)
 
 	// First, add a document and flush so it's on disk.
 	doc0 := document.NewDocument()
@@ -1251,12 +1251,12 @@ func TestDeleteThenAdd(t *testing.T) {
 // TestAddThenDelete verifies that when a document is added and then deleted
 // (both before flush), the document is properly deleted.
 func TestAddThenDelete(t *testing.T) {
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
-	)
+	))
 	dir, _ := store.NewFSDirectory(t.TempDir())
-	writer := NewIndexWriter(dir, analyzer, 100)
+	writer := NewIndexWriter(dir, fa, 100)
 
 	doc := document.NewDocument()
 	doc.AddField("_id", "1", document.FieldTypeKeyword)
@@ -1279,12 +1279,12 @@ func TestAddThenDelete(t *testing.T) {
 // TestUpdateSameDocTwice verifies that two consecutive updates to the same
 // document ID (both before flush) result in only the latest version surviving.
 func TestUpdateSameDocTwice(t *testing.T) {
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
-	)
+	))
 	dir, _ := store.NewFSDirectory(t.TempDir())
-	writer := NewIndexWriter(dir, analyzer, 100)
+	writer := NewIndexWriter(dir, fa, 100)
 
 	// First update: delete + add v1
 	writer.DeleteDocuments("_id", "1")

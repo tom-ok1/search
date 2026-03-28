@@ -11,26 +11,26 @@ import (
 	"gosearch/server/mapping"
 )
 
-func newTestDeps(t *testing.T) (*cluster.ClusterState, map[string]*index.IndexService, string, *analysis.Analyzer) {
+func newTestDeps(t *testing.T) (*cluster.ClusterState, map[string]*index.IndexService, string, *analysis.AnalyzerRegistry) {
 	t.Helper()
 	cs := cluster.NewClusterState()
 	services := make(map[string]*index.IndexService)
 	dataPath := t.TempDir()
-	analyzer := analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), analysis.NewLowerCaseFilter())
-	return cs, services, dataPath, analyzer
+	registry := analysis.DefaultRegistry()
+	return cs, services, dataPath, registry
 }
 
 func TestTransportCreateIndexAction_Name(t *testing.T) {
-	cs, services, dataPath, analyzer := newTestDeps(t)
-	a := NewTransportCreateIndexAction(cs, services, dataPath, analyzer)
+	cs, services, dataPath, registry := newTestDeps(t)
+	a := NewTransportCreateIndexAction(cs, services, dataPath, registry)
 	if a.Name() != "indices:admin/create" {
 		t.Errorf("unexpected name: %s", a.Name())
 	}
 }
 
 func TestTransportCreateIndexAction_Execute(t *testing.T) {
-	cs, services, dataPath, analyzer := newTestDeps(t)
-	a := NewTransportCreateIndexAction(cs, services, dataPath, analyzer)
+	cs, services, dataPath, registry := newTestDeps(t)
+	a := NewTransportCreateIndexAction(cs, services, dataPath, registry)
 
 	req := CreateIndexRequest{
 		Name: "testindex",
@@ -81,8 +81,8 @@ func TestTransportCreateIndexAction_Execute(t *testing.T) {
 }
 
 func TestTransportCreateIndexAction_DefaultShards(t *testing.T) {
-	cs, services, dataPath, analyzer := newTestDeps(t)
-	a := NewTransportCreateIndexAction(cs, services, dataPath, analyzer)
+	cs, services, dataPath, registry := newTestDeps(t)
+	a := NewTransportCreateIndexAction(cs, services, dataPath, registry)
 
 	req := CreateIndexRequest{
 		Name: "defaultshards",
@@ -105,8 +105,8 @@ func TestTransportCreateIndexAction_DefaultShards(t *testing.T) {
 }
 
 func TestTransportCreateIndexAction_EmptyName(t *testing.T) {
-	cs, services, dataPath, analyzer := newTestDeps(t)
-	a := NewTransportCreateIndexAction(cs, services, dataPath, analyzer)
+	cs, services, dataPath, registry := newTestDeps(t)
+	a := NewTransportCreateIndexAction(cs, services, dataPath, registry)
 
 	_, err := a.Execute(CreateIndexRequest{Name: ""})
 	if err == nil {
@@ -115,8 +115,8 @@ func TestTransportCreateIndexAction_EmptyName(t *testing.T) {
 }
 
 func TestTransportCreateIndexAction_DuplicateName(t *testing.T) {
-	cs, services, dataPath, analyzer := newTestDeps(t)
-	a := NewTransportCreateIndexAction(cs, services, dataPath, analyzer)
+	cs, services, dataPath, registry := newTestDeps(t)
+	a := NewTransportCreateIndexAction(cs, services, dataPath, registry)
 
 	req := CreateIndexRequest{Name: "dup"}
 	if _, err := a.Execute(req); err != nil {
@@ -132,8 +132,8 @@ func TestTransportCreateIndexAction_DuplicateName(t *testing.T) {
 }
 
 func TestTransportCreateIndexAction_InvalidName(t *testing.T) {
-	cs, services, dataPath, analyzer := newTestDeps(t)
-	a := NewTransportCreateIndexAction(cs, services, dataPath, analyzer)
+	cs, services, dataPath, registry := newTestDeps(t)
+	a := NewTransportCreateIndexAction(cs, services, dataPath, registry)
 
 	invalidNames := []string{"UPPER", "has space", "has/slash", "has*star", ".dotstart"}
 	for _, name := range invalidNames {
@@ -145,10 +145,10 @@ func TestTransportCreateIndexAction_InvalidName(t *testing.T) {
 }
 
 func TestTransportDeleteIndexAction_Execute(t *testing.T) {
-	cs, services, dataPath, analyzer := newTestDeps(t)
+	cs, services, dataPath, registry := newTestDeps(t)
 
 	// First create an index
-	createAction := NewTransportCreateIndexAction(cs, services, dataPath, analyzer)
+	createAction := NewTransportCreateIndexAction(cs, services, dataPath, registry)
 	if _, err := createAction.Execute(CreateIndexRequest{Name: "todelete"}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -191,10 +191,10 @@ func TestTransportDeleteIndexAction_NotFound(t *testing.T) {
 }
 
 func TestTransportGetIndexAction_Execute(t *testing.T) {
-	cs, services, dataPath, analyzer := newTestDeps(t)
+	cs, services, dataPath, registry := newTestDeps(t)
 
 	// Create an index with mappings
-	createAction := NewTransportCreateIndexAction(cs, services, dataPath, analyzer)
+	createAction := NewTransportCreateIndexAction(cs, services, dataPath, registry)
 	m := &mapping.MappingDefinition{
 		Properties: map[string]mapping.FieldMapping{
 			"title": {Type: mapping.FieldTypeText},

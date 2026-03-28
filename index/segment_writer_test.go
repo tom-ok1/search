@@ -15,11 +15,11 @@ func TestWriteSegmentV2(t *testing.T) {
 	tmpDir := t.TempDir()
 	dir, _ := store.NewFSDirectory(tmpDir)
 
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
-	)
-	writer := NewIndexWriter(dir, analyzer, 100)
+	))
+	writer := NewIndexWriter(dir, fa, 100)
 
 	doc0 := document.NewDocument()
 	doc0.AddField("title", "The Quick Brown Fox", document.FieldTypeText)

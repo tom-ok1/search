@@ -27,7 +27,7 @@ type Node struct {
 	indexServices  map[string]*index.IndexService
 	restController *rest.RestController
 	actionRegistry *transport.ActionRegistry
-	analyzer       *analysis.Analyzer
+	registry       *analysis.AnalyzerRegistry
 	httpServer     *http.Server
 	listener       net.Listener
 	stopped        bool
@@ -38,7 +38,7 @@ func NewNode(config NodeConfig) (*Node, error) {
 	rc := rest.NewRestController()
 	ar := transport.NewActionRegistry()
 	indexServices := make(map[string]*index.IndexService)
-	analyzer := analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), analysis.NewLowerCaseFilter())
+	registry := analysis.DefaultRegistry()
 
 	n := &Node{
 		config:         config,
@@ -46,11 +46,11 @@ func NewNode(config NodeConfig) (*Node, error) {
 		indexServices:  indexServices,
 		restController: rc,
 		actionRegistry: ar,
-		analyzer:       analyzer,
+		registry:       registry,
 	}
 
 	// Create transport actions
-	createAction := action.NewTransportCreateIndexAction(cs, indexServices, config.DataPath, analyzer)
+	createAction := action.NewTransportCreateIndexAction(cs, indexServices, config.DataPath, registry)
 	deleteAction := action.NewTransportDeleteIndexAction(cs, indexServices, config.DataPath)
 	getAction := action.NewTransportGetIndexAction(cs)
 

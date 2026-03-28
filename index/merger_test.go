@@ -10,10 +10,10 @@ import (
 func createTestWriter(t *testing.T) (*IndexWriter, store.Directory) {
 	t.Helper()
 	dir, _ := store.NewFSDirectory(t.TempDir())
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
-	)
-	w := NewIndexWriter(dir, analyzer, 1000)
+	))
+	w := NewIndexWriter(dir, fa, 1000)
 	return w, dir
 }
 

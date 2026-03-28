@@ -21,7 +21,7 @@ type IndexService struct {
 
 // NewIndexService creates a new IndexService, initializing all shards.
 // dataPath is the base directory for this index (e.g., data/nodes/0/indices/{index_name}).
-func NewIndexService(meta *cluster.IndexMetadata, m *mapping.MappingDefinition, dataPath string, analyzer *analysis.Analyzer) (*IndexService, error) {
+func NewIndexService(meta *cluster.IndexMetadata, m *mapping.MappingDefinition, dataPath string, registry *analysis.AnalyzerRegistry) (*IndexService, error) {
 	shards := make(map[int]*IndexShard, meta.Settings.NumberOfShards)
 
 	for i := 0; i < meta.Settings.NumberOfShards; i++ {
@@ -35,7 +35,7 @@ func NewIndexService(meta *cluster.IndexMetadata, m *mapping.MappingDefinition, 
 			return nil, fmt.Errorf("create shard %d directory: %w", i, err)
 		}
 
-		shard, err := NewIndexShard(i, meta.Name, dir, m, analyzer)
+		shard, err := NewIndexShard(i, meta.Name, dir, m, registry)
 		if err != nil {
 			for _, s := range shards {
 				s.Close()

@@ -1,6 +1,8 @@
 package index
 
 import (
+	"fmt"
+
 	"gosearch/analysis"
 	"gosearch/search"
 	"gosearch/server/mapping"
@@ -17,8 +19,20 @@ type IndexShard struct {
 }
 
 // NewIndexShard creates a new IndexShard backed by the given directory.
-func NewIndexShard(shardID int, indexName string, dir store.Directory, m *mapping.MappingDefinition, analyzer *analysis.Analyzer) (*IndexShard, error) {
-	engine, err := NewEngine(dir, analyzer)
+// It builds per-field analyzers from the mapping and registry.
+func NewIndexShard(shardID int, indexName string, dir store.Directory, m *mapping.MappingDefinition, registry *analysis.AnalyzerRegistry) (*IndexShard, error) {
+	fa := analysis.NewFieldAnalyzers(registry.Get("standard"))
+	for fieldName, fm := range m.Properties {
+		if fm.Analyzer != "" {
+			a := registry.Get(fm.Analyzer)
+			if a == nil {
+				return nil, fmt.Errorf("unknown analyzer [%s] for field [%s]", fm.Analyzer, fieldName)
+			}
+			fa.SetFieldAnalyzer(fieldName, a)
+		}
+	}
+
+	engine, err := NewEngine(dir, fa)
 	if err != nil {
 		return nil, err
 	}

@@ -16,11 +16,11 @@ import (
 func newTestWriter(t *testing.T, bufferSize int) (*index.IndexWriter, store.Directory) {
 	t.Helper()
 	dir, _ := store.NewFSDirectory(t.TempDir())
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
-	)
-	return index.NewIndexWriter(dir, analyzer, bufferSize), dir
+	))
+	return index.NewIndexWriter(dir, fa, bufferSize), dir
 }
 
 func addTextDoc(t *testing.T, writer *index.IndexWriter, field, text string) {
@@ -1150,11 +1150,11 @@ func TestPhraseQueryDeterministicResults(t *testing.T) {
 
 func TestE2EDeleteQueueCrossSegmentDeletes(t *testing.T) {
 	dir, _ := store.NewFSDirectory(t.TempDir())
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
-	)
-	writer := index.NewIndexWriter(dir, analyzer, 2) // 2 docs per segment
+	))
+	writer := index.NewIndexWriter(dir, fa, 2) // 2 docs per segment
 
 	// Segment 1: doc0 (java), doc1 (go)
 	doc0 := document.NewDocument()
@@ -1214,11 +1214,11 @@ func TestE2EDeleteQueueCrossSegmentDeletes(t *testing.T) {
 
 func TestE2EDeleteDuringConcurrentAdds(t *testing.T) {
 	dir, _ := store.NewFSDirectory(t.TempDir())
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
-	)
-	writer := index.NewIndexWriter(dir, analyzer, 100)
+	))
+	writer := index.NewIndexWriter(dir, fa, 100)
 
 	// Add some initial docs
 	for i := range 10 {

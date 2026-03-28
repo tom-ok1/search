@@ -28,20 +28,20 @@ type TransportCreateIndexAction struct {
 	clusterState  *cluster.ClusterState
 	indexServices map[string]*index.IndexService
 	dataPath      string
-	analyzer      *analysis.Analyzer
+	registry      *analysis.AnalyzerRegistry
 }
 
 func NewTransportCreateIndexAction(
 	cs *cluster.ClusterState,
 	services map[string]*index.IndexService,
 	dataPath string,
-	analyzer *analysis.Analyzer,
+	registry *analysis.AnalyzerRegistry,
 ) *TransportCreateIndexAction {
 	return &TransportCreateIndexAction{
 		clusterState:  cs,
 		indexServices: services,
 		dataPath:      dataPath,
-		analyzer:      analyzer,
+		registry:      registry,
 	}
 }
 
@@ -89,7 +89,7 @@ func (a *TransportCreateIndexAction) Execute(req CreateIndexRequest) (CreateInde
 
 	// Create IndexService
 	indexDataPath := filepath.Join(a.dataPath, "nodes", "0", "indices", req.Name)
-	svc, err := index.NewIndexService(meta, m, indexDataPath, a.analyzer)
+	svc, err := index.NewIndexService(meta, m, indexDataPath, a.registry)
 	if err != nil {
 		return CreateIndexResponse{}, fmt.Errorf("create index service: %w", err)
 	}

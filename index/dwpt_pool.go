@@ -18,16 +18,16 @@ type perThreadPool struct {
 	flushRemaining int                                // number of flushingActive DWPTs not yet returned
 	fullFlushDone  chan struct{}                      // closed when flushRemaining reaches 0
 	nameFunc       func() string
-	analyzer       *analysis.Analyzer
+	fieldAnalyzers *analysis.FieldAnalyzers
 	deleteQueue    *DeleteQueue
 }
 
-func newPerThreadPool(nameFunc func() string, analyzer *analysis.Analyzer, deleteQueue *DeleteQueue) *perThreadPool {
+func newPerThreadPool(nameFunc func() string, fieldAnalyzers *analysis.FieldAnalyzers, deleteQueue *DeleteQueue) *perThreadPool {
 	return &perThreadPool{
-		active:      make(map[*DocumentsWriterPerThread]bool),
-		nameFunc:    nameFunc,
-		analyzer:    analyzer,
-		deleteQueue: deleteQueue,
+		active:         make(map[*DocumentsWriterPerThread]bool),
+		nameFunc:       nameFunc,
+		fieldAnalyzers: fieldAnalyzers,
+		deleteQueue:    deleteQueue,
 	}
 }
 
@@ -41,7 +41,7 @@ func (p *perThreadPool) getAndLock() *DocumentsWriterPerThread {
 		dwpt = p.free[len(p.free)-1]
 		p.free = p.free[:len(p.free)-1]
 	} else {
-		dwpt = newDWPT(p.nameFunc(), p.analyzer, p.deleteQueue)
+		dwpt = newDWPT(p.nameFunc(), p.fieldAnalyzers, p.deleteQueue)
 	}
 	p.active[dwpt] = true
 	return dwpt

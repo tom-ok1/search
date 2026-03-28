@@ -22,9 +22,9 @@ type Engine struct {
 	mu       sync.RWMutex // protects reader/searcher swap on refresh
 }
 
-// NewEngine creates a new Engine backed by the given directory and analyzer.
-func NewEngine(dir store.Directory, analyzer *analysis.Analyzer) (*Engine, error) {
-	writer := goindex.NewIndexWriter(dir, analyzer, defaultBufferSize)
+// NewEngine creates a new Engine backed by the given directory and field analyzers.
+func NewEngine(dir store.Directory, fieldAnalyzers *analysis.FieldAnalyzers) (*Engine, error) {
+	writer := goindex.NewIndexWriter(dir, fieldAnalyzers, defaultBufferSize)
 	return &Engine{
 		writer: writer,
 		dir:    dir,

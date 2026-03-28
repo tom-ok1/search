@@ -16,7 +16,7 @@ func TestDocumentsWriterAddDocument(t *testing.T) {
 	var segments []*SegmentCommitInfo
 	var mu sync.Mutex
 
-	dw := newDocumentsWriter(dir, newTestAnalyzer(), 500, 0, func() string {
+	dw := newDocumentsWriter(dir, newTestFieldAnalyzers(), 500, 0, func() string {
 		n := counter.Add(1)
 		return fmt.Sprintf("_seg%d", n)
 	})
@@ -58,7 +58,7 @@ func TestDocumentsWriterConcurrentAdd(t *testing.T) {
 	var segments []*SegmentCommitInfo
 	var mu sync.Mutex
 
-	dw := newDocumentsWriter(dir, newTestAnalyzer(), 2000, 0, func() string {
+	dw := newDocumentsWriter(dir, newTestFieldAnalyzers(), 2000, 0, func() string {
 		n := counter.Add(1)
 		return fmt.Sprintf("_seg%d", n)
 	})
@@ -112,7 +112,7 @@ func TestDocumentsWriterFlushAllThreads(t *testing.T) {
 	var mu sync.Mutex
 
 	// Large buffer so nothing auto-flushes
-	dw := newDocumentsWriter(dir, newTestAnalyzer(), 1<<30, 0, func() string {
+	dw := newDocumentsWriter(dir, newTestFieldAnalyzers(), 1<<30, 0, func() string {
 		n := counter.Add(1)
 		return fmt.Sprintf("_seg%d", n)
 	})
@@ -148,7 +148,7 @@ func TestDocumentsWriterDeleteDocuments(t *testing.T) {
 	dir, _ := store.NewFSDirectory(t.TempDir())
 	var counter atomic.Int32
 
-	dw := newDocumentsWriter(dir, newTestAnalyzer(), 1<<30, 0, func() string {
+	dw := newDocumentsWriter(dir, newTestFieldAnalyzers(), 1<<30, 0, func() string {
 		n := counter.Add(1)
 		return fmt.Sprintf("_seg%d", n)
 	})

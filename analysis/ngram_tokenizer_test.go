@@ -1,0 +1,71 @@
+package analysis
+
+import (
+	"strings"
+	"testing"
+)
+
+func TestNGramTokenizer(t *testing.T) {
+	tokenizer := NewNGramTokenizer(2, 3)
+	tokens, err := tokenizer.Tokenize(strings.NewReader("abc"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expected := []string{"ab", "bc", "abc"}
+	if len(tokens) != len(expected) {
+		t.Fatalf("expected %d tokens, got %d", len(expected), len(tokens))
+	}
+	for i, tok := range tokens {
+		if tok.Term != expected[i] {
+			t.Errorf("token[%d]: expected %q, got %q", i, expected[i], tok.Term)
+		}
+		if tok.Position != i {
+			t.Errorf("token[%d]: expected position %d, got %d", i, i, tok.Position)
+		}
+	}
+}
+
+func TestNGramTokenizerOffsets(t *testing.T) {
+	tokenizer := NewNGramTokenizer(2, 2)
+	tokens, err := tokenizer.Tokenize(strings.NewReader("abcd"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// "ab", "bc", "cd"
+	if len(tokens) != 3 {
+		t.Fatalf("expected 3 tokens, got %d", len(tokens))
+	}
+	if tokens[0].StartOffset != 0 || tokens[0].EndOffset != 2 {
+		t.Errorf("token 0 offsets: expected [0,2], got [%d,%d]", tokens[0].StartOffset, tokens[0].EndOffset)
+	}
+	if tokens[1].StartOffset != 1 || tokens[1].EndOffset != 3 {
+		t.Errorf("token 1 offsets: expected [1,3], got [%d,%d]", tokens[1].StartOffset, tokens[1].EndOffset)
+	}
+	if tokens[2].StartOffset != 2 || tokens[2].EndOffset != 4 {
+		t.Errorf("token 2 offsets: expected [2,4], got [%d,%d]", tokens[2].StartOffset, tokens[2].EndOffset)
+	}
+}
+
+func TestNGramTokenizerShortInput(t *testing.T) {
+	tokenizer := NewNGramTokenizer(2, 3)
+	tokens, err := tokenizer.Tokenize(strings.NewReader("a"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tokens) != 0 {
+		t.Errorf("expected 0 tokens for input shorter than minGram, got %d", len(tokens))
+	}
+}
+
+func TestNGramTokenizerEmpty(t *testing.T) {
+	tokenizer := NewNGramTokenizer(2, 3)
+	tokens, err := tokenizer.Tokenize(strings.NewReader(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tokens) != 0 {
+		t.Errorf("expected 0 tokens for empty input, got %d", len(tokens))
+	}
+}

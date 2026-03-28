@@ -13,12 +13,11 @@ import (
 // Returns the segment directly before flushing, for use in DiskSegment tests.
 func buildTestSegment(t *testing.T) *InMemorySegment {
 	t.Helper()
-	analyzer := analysis.NewAnalyzer(
-		analysis.NewWhitespaceTokenizer(),
-		&analysis.LowerCaseFilter{},
+	fa := analysis.NewFieldAnalyzers(
+		analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{}),
 	)
 
-	dwpt := newDWPT("_seg0", analyzer, newDeleteQueue())
+	dwpt := newDWPT("_seg0", fa, newDeleteQueue())
 
 	docs := []struct {
 		title string
@@ -324,11 +323,11 @@ func TestDiskSegmentLiveDocsAlwaysNil(t *testing.T) {
 func TestDiskSegmentMultipleFields(t *testing.T) {
 	tmpDir := t.TempDir()
 	dir, _ := store.NewFSDirectory(tmpDir)
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
-	)
-	writer := NewIndexWriter(dir, analyzer, 100)
+	))
+	writer := NewIndexWriter(dir, fa, 100)
 
 	doc := document.NewDocument()
 	doc.AddField("title", "Quick Fox", document.FieldTypeText)

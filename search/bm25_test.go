@@ -30,11 +30,11 @@ func TestBM25IDF(t *testing.T) {
 
 func TestBM25Scoring(t *testing.T) {
 	dir, _ := store.NewFSDirectory(t.TempDir())
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
-	)
-	writer := index.NewIndexWriter(dir, analyzer, 100)
+	))
+	writer := index.NewIndexWriter(dir, fa, 100)
 
 	// doc0: "fox" appears twice in a short document
 	doc0 := document.NewDocument()

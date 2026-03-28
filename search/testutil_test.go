@@ -13,11 +13,11 @@ import (
 func setupTestSegment(t *testing.T) index.SegmentReader {
 	t.Helper()
 	dir, _ := store.NewFSDirectory(t.TempDir())
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
-	)
-	writer := index.NewIndexWriter(dir, analyzer, 100)
+	))
+	writer := index.NewIndexWriter(dir, fa, 100)
 
 	docs := []string{
 		"the quick brown fox",     // doc0

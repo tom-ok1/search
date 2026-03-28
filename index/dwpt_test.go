@@ -8,15 +8,14 @@ import (
 	"gosearch/store"
 )
 
-func newTestAnalyzer() *analysis.Analyzer {
-	return analysis.NewAnalyzer(
-		analysis.NewWhitespaceTokenizer(),
-		&analysis.LowerCaseFilter{},
+func newTestFieldAnalyzers() *analysis.FieldAnalyzers {
+	return analysis.NewFieldAnalyzers(
+		analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{}),
 	)
 }
 
 func TestDWPTAddDocument(t *testing.T) {
-	dwpt := newDWPT("_seg0", newTestAnalyzer(), newDeleteQueue())
+	dwpt := newDWPT("_seg0", newTestFieldAnalyzers(), newDeleteQueue())
 
 	doc := document.NewDocument()
 	doc.AddField("body", "hello world", document.FieldTypeText)
@@ -40,7 +39,7 @@ func TestDWPTAddDocument(t *testing.T) {
 }
 
 func TestDWPTAddMultipleDocuments(t *testing.T) {
-	dwpt := newDWPT("_seg0", newTestAnalyzer(), newDeleteQueue())
+	dwpt := newDWPT("_seg0", newTestFieldAnalyzers(), newDeleteQueue())
 
 	doc0 := document.NewDocument()
 	doc0.AddField("title", "Go Programming", document.FieldTypeText)
@@ -77,7 +76,7 @@ func TestDWPTAddMultipleDocuments(t *testing.T) {
 
 func TestDWPTFlush(t *testing.T) {
 	dir, _ := store.NewFSDirectory(t.TempDir())
-	dwpt := newDWPT("_seg0", newTestAnalyzer(), newDeleteQueue())
+	dwpt := newDWPT("_seg0", newTestFieldAnalyzers(), newDeleteQueue())
 
 	doc := document.NewDocument()
 	doc.AddField("body", "hello world", document.FieldTypeText)
@@ -114,7 +113,7 @@ func TestDWPTFlush(t *testing.T) {
 }
 
 func TestDWPTEstimateBytesUsed(t *testing.T) {
-	dwpt := newDWPT("_seg0", newTestAnalyzer(), newDeleteQueue())
+	dwpt := newDWPT("_seg0", newTestFieldAnalyzers(), newDeleteQueue())
 
 	if dwpt.estimateBytesUsed() != 0 {
 		t.Error("expected 0 bytes before adding docs")
@@ -136,5 +135,47 @@ func TestDWPTEstimateBytesUsed(t *testing.T) {
 	bytes2 := dwpt.estimateBytesUsed()
 	if bytes2 <= bytes1 {
 		t.Errorf("expected bytes to grow: %d -> %d", bytes1, bytes2)
+	}
+}
+
+func TestDWPTPerFieldAnalyzer(t *testing.T) {
+	fa := analysis.NewFieldAnalyzers(
+		analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{}),
+	)
+	// Use ngram analyzer for "title" field
+	fa.SetFieldAnalyzer("title", analysis.NewAnalyzer(
+		analysis.NewNGramTokenizer(2, 3), &analysis.LowerCaseFilter{},
+	))
+
+	dwpt := newDWPT("_seg0", fa, newDeleteQueue())
+
+	doc := document.NewDocument()
+	doc.AddField("title", "abc", document.FieldTypeText)
+	doc.AddField("body", "hello world", document.FieldTypeText)
+	if _, err := dwpt.addDocument(doc); err != nil {
+		t.Fatal(err)
+	}
+
+	// "title" with ngram(2,3) on "abc" should produce: "ab", "bc", "abc"
+	titleField := dwpt.segment.fields["title"]
+	if titleField == nil {
+		t.Fatal("expected 'title' field")
+	}
+	for _, term := range []string{"ab", "bc", "abc"} {
+		if _, ok := titleField.postings[term]; !ok {
+			t.Errorf("expected ngram posting for %q in title", term)
+		}
+	}
+
+	// "body" with standard analyzer should produce: "hello", "world"
+	bodyField := dwpt.segment.fields["body"]
+	if bodyField == nil {
+		t.Fatal("expected 'body' field")
+	}
+	if _, ok := bodyField.postings["hello"]; !ok {
+		t.Error("expected posting for 'hello' in body")
+	}
+	if _, ok := bodyField.postings["world"]; !ok {
+		t.Error("expected posting for 'world' in body")
 	}
 }

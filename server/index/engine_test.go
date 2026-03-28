@@ -13,11 +13,14 @@ import (
 	"gosearch/store"
 )
 
-func newTestAnalyzer() *analysis.Analyzer {
-	return analysis.NewAnalyzer(
-		analysis.NewWhitespaceTokenizer(),
-		&analysis.LowerCaseFilter{},
+func newTestFieldAnalyzers() *analysis.FieldAnalyzers {
+	return analysis.NewFieldAnalyzers(
+		analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{}),
 	)
+}
+
+func newTestRegistry() *analysis.AnalyzerRegistry {
+	return analysis.DefaultRegistry()
 }
 
 func TestEngine_IndexAndRefreshAndSearch(t *testing.T) {
@@ -26,7 +29,7 @@ func TestEngine_IndexAndRefreshAndSearch(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	eng, err := index.NewEngine(dir, newTestAnalyzer())
+	eng, err := index.NewEngine(dir, newTestFieldAnalyzers())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +71,7 @@ func TestEngine_Delete(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	eng, err := index.NewEngine(dir, newTestAnalyzer())
+	eng, err := index.NewEngine(dir, newTestFieldAnalyzers())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +115,7 @@ func TestIndexShard_IndexAndSearch(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	shard, err := index.NewIndexShard(0, "test-index", dir, m, newTestAnalyzer())
+	shard, err := index.NewIndexShard(0, "test-index", dir, m, newTestRegistry())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +158,7 @@ func TestIndexShard_Delete(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	shard, err := index.NewIndexShard(0, "test-index", dir, m, newTestAnalyzer())
+	shard, err := index.NewIndexShard(0, "test-index", dir, m, newTestRegistry())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,7 +200,7 @@ func TestIndexService_CreateAndAccess(t *testing.T) {
 		},
 	}
 
-	svc, err := index.NewIndexService(meta, m, dataPath, newTestAnalyzer())
+	svc, err := index.NewIndexService(meta, m, dataPath, newTestRegistry())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,7 +277,7 @@ func TestIntegration_IndexLifecycle(t *testing.T) {
 		},
 	}
 
-	svc, err := index.NewIndexService(meta, m, dataPath, newTestAnalyzer())
+	svc, err := index.NewIndexService(meta, m, dataPath, newTestRegistry())
 	if err != nil {
 		t.Fatal(err)
 	}

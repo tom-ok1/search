@@ -11,7 +11,7 @@ import (
 func TestNumericDocValuesRoundTrip(t *testing.T) {
 	dir := createTempDir(t)
 
-	writer := NewIndexWriter(dir, analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{}), 100)
+	writer := NewIndexWriter(dir, analysis.NewFieldAnalyzers(analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{})), 100)
 
 	// Add documents with numeric doc values
 	for _, price := range []int64{100, 250, 50, 300, 75} {
@@ -66,7 +66,7 @@ func TestNumericDocValuesRoundTrip(t *testing.T) {
 func TestSortedDocValuesRoundTrip(t *testing.T) {
 	dir := createTempDir(t)
 
-	writer := NewIndexWriter(dir, analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{}), 100)
+	writer := NewIndexWriter(dir, analysis.NewFieldAnalyzers(analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{})), 100)
 
 	categories := []string{"electronics", "books", "electronics", "clothing", "books"}
 	for _, cat := range categories {
@@ -129,7 +129,7 @@ func TestDocValuesMerge(t *testing.T) {
 	dir := createTempDir(t)
 
 	// Use buffer size 2 to force multiple segments
-	writer := NewIndexWriter(dir, analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{}), 2)
+	writer := NewIndexWriter(dir, analysis.NewFieldAnalyzers(analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{})), 2)
 
 	// Add 4 documents across 2 segments
 	prices := []int64{100, 200, 300, 400}
@@ -216,7 +216,7 @@ func TestDocValuesMergeWithDeletions(t *testing.T) {
 	dir := createTempDir(t)
 
 	// Buffer size 2 to force 2 segments
-	writer := NewIndexWriter(dir, analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{}), 2)
+	writer := NewIndexWriter(dir, analysis.NewFieldAnalyzers(analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{})), 2)
 
 	// Add 4 docs: doc0(id=a,price=100), doc1(id=b,price=200), doc2(id=c,price=300), doc3(id=d,price=400)
 	ids := []string{"a", "b", "c", "d"}
@@ -313,7 +313,7 @@ func TestDocValuesMergeWithDeletions(t *testing.T) {
 func TestSortedDocValuesWithMissingValues(t *testing.T) {
 	dir := createTempDir(t)
 
-	writer := NewIndexWriter(dir, analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{}), 100)
+	writer := NewIndexWriter(dir, analysis.NewFieldAnalyzers(analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{})), 100)
 
 	// Doc0 has category, doc1 does not, doc2 has category
 	doc0 := document.NewDocument()
@@ -390,7 +390,7 @@ func TestSortedDocValuesWithMissingValues(t *testing.T) {
 func TestNumericDocValuesZeroValue(t *testing.T) {
 	dir := createTempDir(t)
 
-	writer := NewIndexWriter(dir, analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{}), 100)
+	writer := NewIndexWriter(dir, analysis.NewFieldAnalyzers(analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{})), 100)
 
 	// Explicitly add a numeric DV field with value 0
 	doc := document.NewDocument()
@@ -444,7 +444,7 @@ func TestSortedDocValuesMerge(t *testing.T) {
 	dir := createTempDir(t)
 
 	// Buffer size 2 to force multiple segments.
-	writer := NewIndexWriter(dir, analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{}), 2)
+	writer := NewIndexWriter(dir, analysis.NewFieldAnalyzers(analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{})), 2)
 
 	// 6 docs across 3 segments, with overlapping and unique values.
 	cats := []string{"cherry", "apple", "banana", "apple", "date", "cherry"}
