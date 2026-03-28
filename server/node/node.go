@@ -1,4 +1,3 @@
-// server/node/node.go
 package node
 
 import (
@@ -8,8 +7,12 @@ import (
 	"net/http"
 	"time"
 
+	"gosearch/analysis"
+	"gosearch/server/action"
 	"gosearch/server/cluster"
+	"gosearch/server/index"
 	"gosearch/server/rest"
+	restaction "gosearch/server/rest/action"
 	"gosearch/server/transport"
 )
 
@@ -21,8 +24,10 @@ type NodeConfig struct {
 type Node struct {
 	config         NodeConfig
 	clusterState   *cluster.ClusterState
+	indexServices  map[string]*index.IndexService
 	restController *rest.RestController
 	actionRegistry *transport.ActionRegistry
+	analyzer       *analysis.Analyzer
 	httpServer     *http.Server
 	listener       net.Listener
 	stopped        bool
@@ -32,13 +37,34 @@ func NewNode(config NodeConfig) (*Node, error) {
 	cs := cluster.NewClusterState()
 	rc := rest.NewRestController()
 	ar := transport.NewActionRegistry()
+	indexServices := make(map[string]*index.IndexService)
+	analyzer := analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), analysis.NewLowerCaseFilter())
 
-	return &Node{
+	n := &Node{
 		config:         config,
 		clusterState:   cs,
+		indexServices:  indexServices,
 		restController: rc,
 		actionRegistry: ar,
-	}, nil
+		analyzer:       analyzer,
+	}
+
+	// Create transport actions
+	createAction := action.NewTransportCreateIndexAction(cs, indexServices, config.DataPath, analyzer)
+	deleteAction := action.NewTransportDeleteIndexAction(cs, indexServices, config.DataPath)
+	getAction := action.NewTransportGetIndexAction(cs)
+
+	// Register transport actions
+	ar.Register(createAction)
+	ar.Register(deleteAction)
+	ar.Register(getAction)
+
+	// Create and register REST handlers
+	rc.RegisterHandler(restaction.NewRestCreateIndexAction(createAction))
+	rc.RegisterHandler(restaction.NewRestDeleteIndexAction(deleteAction))
+	rc.RegisterHandler(restaction.NewRestGetIndexAction(getAction))
+
+	return n, nil
 }
 
 func (n *Node) Start() (string, error) {
@@ -64,6 +90,12 @@ func (n *Node) Stop() error {
 	}
 	n.stopped = true
 
+	// Close all index services
+	for name, svc := range n.indexServices {
+		svc.Close()
+		delete(n.indexServices, name)
+	}
+
 	if n.httpServer != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -82,4 +114,8 @@ func (n *Node) ActionRegistry() *transport.ActionRegistry {
 
 func (n *Node) RestController() *rest.RestController {
 	return n.restController
+}
+
+func (n *Node) IndexService(name string) *index.IndexService {
+	return n.indexServices[name]
 }
