@@ -1253,3 +1253,223 @@ func TestE2EDeleteDuringConcurrentAdds(t *testing.T) {
 		t.Errorf("LiveDocCount: got %d, want 10 (docs 10-19 alive)", reader.LiveDocCount())
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Japanese text tests
+// ---------------------------------------------------------------------------
+
+func TestE2EJapaneseTermQuery(t *testing.T) {
+	writer, dir := newTestWriter(t, 100)
+
+	addTextDoc(t, writer, "body", "東京 大阪 名古屋")
+	addTextDoc(t, writer, "body", "東京 京都")
+	addTextDoc(t, writer, "body", "大阪 福岡")
+
+	reader := commitAndOpenReader(t, writer, dir)
+	searcher := search.NewIndexSearcher(reader)
+
+	// "東京" appears in doc0 and doc1
+	results := searcher.Search(search.NewTermQuery("body", "東京"), search.NewTopKCollector(10))
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results for '東京', got %d", len(results))
+	}
+
+	// Verify stored fields roundtrip
+	for _, r := range results {
+		if r.Fields == nil || len(r.Fields["body"]) == 0 {
+			t.Errorf("missing stored fields for docID %d", r.DocID)
+		}
+	}
+
+	// "名古屋" appears in doc0 only
+	results = searcher.Search(search.NewTermQuery("body", "名古屋"), search.NewTopKCollector(10))
+	if len(results) != 1 {
+		t.Errorf("expected 1 result for '名古屋', got %d", len(results))
+	}
+
+	// Non-existent term
+	results = searcher.Search(search.NewTermQuery("body", "札幌"), search.NewTopKCollector(10))
+	if len(results) != 0 {
+		t.Errorf("expected 0 results for '札幌', got %d", len(results))
+	}
+}
+
+func TestE2EJapanesePhraseQuery(t *testing.T) {
+	writer, dir := newTestWriter(t, 100)
+
+	addTextDoc(t, writer, "body", "東京 大阪 名古屋")  // "東京 大阪" is consecutive
+	addTextDoc(t, writer, "body", "大阪 東京 名古屋")  // "東京 大阪" is NOT consecutive here
+
+	reader := commitAndOpenReader(t, writer, dir)
+	searcher := search.NewIndexSearcher(reader)
+
+	// "東京 大阪" as a phrase (consecutive) — should match only doc0
+	results := searcher.Search(search.NewPhraseQuery("body", "東京", "大阪"), search.NewTopKCollector(10))
+	if len(results) != 1 {
+		t.Errorf("expected 1 result for phrase '東京 大阪', got %d", len(results))
+	}
+
+	// "大阪 名古屋" — consecutive in both
+	results = searcher.Search(search.NewPhraseQuery("body", "大阪", "名古屋"), search.NewTopKCollector(10))
+	if len(results) != 1 {
+		t.Errorf("expected 1 result for phrase '大阪 名古屋', got %d", len(results))
+	}
+
+	// "東京 名古屋" — consecutive in doc1 only
+	results = searcher.Search(search.NewPhraseQuery("body", "東京", "名古屋"), search.NewTopKCollector(10))
+	if len(results) != 1 {
+		t.Errorf("expected 1 result for phrase '東京 名古屋', got %d", len(results))
+	}
+}
+
+func TestE2EJapaneseBooleanQuery(t *testing.T) {
+	writer, dir := newTestWriter(t, 100)
+
+	addTextDoc(t, writer, "body", "東京 大阪")      // doc0: matches both
+	addTextDoc(t, writer, "body", "東京 名古屋")     // doc1: matches 東京 only
+	addTextDoc(t, writer, "body", "京都 福岡")       // doc2: matches neither
+
+	reader := commitAndOpenReader(t, writer, dir)
+	searcher := search.NewIndexSearcher(reader)
+
+	// OR query: 東京 OR 大阪 → doc0, doc1, doc2 (大阪 in doc0)
+	results := searcher.Search(search.NewBooleanQuery().
+		Add(search.NewTermQuery("body", "東京"), search.OccurShould).
+		Add(search.NewTermQuery("body", "大阪"), search.OccurShould), search.NewTopKCollector(10))
+	if len(results) != 2 {
+		t.Errorf("expected 2 results for OR query, got %d", len(results))
+	}
+
+	// doc0 should score higher (matches both SHOULD clauses)
+	if len(results) >= 2 && results[0].Score <= results[1].Score {
+		t.Errorf("doc matching both SHOULD clauses should score higher: got %f <= %f",
+			results[0].Score, results[1].Score)
+	}
+}
+
+func TestE2EJapaneseDeleteAndSearch(t *testing.T) {
+	writer, dir := newTestWriter(t, 100)
+
+	doc0 := document.NewDocument()
+	doc0.AddField("id", "東京", document.FieldTypeKeyword)
+	doc0.AddField("body", "東京タワー スカイツリー", document.FieldTypeText)
+	writer.AddDocument(doc0)
+
+	doc1 := document.NewDocument()
+	doc1.AddField("id", "大阪", document.FieldTypeKeyword)
+	doc1.AddField("body", "大阪城 通天閣", document.FieldTypeText)
+	writer.AddDocument(doc1)
+
+	writer.DeleteDocuments("id", "東京")
+
+	reader := commitAndOpenReader(t, writer, dir)
+	searcher := search.NewIndexSearcher(reader)
+
+	// "東京タワー" should return 0 results (doc deleted)
+	results := searcher.Search(search.NewTermQuery("body", "東京タワー"), search.NewTopKCollector(10))
+	if len(results) != 0 {
+		t.Errorf("expected 0 results after deletion, got %d", len(results))
+	}
+
+	// "大阪城" should still be searchable
+	results = searcher.Search(search.NewTermQuery("body", "大阪城"), search.NewTopKCollector(10))
+	if len(results) != 1 {
+		t.Errorf("expected 1 result for '大阪城', got %d", len(results))
+	}
+}
+
+func TestE2EJapaneseScoreOrdering(t *testing.T) {
+	writer, dir := newTestWriter(t, 100)
+
+	// doc0: "東京" appears once
+	addTextDoc(t, writer, "body", "東京 大阪")
+	// doc1: "東京" appears three times — should score higher
+	addTextDoc(t, writer, "body", "東京 東京 東京 大阪")
+
+	reader := commitAndOpenReader(t, writer, dir)
+	searcher := search.NewIndexSearcher(reader)
+
+	results := searcher.Search(search.NewTermQuery("body", "東京"), search.NewTopKCollector(10))
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(results))
+	}
+
+	// Doc with higher term frequency should score higher
+	if results[0].Score <= results[1].Score {
+		t.Errorf("doc with higher TF should score higher: got %f <= %f",
+			results[0].Score, results[1].Score)
+	}
+}
+
+func TestE2EJapaneseForceMergeAndSearch(t *testing.T) {
+	writer, dir := newTestWriter(t, 2)
+
+	addTextDoc(t, writer, "body", "東京 大阪")
+	addTextDoc(t, writer, "body", "名古屋 京都") // auto-flush
+	addTextDoc(t, writer, "body", "福岡 札幌")
+
+	writer.Flush()
+	if err := writer.ForceMerge(1); err != nil {
+		t.Fatal(err)
+	}
+
+	reader := commitAndOpenReader(t, writer, dir)
+	searcher := search.NewIndexSearcher(reader)
+
+	if len(reader.Leaves()) != 1 {
+		t.Errorf("expected 1 segment after merge, got %d", len(reader.Leaves()))
+	}
+
+	results := searcher.Search(search.NewTermQuery("body", "東京"), search.NewTopKCollector(10))
+	if len(results) != 1 {
+		t.Errorf("expected 1 result for '東京' after merge, got %d", len(results))
+	}
+
+	results = searcher.Search(search.NewTermQuery("body", "福岡"), search.NewTopKCollector(10))
+	if len(results) != 1 {
+		t.Errorf("expected 1 result for '福岡' after merge, got %d", len(results))
+	}
+}
+
+func TestE2EJapaneseMultiFieldDocument(t *testing.T) {
+	writer, dir := newTestWriter(t, 100)
+
+	doc := document.NewDocument()
+	doc.AddField("title", "東京タワー", document.FieldTypeText)
+	doc.AddField("body", "東京 港区 にある 電波塔", document.FieldTypeText)
+	doc.AddField("category", "観光地", document.FieldTypeKeyword)
+	writer.AddDocument(doc)
+
+	doc2 := document.NewDocument()
+	doc2.AddField("title", "大阪城", document.FieldTypeText)
+	doc2.AddField("body", "大阪 中央区 にある 城", document.FieldTypeText)
+	doc2.AddField("category", "観光地", document.FieldTypeKeyword)
+	writer.AddDocument(doc2)
+
+	reader := commitAndOpenReader(t, writer, dir)
+	searcher := search.NewIndexSearcher(reader)
+
+	// Search by body field
+	results := searcher.Search(search.NewTermQuery("body", "港区"), search.NewTopKCollector(10))
+	if len(results) != 1 {
+		t.Errorf("expected 1 result for body '港区', got %d", len(results))
+	}
+
+	// Search by title field
+	results = searcher.Search(search.NewTermQuery("title", "東京タワー"), search.NewTopKCollector(10))
+	if len(results) != 1 {
+		t.Errorf("expected 1 result for title '東京タワー', got %d", len(results))
+	}
+
+	// Cross-field should not match
+	results = searcher.Search(search.NewTermQuery("title", "港区"), search.NewTopKCollector(10))
+	if len(results) != 0 {
+		t.Errorf("expected 0 results for '港区' in title field, got %d", len(results))
+	}
+
+	// Keyword field exact match
+	results = searcher.Search(search.NewTermQuery("category", "観光地"), search.NewTopKCollector(10))
+	if len(results) != 2 {
+		t.Errorf("expected 2 results for keyword '観光地', got %d", len(results))
+	}
+}
