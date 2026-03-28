@@ -427,6 +427,172 @@ func TestDiskSegmentJapanese(t *testing.T) {
 	}
 }
 
+func TestDiskSegmentSpecialChars(t *testing.T) {
+	fa := analysis.NewFieldAnalyzers(
+		analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{}),
+	)
+	dwpt := newDWPT("_seg0", fa, newDeleteQueue())
+
+	docs := []string{
+		"user@example.com #tag",
+		"state-of-the-art node.js",
+		"café résumé naïve",
+	}
+	for _, text := range docs {
+		doc := document.NewDocument()
+		doc.AddField("title", text, document.FieldTypeText)
+		dwpt.addDocument(doc)
+	}
+
+	ds, _ := writeAndOpenDiskSegment(t, dwpt.segment)
+	defer ds.Close()
+
+	// Verify DocFreq for special char terms
+	if ds.DocFreq("title", "user@example.com") != 1 {
+		t.Errorf("DocFreq(user@example.com): got %d, want 1", ds.DocFreq("title", "user@example.com"))
+	}
+	if ds.DocFreq("title", "state-of-the-art") != 1 {
+		t.Errorf("DocFreq(state-of-the-art): got %d, want 1", ds.DocFreq("title", "state-of-the-art"))
+	}
+	if ds.DocFreq("title", "café") != 1 {
+		t.Errorf("DocFreq(café): got %d, want 1", ds.DocFreq("title", "café"))
+	}
+
+	// Verify stored fields roundtrip with special chars
+	for i, text := range docs {
+		stored, err := ds.StoredFields(i)
+		if err != nil {
+			t.Fatalf("StoredFields(%d): %v", i, err)
+		}
+		if string(stored["title"]) != text {
+			t.Errorf("StoredFields(%d)[title]: got %q, want %q", i, stored["title"], text)
+		}
+	}
+}
+
+func TestDiskSegmentEmoji(t *testing.T) {
+	fa := analysis.NewFieldAnalyzers(
+		analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{}),
+	)
+	dwpt := newDWPT("_seg0", fa, newDeleteQueue())
+
+	doc := document.NewDocument()
+	doc.AddField("title", "hello 🔍 world", document.FieldTypeText)
+	dwpt.addDocument(doc)
+
+	doc2 := document.NewDocument()
+	doc2.AddField("title", "🔍 search 🔎", document.FieldTypeText)
+	dwpt.addDocument(doc2)
+
+	ds, _ := writeAndOpenDiskSegment(t, dwpt.segment)
+	defer ds.Close()
+
+	if ds.DocFreq("title", "🔍") != 2 {
+		t.Errorf("DocFreq(🔍): got %d, want 2", ds.DocFreq("title", "🔍"))
+	}
+
+	// Stored field roundtrip
+	stored, err := ds.StoredFields(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(stored["title"]) != "🔍 search 🔎" {
+		t.Errorf("stored: got %q, want %q", stored["title"], "🔍 search 🔎")
+	}
+}
+
+func TestDiskSegmentCJKExtensionB(t *testing.T) {
+	fa := analysis.NewFieldAnalyzers(
+		analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{}),
+	)
+	dwpt := newDWPT("_seg0", fa, newDeleteQueue())
+
+	doc := document.NewDocument()
+	doc.AddField("title", "𠮷野家 テスト", document.FieldTypeText)
+	dwpt.addDocument(doc)
+
+	ds, _ := writeAndOpenDiskSegment(t, dwpt.segment)
+	defer ds.Close()
+
+	if ds.DocFreq("title", "𠮷野家") != 1 {
+		t.Errorf("DocFreq(𠮷野家): got %d, want 1", ds.DocFreq("title", "𠮷野家"))
+	}
+
+	stored, err := ds.StoredFields(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(stored["title"]) != "𠮷野家 テスト" {
+		t.Errorf("stored: got %q, want %q", stored["title"], "𠮷野家 テスト")
+	}
+}
+
+func TestDiskSegmentKeywordWithSpaces(t *testing.T) {
+	fa := analysis.NewFieldAnalyzers(
+		analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{}),
+	)
+	dwpt := newDWPT("_seg0", fa, newDeleteQueue())
+
+	doc := document.NewDocument()
+	doc.AddField("city", "New York", document.FieldTypeKeyword)
+	doc.AddField("body", "test", document.FieldTypeText)
+	dwpt.addDocument(doc)
+
+	doc2 := document.NewDocument()
+	doc2.AddField("city", "C++", document.FieldTypeKeyword)
+	doc2.AddField("body", "test", document.FieldTypeText)
+	dwpt.addDocument(doc2)
+
+	ds, _ := writeAndOpenDiskSegment(t, dwpt.segment)
+	defer ds.Close()
+
+	if ds.DocFreq("city", "New York") != 1 {
+		t.Errorf("DocFreq(New York): got %d, want 1", ds.DocFreq("city", "New York"))
+	}
+	if ds.DocFreq("city", "C++") != 1 {
+		t.Errorf("DocFreq(C++): got %d, want 1", ds.DocFreq("city", "C++"))
+	}
+	// Partial should not match
+	if ds.DocFreq("city", "New") != 0 {
+		t.Error("partial keyword 'New' should not match")
+	}
+}
+
+func TestDiskSegmentStoredFieldSpecialCharsRoundtrip(t *testing.T) {
+	fa := analysis.NewFieldAnalyzers(
+		analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{}),
+	)
+	dwpt := newDWPT("_seg0", fa, newDeleteQueue())
+
+	values := []string{
+		"hello\tworld\nnewline",
+		"path\\to\\file",
+		"{\"key\": \"value\"}",
+		"",
+		"🔍🔎",
+		"𠮷野家",
+	}
+	for _, val := range values {
+		doc := document.NewDocument()
+		doc.AddField("data", val, document.FieldTypeStored)
+		doc.AddField("body", "searchable", document.FieldTypeText)
+		dwpt.addDocument(doc)
+	}
+
+	ds, _ := writeAndOpenDiskSegment(t, dwpt.segment)
+	defer ds.Close()
+
+	for i, val := range values {
+		stored, err := ds.StoredFields(i)
+		if err != nil {
+			t.Fatalf("StoredFields(%d): %v", i, err)
+		}
+		if string(stored["data"]) != val {
+			t.Errorf("doc %d: stored = %q, want %q", i, stored["data"], val)
+		}
+	}
+}
+
 func TestOpenDiskSegmentNonExistentPath(t *testing.T) {
 	_, err := OpenDiskSegment("/nonexistent/path", "_seg0")
 	if err == nil {

@@ -1351,6 +1351,212 @@ func TestStoredFieldJapanese(t *testing.T) {
 	}
 }
 
+func TestKeywordWithSpaces(t *testing.T) {
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
+		analysis.NewWhitespaceTokenizer(),
+		&analysis.LowerCaseFilter{},
+	))
+	dir, _ := store.NewFSDirectory(t.TempDir())
+	writer := NewIndexWriter(dir, fa, 100)
+
+	doc := document.NewDocument()
+	doc.AddField("city", "New York", document.FieldTypeKeyword)
+	writer.AddDocument(doc)
+
+	doc2 := document.NewDocument()
+	doc2.AddField("city", "Los Angeles", document.FieldTypeKeyword)
+	writer.AddDocument(doc2)
+
+	writer.Flush()
+	reader, err := OpenNRTReader(writer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	seg := reader.Leaves()[0].Segment
+
+	// Keyword with spaces should match exactly
+	if seg.DocFreq("city", "New York") != 1 {
+		t.Errorf("DocFreq(New York): got %d, want 1", seg.DocFreq("city", "New York"))
+	}
+	// Partial should not match
+	if seg.DocFreq("city", "New") != 0 {
+		t.Error("keyword 'New' should not match partial")
+	}
+}
+
+func TestKeywordSpecialChars(t *testing.T) {
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
+		analysis.NewWhitespaceTokenizer(),
+		&analysis.LowerCaseFilter{},
+	))
+	dir, _ := store.NewFSDirectory(t.TempDir())
+	writer := NewIndexWriter(dir, fa, 100)
+
+	keywords := []string{"C++", "007", "@#$%", "path\\to\\file", "user@example.com"}
+	for _, kw := range keywords {
+		doc := document.NewDocument()
+		doc.AddField("tag", kw, document.FieldTypeKeyword)
+		writer.AddDocument(doc)
+	}
+
+	writer.Flush()
+	reader, err := OpenNRTReader(writer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	seg := reader.Leaves()[0].Segment
+
+	for _, kw := range keywords {
+		if seg.DocFreq("tag", kw) != 1 {
+			t.Errorf("DocFreq(%q): got %d, want 1", kw, seg.DocFreq("tag", kw))
+		}
+	}
+}
+
+func TestStoredFieldSpecialChars(t *testing.T) {
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
+		analysis.NewWhitespaceTokenizer(),
+		&analysis.LowerCaseFilter{},
+	))
+	dir, _ := store.NewFSDirectory(t.TempDir())
+	writer := NewIndexWriter(dir, fa, 100)
+
+	values := []string{
+		"hello\tworld\nnewline",
+		"path\\to\\file",
+		"he said \"hello\"",
+		"{\"key\": \"value\"}",
+		"café résumé naïve",
+		"🔍 emoji test 🔎",
+		"𠮷野家",
+		"ＨＥＬＬＯ",
+	}
+	for _, val := range values {
+		doc := document.NewDocument()
+		doc.AddField("data", val, document.FieldTypeStored)
+		doc.AddField("id", val, document.FieldTypeKeyword)
+		writer.AddDocument(doc)
+	}
+
+	if err := writer.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := OpenNRTReader(writer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	seg := reader.Leaves()[0].Segment
+
+	for i, val := range values {
+		fields, err := seg.StoredFields(i)
+		if err != nil {
+			t.Fatalf("StoredFields(%d): %v", i, err)
+		}
+		if string(fields["data"]) != val {
+			t.Errorf("doc %d: stored = %q, want %q", i, fields["data"], val)
+		}
+	}
+}
+
+func TestStoredFieldEmptyString(t *testing.T) {
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
+		analysis.NewWhitespaceTokenizer(),
+		&analysis.LowerCaseFilter{},
+	))
+	dir, _ := store.NewFSDirectory(t.TempDir())
+	writer := NewIndexWriter(dir, fa, 100)
+
+	doc := document.NewDocument()
+	doc.AddField("data", "", document.FieldTypeStored)
+	doc.AddField("body", "hello", document.FieldTypeText)
+	writer.AddDocument(doc)
+
+	writer.Flush()
+	reader, err := OpenNRTReader(writer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	seg := reader.Leaves()[0].Segment
+
+	fields, err := seg.StoredFields(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(fields["data"]) != "" {
+		t.Errorf("stored empty string: got %q, want %q", fields["data"], "")
+	}
+}
+
+func TestDeleteWithSpecialCharKeyword(t *testing.T) {
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
+		analysis.NewWhitespaceTokenizer(),
+		&analysis.LowerCaseFilter{},
+	))
+	dir, _ := store.NewFSDirectory(t.TempDir())
+	writer := NewIndexWriter(dir, fa, 100)
+
+	doc0 := document.NewDocument()
+	doc0.AddField("id", "user@example.com", document.FieldTypeKeyword)
+	doc0.AddField("body", "first doc", document.FieldTypeText)
+	writer.AddDocument(doc0)
+
+	doc1 := document.NewDocument()
+	doc1.AddField("id", "C++", document.FieldTypeKeyword)
+	doc1.AddField("body", "second doc", document.FieldTypeText)
+	writer.AddDocument(doc1)
+
+	if err := writer.Flush(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Delete by special char keyword
+	if err := writer.DeleteDocuments("id", "user@example.com"); err != nil {
+		t.Fatal(err)
+	}
+
+	reader, err := OpenNRTReader(writer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	if reader.LiveDocCount() != 1 {
+		t.Errorf("expected 1 live doc, got %d", reader.LiveDocCount())
+	}
+}
+
+func TestInvertedIndexAccentedChars(t *testing.T) {
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
+		analysis.NewWhitespaceTokenizer(),
+		&analysis.LowerCaseFilter{},
+	))
+	dir, _ := store.NewFSDirectory(t.TempDir())
+	writer := NewIndexWriter(dir, fa, 100)
+
+	doc := document.NewDocument()
+	doc.AddField("body", "Café Résumé Naïve", document.FieldTypeText)
+	writer.AddDocument(doc)
+
+	writer.Flush()
+	reader, err := OpenNRTReader(writer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	seg := reader.Leaves()[0].Segment
+
+	// LowerCaseFilter should lowercase accented chars
+	if seg.DocFreq("body", "café") != 1 {
+		t.Errorf("DocFreq(café): got %d, want 1", seg.DocFreq("body", "café"))
+	}
+	if seg.DocFreq("body", "résumé") != 1 {
+		t.Errorf("DocFreq(résumé): got %d, want 1", seg.DocFreq("body", "résumé"))
+	}
+}
+
 func TestDeleteDocumentJapanese(t *testing.T) {
 	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),

@@ -162,6 +162,190 @@ func TestDWPTAddDocumentJapanese(t *testing.T) {
 	}
 }
 
+func TestDWPTAddDocumentEmoji(t *testing.T) {
+	dwpt := newDWPT("_seg0", newTestFieldAnalyzers(), newDeleteQueue())
+
+	doc := document.NewDocument()
+	doc.AddField("body", "hello 🔍 world", document.FieldTypeText)
+	if _, err := dwpt.addDocument(doc); err != nil {
+		t.Fatal(err)
+	}
+
+	fi := dwpt.segment.fields["body"]
+	if fi == nil {
+		t.Fatal("expected 'body' field")
+	}
+	if _, ok := fi.postings["hello"]; !ok {
+		t.Error("expected posting for 'hello'")
+	}
+	if _, ok := fi.postings["🔍"]; !ok {
+		t.Error("expected posting for '🔍'")
+	}
+	if _, ok := fi.postings["world"]; !ok {
+		t.Error("expected posting for 'world'")
+	}
+}
+
+func TestDWPTAddDocumentSpecialChars(t *testing.T) {
+	dwpt := newDWPT("_seg0", newTestFieldAnalyzers(), newDeleteQueue())
+
+	doc := document.NewDocument()
+	doc.AddField("body", "user@example.com #tag state-of-the-art", document.FieldTypeText)
+	if _, err := dwpt.addDocument(doc); err != nil {
+		t.Fatal(err)
+	}
+
+	fi := dwpt.segment.fields["body"]
+	if fi == nil {
+		t.Fatal("expected 'body' field")
+	}
+	// Whitespace tokenizer doesn't split on @, #, -
+	if _, ok := fi.postings["user@example.com"]; !ok {
+		t.Error("expected posting for 'user@example.com'")
+	}
+	if _, ok := fi.postings["#tag"]; !ok {
+		t.Error("expected posting for '#tag'")
+	}
+	if _, ok := fi.postings["state-of-the-art"]; !ok {
+		t.Error("expected posting for 'state-of-the-art'")
+	}
+}
+
+func TestDWPTAddDocumentMultipleSpaces(t *testing.T) {
+	dwpt := newDWPT("_seg0", newTestFieldAnalyzers(), newDeleteQueue())
+
+	doc := document.NewDocument()
+	doc.AddField("body", "hello   world", document.FieldTypeText)
+	if _, err := dwpt.addDocument(doc); err != nil {
+		t.Fatal(err)
+	}
+
+	fi := dwpt.segment.fields["body"]
+	if fi == nil {
+		t.Fatal("expected 'body' field")
+	}
+	if _, ok := fi.postings["hello"]; !ok {
+		t.Error("expected posting for 'hello'")
+	}
+	if _, ok := fi.postings["world"]; !ok {
+		t.Error("expected posting for 'world'")
+	}
+	// Should have exactly 2 postings (not 3 or 4)
+	if len(fi.postings) != 2 {
+		t.Errorf("expected 2 unique terms, got %d", len(fi.postings))
+	}
+}
+
+func TestDWPTKeywordWithSpaces(t *testing.T) {
+	dwpt := newDWPT("_seg0", newTestFieldAnalyzers(), newDeleteQueue())
+
+	doc := document.NewDocument()
+	doc.AddField("city", "New York", document.FieldTypeKeyword)
+	if _, err := dwpt.addDocument(doc); err != nil {
+		t.Fatal(err)
+	}
+
+	fi := dwpt.segment.fields["city"]
+	if fi == nil {
+		t.Fatal("expected 'city' field")
+	}
+	// Keyword should preserve spaces as single term
+	if _, ok := fi.postings["New York"]; !ok {
+		t.Error("expected posting for exact keyword 'New York'")
+	}
+	if len(fi.postings) != 1 {
+		t.Errorf("keyword field should have 1 posting, got %d", len(fi.postings))
+	}
+}
+
+func TestDWPTKeywordSpecialChars(t *testing.T) {
+	dwpt := newDWPT("_seg0", newTestFieldAnalyzers(), newDeleteQueue())
+
+	tests := []struct {
+		keyword string
+	}{
+		{"C++"},
+		{""},
+		{"007"},
+		{"@#$%"},
+		{"path\\to\\file"},
+	}
+
+	for i, tt := range tests {
+		doc := document.NewDocument()
+		doc.AddField("tag", tt.keyword, document.FieldTypeKeyword)
+		if _, err := dwpt.addDocument(doc); err != nil {
+			t.Fatalf("doc %d: %v", i, err)
+		}
+	}
+
+	fi := dwpt.segment.fields["tag"]
+	if fi == nil {
+		t.Fatal("expected 'tag' field")
+	}
+	for _, tt := range tests {
+		if tt.keyword == "" {
+			continue // empty keyword may or may not create a posting
+		}
+		if _, ok := fi.postings[tt.keyword]; !ok {
+			t.Errorf("expected posting for keyword %q", tt.keyword)
+		}
+	}
+}
+
+func TestDWPTStoredFieldRoundtripSpecialChars(t *testing.T) {
+	dwpt := newDWPT("_seg0", newTestFieldAnalyzers(), newDeleteQueue())
+
+	values := []string{
+		"hello\tworld\nnewline",
+		"",
+		"path\\to\\file",
+		"he said \"hello\"",
+		"{\"key\": \"value\"}",
+		"café résumé naïve",
+		"🔍 emoji test 🔎",
+		"𠮷野家",
+	}
+
+	for i, val := range values {
+		doc := document.NewDocument()
+		doc.AddField("data", val, document.FieldTypeStored)
+		if _, err := dwpt.addDocument(doc); err != nil {
+			t.Fatalf("doc %d: %v", i, err)
+		}
+	}
+
+	for i, val := range values {
+		stored := dwpt.segment.storedFields[i]
+		got := string(stored["data"])
+		if got != val {
+			t.Errorf("doc %d: stored field = %q, want %q", i, got, val)
+		}
+	}
+}
+
+func TestDWPTAddDocumentCJKExtensionB(t *testing.T) {
+	dwpt := newDWPT("_seg0", newTestFieldAnalyzers(), newDeleteQueue())
+
+	doc := document.NewDocument()
+	// 𠮷 is 4 bytes in UTF-8
+	doc.AddField("body", "𠮷野家 テスト", document.FieldTypeText)
+	if _, err := dwpt.addDocument(doc); err != nil {
+		t.Fatal(err)
+	}
+
+	fi := dwpt.segment.fields["body"]
+	if fi == nil {
+		t.Fatal("expected 'body' field")
+	}
+	if _, ok := fi.postings["𠮷野家"]; !ok {
+		t.Error("expected posting for '𠮷野家'")
+	}
+	if _, ok := fi.postings["テスト"]; !ok {
+		t.Error("expected posting for 'テスト'")
+	}
+}
+
 func TestDWPTPerFieldAnalyzerJapanese(t *testing.T) {
 	fa := analysis.NewFieldAnalyzers(
 		analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{}),

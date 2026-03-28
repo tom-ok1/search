@@ -1473,3 +1473,262 @@ func TestE2EJapaneseMultiFieldDocument(t *testing.T) {
 		t.Errorf("expected 2 results for keyword '観光地', got %d", len(results))
 	}
 }
+
+// --- Edge case tests with special characters ---
+
+func TestE2ESpecialCharTermQuery(t *testing.T) {
+	writer, dir := newTestWriter(t, 100)
+
+	addTextDoc(t, writer, "body", "user@example.com sent email")
+	addTextDoc(t, writer, "body", "#tag is trending")
+	addTextDoc(t, writer, "body", "state-of-the-art technology")
+	addTextDoc(t, writer, "body", "node.js v8.0 runtime")
+
+	reader := commitAndOpenReader(t, writer, dir)
+	searcher := search.NewIndexSearcher(reader)
+
+	tests := []struct {
+		term     string
+		expected int
+	}{
+		{"user@example.com", 1},
+		{"#tag", 1},
+		{"state-of-the-art", 1},
+		{"node.js", 1},
+		{"v8.0", 1},
+		{"nonexistent", 0},
+	}
+	for _, tt := range tests {
+		results := searcher.Search(search.NewTermQuery("body", tt.term), search.NewTopKCollector(10))
+		if len(results) != tt.expected {
+			t.Errorf("term %q: expected %d results, got %d", tt.term, tt.expected, len(results))
+		}
+	}
+}
+
+func TestE2EEmojiTermQuery(t *testing.T) {
+	writer, dir := newTestWriter(t, 100)
+
+	addTextDoc(t, writer, "body", "hello 🔍 world")
+	addTextDoc(t, writer, "body", "search 🔍 engine")
+	addTextDoc(t, writer, "body", "no emoji here")
+
+	reader := commitAndOpenReader(t, writer, dir)
+	searcher := search.NewIndexSearcher(reader)
+
+	// Emoji as search term
+	results := searcher.Search(search.NewTermQuery("body", "🔍"), search.NewTopKCollector(10))
+	if len(results) != 2 {
+		t.Errorf("expected 2 results for '🔍', got %d", len(results))
+	}
+
+	// Regular term should still work
+	results = searcher.Search(search.NewTermQuery("body", "hello"), search.NewTopKCollector(10))
+	if len(results) != 1 {
+		t.Errorf("expected 1 result for 'hello', got %d", len(results))
+	}
+}
+
+func TestE2EPhraseQuerySingleTerm(t *testing.T) {
+	writer, dir := newTestWriter(t, 100)
+
+	addTextDoc(t, writer, "body", "hello world")
+	addTextDoc(t, writer, "body", "world hello")
+
+	reader := commitAndOpenReader(t, writer, dir)
+	searcher := search.NewIndexSearcher(reader)
+
+	// Single-term "phrase" query should behave like a term query
+	results := searcher.Search(search.NewPhraseQuery("body", "hello"), search.NewTopKCollector(10))
+	if len(results) != 2 {
+		t.Errorf("expected 2 results for single-term phrase 'hello', got %d", len(results))
+	}
+}
+
+func TestE2EPhraseQueryTermsExistButNeverAdjacent(t *testing.T) {
+	writer, dir := newTestWriter(t, 100)
+
+	// Both "alpha" and "gamma" exist, but never adjacent
+	addTextDoc(t, writer, "body", "alpha beta gamma")
+	addTextDoc(t, writer, "body", "gamma delta alpha")
+
+	reader := commitAndOpenReader(t, writer, dir)
+	searcher := search.NewIndexSearcher(reader)
+
+	results := searcher.Search(search.NewPhraseQuery("body", "alpha", "gamma"), search.NewTopKCollector(10))
+	if len(results) != 0 {
+		t.Errorf("expected 0 results for non-adjacent 'alpha gamma', got %d", len(results))
+	}
+}
+
+func TestE2EKeywordWithSpacesSearch(t *testing.T) {
+	writer, dir := newTestWriter(t, 100)
+
+	doc := document.NewDocument()
+	doc.AddField("city", "New York", document.FieldTypeKeyword)
+	doc.AddField("body", "big apple", document.FieldTypeText)
+	writer.AddDocument(doc)
+
+	doc2 := document.NewDocument()
+	doc2.AddField("city", "Los Angeles", document.FieldTypeKeyword)
+	doc2.AddField("body", "city of angels", document.FieldTypeText)
+	writer.AddDocument(doc2)
+
+	reader := commitAndOpenReader(t, writer, dir)
+	searcher := search.NewIndexSearcher(reader)
+
+	// Keyword exact match with spaces
+	results := searcher.Search(search.NewTermQuery("city", "New York"), search.NewTopKCollector(10))
+	if len(results) != 1 {
+		t.Errorf("expected 1 result for keyword 'New York', got %d", len(results))
+	}
+
+	// Partial should not match
+	results = searcher.Search(search.NewTermQuery("city", "New"), search.NewTopKCollector(10))
+	if len(results) != 0 {
+		t.Errorf("expected 0 results for partial keyword 'New', got %d", len(results))
+	}
+}
+
+func TestE2EStoredFieldSpecialCharsRoundtrip(t *testing.T) {
+	writer, dir := newTestWriter(t, 100)
+
+	values := []string{
+		"hello\tworld\nnewline",
+		"path\\to\\file",
+		"he said \"hello\"",
+		"{\"key\": \"value\"}",
+		"café résumé",
+		"🔍🔎",
+		"𠮷野家",
+		"",
+	}
+
+	for _, val := range values {
+		doc := document.NewDocument()
+		doc.AddField("data", val, document.FieldTypeStored)
+		doc.AddField("body", "searchable", document.FieldTypeText)
+		writer.AddDocument(doc)
+	}
+
+	reader := commitAndOpenReader(t, writer, dir)
+
+	for i, val := range values {
+		fields := reader.GetStoredFields(i)
+		got := string(fields["data"])
+		if got != val {
+			t.Errorf("doc %d: stored = %q, want %q", i, got, val)
+		}
+	}
+}
+
+func TestE2EAccentedCharSearch(t *testing.T) {
+	writer, dir := newTestWriter(t, 100)
+
+	addTextDoc(t, writer, "body", "Café Résumé Naïve")
+	addTextDoc(t, writer, "body", "café latte")
+
+	reader := commitAndOpenReader(t, writer, dir)
+	searcher := search.NewIndexSearcher(reader)
+
+	// LowerCaseFilter lowercases accented chars
+	results := searcher.Search(search.NewTermQuery("body", "café"), search.NewTopKCollector(10))
+	if len(results) != 2 {
+		t.Errorf("expected 2 results for 'café', got %d", len(results))
+	}
+}
+
+func TestE2ECJKExtensionBSearch(t *testing.T) {
+	writer, dir := newTestWriter(t, 100)
+
+	// 𠮷 is CJK Extension B (4 bytes in UTF-8)
+	addTextDoc(t, writer, "body", "𠮷野家 テスト")
+	addTextDoc(t, writer, "body", "テスト 完了")
+
+	reader := commitAndOpenReader(t, writer, dir)
+	searcher := search.NewIndexSearcher(reader)
+
+	results := searcher.Search(search.NewTermQuery("body", "𠮷野家"), search.NewTopKCollector(10))
+	if len(results) != 1 {
+		t.Errorf("expected 1 result for '𠮷野家', got %d", len(results))
+	}
+
+	results = searcher.Search(search.NewTermQuery("body", "テスト"), search.NewTopKCollector(10))
+	if len(results) != 2 {
+		t.Errorf("expected 2 results for 'テスト', got %d", len(results))
+	}
+}
+
+func TestE2EDeleteBySpecialCharKeyword(t *testing.T) {
+	writer, dir := newTestWriter(t, 100)
+
+	doc0 := document.NewDocument()
+	doc0.AddField("id", "user@example.com", document.FieldTypeKeyword)
+	doc0.AddField("body", "first document", document.FieldTypeText)
+	writer.AddDocument(doc0)
+
+	doc1 := document.NewDocument()
+	doc1.AddField("id", "C++", document.FieldTypeKeyword)
+	doc1.AddField("body", "second document", document.FieldTypeText)
+	writer.AddDocument(doc1)
+
+	writer.DeleteDocuments("id", "user@example.com")
+
+	reader := commitAndOpenReader(t, writer, dir)
+	searcher := search.NewIndexSearcher(reader)
+
+	results := searcher.Search(search.NewTermQuery("body", "first"), search.NewTopKCollector(10))
+	if len(results) != 0 {
+		t.Errorf("expected 0 results after delete, got %d", len(results))
+	}
+
+	results = searcher.Search(search.NewTermQuery("body", "second"), search.NewTopKCollector(10))
+	if len(results) != 1 {
+		t.Errorf("expected 1 result for surviving doc, got %d", len(results))
+	}
+}
+
+func TestE2EForceMergeSpecialChars(t *testing.T) {
+	writer, dir := newTestWriter(t, 2)
+
+	// Create segment 0
+	addTextDoc(t, writer, "body", "café résumé")
+	addTextDoc(t, writer, "body", "user@example.com test") // auto-flush → seg0
+
+	// Create segment 1
+	addTextDoc(t, writer, "body", "🔍 search 🔎")
+	addTextDoc(t, writer, "body", "𠮷野家 テスト") // auto-flush → seg1
+
+	writer.ForceMerge(1)
+	reader := commitAndOpenReader(t, writer, dir)
+
+	if len(reader.Leaves()) != 1 {
+		t.Fatalf("expected 1 merged segment, got %d", len(reader.Leaves()))
+	}
+
+	searcher := search.NewIndexSearcher(reader)
+
+	// Verify all terms survive the merge
+	for _, term := range []string{"café", "résumé", "user@example.com", "🔍", "𠮷野家"} {
+		results := searcher.Search(search.NewTermQuery("body", term), search.NewTopKCollector(10))
+		if len(results) != 1 {
+			t.Errorf("after merge, term %q: expected 1 result, got %d", term, len(results))
+		}
+	}
+}
+
+func TestE2EWhitespaceOnlyDocument(t *testing.T) {
+	writer, dir := newTestWriter(t, 100)
+
+	// Document with whitespace-only text field produces no indexed terms
+	addTextDoc(t, writer, "body", "   ")
+	addTextDoc(t, writer, "body", "hello world")
+
+	reader := commitAndOpenReader(t, writer, dir)
+	searcher := search.NewIndexSearcher(reader)
+
+	results := searcher.Search(search.NewTermQuery("body", "hello"), search.NewTopKCollector(10))
+	if len(results) != 1 {
+		t.Errorf("expected 1 result for 'hello', got %d", len(results))
+	}
+}
