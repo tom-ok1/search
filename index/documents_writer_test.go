@@ -160,17 +160,26 @@ func TestDocumentsWriterDeleteDocuments(t *testing.T) {
 
 	dw.deleteDocuments("id", "1")
 
-	deletes := dw.takePendingDeletes()
-	if len(deletes) != 1 {
-		t.Fatalf("expected 1 pending delete, got %d", len(deletes))
-	}
-	if deletes[0].Field != "id" || deletes[0].Term != "1" {
-		t.Errorf("unexpected delete term: %+v", deletes[0])
+	// Verify deletes are buffered in the delete queue
+	if !dw.deleteQueue.anyChanges() {
+		t.Fatal("expected delete queue to have changes after deleteDocuments")
 	}
 
-	// Second take should be empty
-	deletes2 := dw.takePendingDeletes()
-	if len(deletes2) != 0 {
-		t.Errorf("expected 0 pending deletes after take, got %d", len(deletes2))
+	// Freeze and verify the global buffer contains the delete
+	frozen := dw.freezeGlobalBuffer()
+	if frozen == nil {
+		t.Fatal("expected non-nil frozen buffered updates")
+	}
+	if len(frozen.deleteTerms) != 1 {
+		t.Fatalf("expected 1 frozen delete term, got %d", len(frozen.deleteTerms))
+	}
+	if frozen.deleteTerms[0].Field != "id" || frozen.deleteTerms[0].Term != "1" {
+		t.Errorf("unexpected frozen delete term: Field=%q Term=%q", frozen.deleteTerms[0].Field, frozen.deleteTerms[0].Term)
+	}
+
+	// Second freeze should be empty (buffer was cleared)
+	frozen2 := dw.freezeGlobalBuffer()
+	if frozen2 != nil {
+		t.Errorf("expected nil frozen updates after second freeze, got %+v", frozen2)
 	}
 }

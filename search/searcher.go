@@ -40,6 +40,7 @@ func (s *IndexSearcher) Search(q Query, c Collector) []SearchResult {
 		lc := c.GetLeafCollector(leaf)
 		lc.SetScorer(scorer)
 
+		liveDocs := leaf.Segment.LiveDocs()
 		iter := scorer.Iterator()
 		compIter := lc.CompetitiveIterator()
 
@@ -55,7 +56,7 @@ func (s *IndexSearcher) Search(q Query, c Collector) []SearchResult {
 					continue
 				}
 			}
-			if !leaf.Segment.IsDeleted(doc) {
+			if liveDocs == nil || !liveDocs.Get(doc) {
 				lc.Collect(doc)
 			}
 			compIter = lc.CompetitiveIterator()
@@ -97,7 +98,12 @@ func (s *IndexSearcher) CollectionStatistics(field string) *CollectionStatistics
 	var docCount, sumTotalTermFreq int64
 	for _, leaf := range s.reader.Leaves() {
 		seg := leaf.Segment
-		docCount += int64(seg.LiveDocCount())
+		liveDocs := seg.LiveDocs()
+		if liveDocs != nil {
+			docCount += int64(seg.DocCount() - liveDocs.Count())
+		} else {
+			docCount += int64(seg.DocCount())
+		}
 		sumTotalTermFreq += int64(seg.TotalFieldLength(field))
 	}
 	if docCount == 0 {

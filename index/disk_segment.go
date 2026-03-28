@@ -26,8 +26,7 @@ type DiskSegment struct {
 	termFSTs     map[string]*fst.FST              // field → FST (term → ordinal)
 
 	// Segment-level mmap'd files
-	stored  *store.MMapIndexInput // .stored
-	deleted *store.MMapIndexInput // .del (nil if no deletions)
+	stored *store.MMapIndexInput // .stored
 
 	// Doc values mmap'd files
 	numericDV    map[string]*store.MMapIndexInput // field → .ndv
@@ -153,16 +152,6 @@ func OpenDiskSegment(dirPath string, segName string) (*DiskSegment, error) {
 		ds.dvSkip[field] = sdvs
 	}
 
-	// Optionally mmap deleted docs bitmap
-	delPath := fmt.Sprintf("%s/%s.del", dirPath, segName)
-	if _, statErr := os.Stat(delPath); statErr == nil {
-		ds.deleted, err = store.OpenMMap(delPath)
-		if err != nil {
-			ds.Close()
-			return nil, fmt.Errorf("mmap del: %w", err)
-		}
-	}
-
 	ds.refCount.Store(1)
 	return ds, nil
 }
@@ -194,9 +183,6 @@ func (ds *DiskSegment) Close() error {
 	if ds.stored != nil {
 		ds.stored.Close()
 	}
-	if ds.deleted != nil {
-		ds.deleted.Close()
-	}
 	for _, m := range ds.numericDV {
 		m.Close()
 	}
@@ -218,34 +204,8 @@ func (ds *DiskSegment) Name() string { return ds.name }
 
 func (ds *DiskSegment) DocCount() int { return ds.docCount }
 
-func (ds *DiskSegment) LiveDocCount() int {
-	if ds.deleted == nil {
-		return ds.docCount
-	}
-	count := 0
-	for i := 0; i < ds.docCount; i++ {
-		if !ds.IsDeleted(i) {
-			count++
-		}
-	}
-	return count
-}
-
-func (ds *DiskSegment) IsDeleted(docID int) bool {
-	if ds.deleted == nil {
-		return false
-	}
-	// Bitmap format: [doc_count: uint32][bitmap: ceil(doc_count/8) bytes]
-	byteIdx := 4 + docID/8
-	bitIdx := uint(docID % 8)
-	if byteIdx >= ds.deleted.Length() {
-		return false
-	}
-	val, err := ds.deleted.ReadByteAt(byteIdx)
-	if err != nil {
-		return false
-	}
-	return val&(1<<bitIdx) != 0
+func (ds *DiskSegment) LiveDocs() *Bitset {
+	return nil // DiskSegment has no deletion state; all docs are alive
 }
 
 // DocFreq looks up the term in the FST and returns doc_freq.

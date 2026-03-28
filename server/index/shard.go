@@ -39,13 +39,9 @@ func (s *IndexShard) Index(id string, source []byte) error {
 	}
 
 	// Delete existing document with same ID first (update = delete + re-add).
-	// Flush after delete so the delete term is resolved against existing segments
-	// before the new document is added, preventing the delete from matching the
-	// newly added document.
+	// SeqNo ordering in the IndexWriter ensures the delete only affects
+	// documents added before it, not the newly added document.
 	if err := s.engine.Delete("_id", id); err != nil {
-		return err
-	}
-	if err := s.engine.Flush(); err != nil {
 		return err
 	}
 

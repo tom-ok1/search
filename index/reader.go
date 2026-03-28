@@ -46,7 +46,12 @@ func (r *IndexReader) TotalDocCount() int {
 func (r *IndexReader) LiveDocCount() int {
 	total := 0
 	for _, seg := range r.segments {
-		total += seg.LiveDocCount()
+		liveDocs := seg.LiveDocs()
+		if liveDocs != nil {
+			total += seg.DocCount() - liveDocs.Count()
+		} else {
+			total += seg.DocCount()
+		}
 	}
 	return total
 }
@@ -110,16 +115,30 @@ func OpenDirectoryReader(dir store.Directory) (*IndexReader, error) {
 	}
 
 	segments := make([]SegmentReader, 0, len(si.Segments))
+	dirPath := dir.FilePath("")
+	closeAll := func() {
+		for _, s := range segments {
+			s.Close()
+		}
+	}
 	for _, info := range si.Segments {
-		seg, err := OpenDiskSegment(dir.FilePath(""), info.Name)
+		seg, err := OpenDiskSegment(dirPath, info.Name)
 		if err != nil {
-			// Close already opened segments
-			for _, s := range segments {
-				s.Close()
-			}
+			closeAll()
 			return nil, err
 		}
-		segments = append(segments, seg)
+
+		liveDocs, err := loadLiveDocs(dirPath, &SegmentCommitInfo{Name: info.Name, MaxDoc: seg.DocCount()})
+		if err != nil {
+			seg.Close()
+			closeAll()
+			return nil, err
+		}
+		if liveDocs != nil {
+			segments = append(segments, &LiveDocsSegmentReader{inner: seg, liveDocs: liveDocs})
+		} else {
+			segments = append(segments, seg)
+		}
 	}
 
 	return NewIndexReader(segments), nil

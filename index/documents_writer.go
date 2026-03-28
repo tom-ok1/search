@@ -16,18 +16,22 @@ type DocumentsWriter struct {
 	pool         *perThreadPool
 	flushControl *FlushControl
 	ticketQueue  *FlushTicketQueue
-	deleteQueue  []DeleteTerm
+	deleteQueue  *DeleteQueue
 	dir          store.Directory
 	// onSegmentFlushed is called when a segment is flushed to disk.
 	onSegmentFlushed func(info *SegmentCommitInfo)
+	// onGlobalUpdates is called when frozen global deletes need cross-segment application.
+	onGlobalUpdates func(updates *FrozenBufferedUpdates)
 }
 
 func newDocumentsWriter(dir store.Directory, analyzer *analysis.Analyzer, ramBufferSize int64, maxBufferedDocs int, nameFunc func() string) *DocumentsWriter {
-	pool := newPerThreadPool(nameFunc, analyzer)
+	deleteQueue := newDeleteQueue()
+	pool := newPerThreadPool(nameFunc, analyzer, deleteQueue)
 	return &DocumentsWriter{
 		pool:         pool,
 		flushControl: newFlushControl(ramBufferSize, maxBufferedDocs, pool),
 		ticketQueue:  newFlushTicketQueue(),
+		deleteQueue:  deleteQueue,
 		dir:          dir,
 	}
 }
@@ -35,7 +39,6 @@ func newDocumentsWriter(dir store.Directory, analyzer *analysis.Analyzer, ramBuf
 // addDocument indexes a document concurrently. The caller does not need to hold any lock.
 func (dw *DocumentsWriter) addDocument(doc *document.Document) error {
 	dw.flushControl.waitIfStalled()
-
 	dwpt := dw.pool.getAndLock()
 
 	bytesAdded, err := dwpt.addDocument(doc)
@@ -46,7 +49,6 @@ func (dw *DocumentsWriter) addDocument(doc *document.Document) error {
 
 	flushDWPT := dw.flushControl.doAfterDocument(dwpt, bytesAdded)
 	if flushDWPT != nil {
-		// This DWPT needs flushing — remove it from the pool and flush
 		dw.pool.remove(flushDWPT)
 		if err := dw.doFlush(flushDWPT); err != nil {
 			return err
@@ -55,22 +57,19 @@ func (dw *DocumentsWriter) addDocument(doc *document.Document) error {
 		dw.pool.returnAndUnlock(dwpt)
 	}
 
-	// Try to publish any completed flushes
 	if err := dw.publishFlushedSegments(); err != nil {
 		return err
 	}
-
 	return nil
 }
 
 // doFlush flushes a single DWPT to disk.
 func (dw *DocumentsWriter) doFlush(dwpt *DocumentsWriterPerThread) error {
 	ticket := dw.ticketQueue.addTicket()
-
+	globalUpdates := dwpt.prepareFlush()
 	info, err := dwpt.flush(dw.dir)
 	dw.flushControl.doAfterFlush(dwpt)
-	dw.ticketQueue.markDone(ticket, info, err)
-
+	dw.ticketQueue.markDone(ticket, info, globalUpdates, err)
 	if err != nil {
 		return err
 	}
@@ -83,6 +82,12 @@ func (dw *DocumentsWriter) publishFlushedSegments() error {
 	for _, ticket := range published {
 		if ticket.err != nil {
 			return ticket.err
+		}
+		// Apply global deletes BEFORE registering the new segment.
+		// The new segment already handled these deletes via pendingUpdates
+		// during flush; applying them after registration would double-delete.
+		if ticket.globalUpdates != nil && ticket.globalUpdates.any() && dw.onGlobalUpdates != nil {
+			dw.onGlobalUpdates(ticket.globalUpdates)
 		}
 		if ticket.result != nil && dw.onSegmentFlushed != nil {
 			dw.onSegmentFlushed(ticket.result)
@@ -106,16 +111,10 @@ func (dw *DocumentsWriter) flushAllThreads() error {
 
 // deleteDocuments buffers a delete-by-term operation.
 func (dw *DocumentsWriter) deleteDocuments(field, term string) {
-	dw.mu.Lock()
-	defer dw.mu.Unlock()
-	dw.deleteQueue = append(dw.deleteQueue, DeleteTerm{Field: field, Term: term})
+	dw.deleteQueue.addDelete(field, term)
 }
 
-// takePendingDeletes returns and clears the buffered delete terms.
-func (dw *DocumentsWriter) takePendingDeletes() []DeleteTerm {
-	dw.mu.Lock()
-	defer dw.mu.Unlock()
-	deletes := dw.deleteQueue
-	dw.deleteQueue = nil
-	return deletes
+// freezeGlobalBuffer freezes and returns the global delete buffer.
+func (dw *DocumentsWriter) freezeGlobalBuffer() *FrozenBufferedUpdates {
+	return dw.deleteQueue.freezeGlobalBuffer(nil)
 }

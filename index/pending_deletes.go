@@ -22,6 +22,11 @@ func NewPendingDeletes(info *SegmentCommitInfo) *PendingDeletes {
 	return &PendingDeletes{info: info}
 }
 
+// NewPendingDeletesWithLiveDocs creates a PendingDeletes with an existing live docs bitset.
+func NewPendingDeletesWithLiveDocs(info *SegmentCommitInfo, liveDocs *Bitset) *PendingDeletes {
+	return &PendingDeletes{info: info, liveDocs: liveDocs}
+}
+
 // NewPendingDeletesFromDisk creates a PendingDeletes by reading an existing
 // .del file. Format: [doc_count: uint32][bitmap: ceil(doc_count/8) bytes].
 func NewPendingDeletesFromDisk(info *SegmentCommitInfo, delInput *store.MMapIndexInput) (*PendingDeletes, error) {

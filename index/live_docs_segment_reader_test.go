@@ -60,7 +60,7 @@ func TestLiveDocsSegmentReaderDelegation(t *testing.T) {
 	}
 }
 
-func TestLiveDocsSegmentReaderIsDeleted(t *testing.T) {
+func TestLiveDocsSegmentReaderLiveDocs(t *testing.T) {
 	ds := createTestDiskSegment(t)
 	defer ds.Close()
 
@@ -70,33 +70,27 @@ func TestLiveDocsSegmentReaderIsDeleted(t *testing.T) {
 
 	reader := &LiveDocsSegmentReader{inner: ds, liveDocs: liveDocs}
 
-	if !reader.IsDeleted(0) {
+	got := reader.LiveDocs()
+	if got == nil {
+		t.Fatal("LiveDocs should not be nil")
+	}
+	if !got.Get(0) {
 		t.Error("doc 0 should be deleted")
 	}
-	if reader.IsDeleted(1) {
+	if got.Get(1) {
 		t.Error("doc 1 should not be deleted")
 	}
-	if !reader.IsDeleted(2) {
+	if !got.Get(2) {
 		t.Error("doc 2 should be deleted")
 	}
-	if reader.IsDeleted(3) {
+	if got.Get(3) {
 		t.Error("doc 3 should not be deleted")
 	}
-}
 
-func TestLiveDocsSegmentReaderLiveDocCount(t *testing.T) {
-	ds := createTestDiskSegment(t)
-	defer ds.Close()
-
-	liveDocs := NewBitset(ds.DocCount())
-	liveDocs.Set(1)
-	liveDocs.Set(3)
-
-	reader := &LiveDocsSegmentReader{inner: ds, liveDocs: liveDocs}
-
-	expectedLive := ds.DocCount() - 2
-	if reader.LiveDocCount() != expectedLive {
-		t.Errorf("LiveDocCount: got %d, want %d", reader.LiveDocCount(), expectedLive)
+	// Verify live doc count via LiveDocs
+	expectedLive := ds.DocCount() - got.Count()
+	if expectedLive != 2 {
+		t.Errorf("live doc count: got %d, want 2", expectedLive)
 	}
 }
 

@@ -5,9 +5,10 @@ import "sync"
 // FlushTicket represents a pending flush operation. Tickets are completed
 // out of order but published in FIFO order to preserve segment ordering.
 type FlushTicket struct {
-	result *SegmentCommitInfo
-	err    error
-	done   chan struct{}
+	result        *SegmentCommitInfo
+	globalUpdates *FrozenBufferedUpdates
+	err           error
+	done          chan struct{}
 }
 
 // FlushTicketQueue ensures flushed segments are published in the order
@@ -34,8 +35,9 @@ func (q *FlushTicketQueue) addTicket() *FlushTicket {
 }
 
 // markDone completes a ticket with the given result.
-func (q *FlushTicketQueue) markDone(ticket *FlushTicket, info *SegmentCommitInfo, err error) {
+func (q *FlushTicketQueue) markDone(ticket *FlushTicket, info *SegmentCommitInfo, globalUpdates *FrozenBufferedUpdates, err error) {
 	ticket.result = info
+	ticket.globalUpdates = globalUpdates
 	ticket.err = err
 	close(ticket.done)
 }

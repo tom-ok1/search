@@ -11,16 +11,22 @@ import (
 // DocumentsWriterPerThread owns a single InMemorySegment and performs
 // document indexing without locks. Each indexing goroutine gets its own DWPT.
 type DocumentsWriterPerThread struct {
-	segment      *InMemorySegment
-	analyzer     *analysis.Analyzer
-	bytesUsed    int64
-	flushPending bool
+	segment        *InMemorySegment
+	analyzer       *analysis.Analyzer
+	bytesUsed      int64
+	flushPending   bool
+	deleteQueue    *DeleteQueue
+	deleteSlice    *DeleteSlice
+	pendingUpdates *BufferedUpdates
 }
 
-func newDWPT(segmentName string, analyzer *analysis.Analyzer) *DocumentsWriterPerThread {
+func newDWPT(segmentName string, analyzer *analysis.Analyzer, deleteQueue *DeleteQueue) *DocumentsWriterPerThread {
 	return &DocumentsWriterPerThread{
-		segment:  newInMemorySegment(segmentName),
-		analyzer: analyzer,
+		segment:        newInMemorySegment(segmentName),
+		analyzer:       analyzer,
+		deleteQueue:    deleteQueue,
+		deleteSlice:    deleteQueue.newSlice(),
+		pendingUpdates: newBufferedUpdates(),
 	}
 }
 
@@ -121,10 +127,28 @@ func (dwpt *DocumentsWriterPerThread) addDocument(doc *document.Document) (int64
 	}
 
 	dwpt.bytesUsed += bytesAdded
+
+	// After adding the document, catch up with global deletes.
+	// docIDUpto = docID means deletes apply to docs with ID < docID (NOT this doc).
+	if dwpt.deleteQueue.updateSlice(dwpt.deleteSlice) {
+		dwpt.deleteSlice.apply(dwpt.pendingUpdates, docID)
+	} else {
+		dwpt.deleteSlice.reset()
+	}
+
 	return bytesAdded, nil
 }
 
+// prepareFlush freezes global deletes and applies remaining delete slice.
+func (dwpt *DocumentsWriterPerThread) prepareFlush() *FrozenBufferedUpdates {
+	numDocsInRAM := dwpt.segment.docCount
+	globalUpdates := dwpt.deleteQueue.freezeGlobalBuffer(dwpt.deleteSlice)
+	dwpt.deleteSlice.apply(dwpt.pendingUpdates, numDocsInRAM)
+	return globalUpdates
+}
+
 // flush writes this DWPT's segment to disk and returns a SegmentCommitInfo.
+// Buffered delete terms from pendingUpdates are applied using docIDUpto.
 func (dwpt *DocumentsWriterPerThread) flush(dir store.Directory) (*SegmentCommitInfo, error) {
 	seg := dwpt.segment
 	if seg.docCount == 0 {
@@ -143,7 +167,60 @@ func (dwpt *DocumentsWriterPerThread) flush(dir store.Directory) (*SegmentCommit
 		Files:  files,
 	}
 
+	if !dwpt.pendingUpdates.any() {
+		return info, nil
+	}
+
+	// when deleted terms exist
+	if err := dwpt.applyDeletes(dir, info); err != nil {
+		return nil, err
+	}
+	dwpt.pendingUpdates.clear()
+
 	return info, nil
+}
+
+// applyDeletes resolves buffered delete terms against the in-memory segment,
+// writes a .del bitset file, and updates info with the delete count and file.
+func (dwpt *DocumentsWriterPerThread) applyDeletes(dir store.Directory, info *SegmentCommitInfo) error {
+	seg := dwpt.segment
+	delBitset := NewBitset(seg.docCount)
+	delCount := 0
+
+	for _, dt := range dwpt.pendingUpdates.terms() {
+		fi, exists := seg.fields[dt.Field]
+		if !exists {
+			continue
+		}
+		pl, exists := fi.postings[dt.Term]
+		if !exists {
+			continue
+		}
+		for _, posting := range pl.Postings {
+			if posting.DocID < dt.DocIDUpto && !delBitset.Get(posting.DocID) {
+				delBitset.Set(posting.DocID)
+				delCount++
+			}
+		}
+	}
+
+	if delCount == 0 {
+		return nil
+	}
+
+	pd := &PendingDeletes{
+		info:               info,
+		writeableLiveDocs:  delBitset,
+		pendingDeleteCount: delCount,
+	}
+	delFile, err := pd.WriteLiveDocs(dir)
+	if err != nil {
+		return fmt.Errorf("write intra-segment deletes for %s: %w", seg.name, err)
+	}
+
+	info.DelCount = delCount
+	info.Files = append(info.Files, delFile)
+	return nil
 }
 
 // estimateBytesUsed returns the current RAM usage estimate.
@@ -156,6 +233,8 @@ func (dwpt *DocumentsWriterPerThread) reset(name string) {
 	dwpt.segment = newInMemorySegment(name)
 	dwpt.bytesUsed = 0
 	dwpt.flushPending = false
+	dwpt.deleteSlice = dwpt.deleteQueue.newSlice()
+	dwpt.pendingUpdates = newBufferedUpdates()
 }
 
 func (dwpt *DocumentsWriterPerThread) getOrCreateFieldIndex(fieldName string) *FieldIndex {

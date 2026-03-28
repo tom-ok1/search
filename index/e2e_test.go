@@ -1,6 +1,7 @@
 package index_test
 
 import (
+	"fmt"
 	"math"
 	"sort"
 	"testing"
@@ -887,20 +888,24 @@ func TestDiskSegmentIsDeletedStateless(t *testing.T) {
 
 	for _, leaf := range reader.Leaves() {
 		seg := leaf.Segment
-		// Interleave IsDeleted with other reads to ensure no state corruption.
+		liveDocs := seg.LiveDocs()
+		if liveDocs == nil {
+			t.Fatal("LiveDocs should not be nil for segment with deletions")
+		}
+		// Interleave LiveDocs checks with other reads to ensure no state corruption.
 		_ = seg.FieldLength("body", 0)
-		if seg.IsDeleted(0) {
+		if liveDocs.Get(0) {
 			t.Error("doc0 should not be deleted")
 		}
 		_ = seg.DocFreq("body", "aaa")
-		if !seg.IsDeleted(1) {
+		if !liveDocs.Get(1) {
 			t.Error("doc1 should be deleted")
 		}
 		_ = seg.FieldLength("body", 2)
-		if seg.IsDeleted(2) {
+		if liveDocs.Get(2) {
 			t.Error("doc2 should not be deleted")
 		}
-		if seg.IsDeleted(3) {
+		if liveDocs.Get(3) {
 			t.Error("doc3 should not be deleted")
 		}
 	}
@@ -1140,5 +1145,111 @@ func TestPhraseQueryDeterministicResults(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestE2EDeleteQueueCrossSegmentDeletes(t *testing.T) {
+	dir, _ := store.NewFSDirectory(t.TempDir())
+	analyzer := analysis.NewAnalyzer(
+		analysis.NewWhitespaceTokenizer(),
+		&analysis.LowerCaseFilter{},
+	)
+	writer := index.NewIndexWriter(dir, analyzer, 2) // 2 docs per segment
+
+	// Segment 1: doc0 (java), doc1 (go)
+	doc0 := document.NewDocument()
+	doc0.AddField("title", "java", document.FieldTypeKeyword)
+	doc0.AddField("body", "learn java programming", document.FieldTypeText)
+	writer.AddDocument(doc0)
+
+	doc1 := document.NewDocument()
+	doc1.AddField("title", "go", document.FieldTypeKeyword)
+	doc1.AddField("body", "learn go programming", document.FieldTypeText)
+	writer.AddDocument(doc1)
+	// Auto-flush creates segment 1
+
+	// Segment 2: doc2 (rust), doc3 (java again)
+	doc2 := document.NewDocument()
+	doc2.AddField("title", "rust", document.FieldTypeKeyword)
+	doc2.AddField("body", "learn rust programming", document.FieldTypeText)
+	writer.AddDocument(doc2)
+
+	doc3 := document.NewDocument()
+	doc3.AddField("title", "java", document.FieldTypeKeyword)
+	doc3.AddField("body", "advanced java concepts", document.FieldTypeText)
+	writer.AddDocument(doc3)
+	// Auto-flush creates segment 2
+
+	// Delete all "java" docs — should apply across BOTH segments
+	writer.DeleteDocuments("title", "java")
+
+	// Commit to apply cross-segment deletes
+	if err := writer.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify: 2 docs deleted (doc0 and doc3), 2 alive (doc1 and doc2)
+	reader, err := index.OpenDirectoryReader(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+
+	if reader.TotalDocCount() != 4 {
+		t.Errorf("TotalDocCount: got %d, want 4", reader.TotalDocCount())
+	}
+	if reader.LiveDocCount() != 2 {
+		t.Errorf("LiveDocCount: got %d, want 2", reader.LiveDocCount())
+	}
+
+	// Search for "programming" — should find only go and rust docs
+	searcher := search.NewIndexSearcher(reader)
+	query := search.NewTermQuery("body", "programming")
+	collector := search.NewTopKCollector(10)
+	results := searcher.Search(query, collector)
+	if len(results) != 2 {
+		t.Errorf("search results: got %d, want 2", len(results))
+	}
+}
+
+func TestE2EDeleteDuringConcurrentAdds(t *testing.T) {
+	dir, _ := store.NewFSDirectory(t.TempDir())
+	analyzer := analysis.NewAnalyzer(
+		analysis.NewWhitespaceTokenizer(),
+		&analysis.LowerCaseFilter{},
+	)
+	writer := index.NewIndexWriter(dir, analyzer, 100)
+
+	// Add some initial docs
+	for i := range 10 {
+		doc := document.NewDocument()
+		doc.AddField("id", fmt.Sprintf("doc%d", i), document.FieldTypeKeyword)
+		doc.AddField("body", "hello world", document.FieldTypeText)
+		writer.AddDocument(doc)
+	}
+
+	// Delete a term that exists in all docs
+	writer.DeleteDocuments("body", "hello")
+
+	// Add more docs after the delete
+	for i := 10; i < 20; i++ {
+		doc := document.NewDocument()
+		doc.AddField("id", fmt.Sprintf("doc%d", i), document.FieldTypeKeyword)
+		doc.AddField("body", "hello world", document.FieldTypeText)
+		writer.AddDocument(doc)
+	}
+
+	// The delete should affect docs 0-9 but NOT docs 10-19
+	reader, err := index.OpenNRTReader(writer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+
+	if reader.TotalDocCount() != 20 {
+		t.Errorf("TotalDocCount: got %d, want 20", reader.TotalDocCount())
+	}
+	if reader.LiveDocCount() != 10 {
+		t.Errorf("LiveDocCount: got %d, want 10 (docs 10-19 alive)", reader.LiveDocCount())
 	}
 }

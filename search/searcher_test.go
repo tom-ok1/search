@@ -30,16 +30,17 @@ func newMockSegment(name string, docCount int) *mockSegment {
 	}
 }
 
-func (m *mockSegment) Name() string             { return m.name }
-func (m *mockSegment) DocCount() int            { return m.docCount }
-func (m *mockSegment) IsDeleted(docID int) bool { return m.deleted[docID] }
-
-func (m *mockSegment) LiveDocCount() int {
-	count := m.docCount
-	for range m.deleted {
-		count--
+func (m *mockSegment) Name() string  { return m.name }
+func (m *mockSegment) DocCount() int { return m.docCount }
+func (m *mockSegment) LiveDocs() *index.Bitset {
+	if len(m.deleted) == 0 {
+		return nil
 	}
-	return count
+	bs := index.NewBitset(m.docCount)
+	for docID := range m.deleted {
+		bs.Set(docID)
+	}
+	return bs
 }
 
 func (m *mockSegment) DocFreq(field, term string) int {

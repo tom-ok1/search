@@ -14,7 +14,7 @@ func TestPoolGetAndReturn(t *testing.T) {
 		name := fmt.Sprintf("_seg%d", counter)
 		counter++
 		return name
-	}, newTestAnalyzer())
+	}, newTestAnalyzer(), newDeleteQueue())
 
 	dwpt1 := pool.getAndLock()
 	if dwpt1 == nil {
@@ -36,7 +36,7 @@ func TestPoolConcurrentCheckout(t *testing.T) {
 	pool := newPerThreadPool(func() string {
 		n := counter.Add(1)
 		return fmt.Sprintf("_seg%d", n)
-	}, newTestAnalyzer())
+	}, newTestAnalyzer(), newDeleteQueue())
 
 	const N = 8
 	var wg sync.WaitGroup
@@ -75,7 +75,7 @@ func TestPoolRemove(t *testing.T) {
 		name := fmt.Sprintf("_seg%d", counter)
 		counter++
 		return name
-	}, newTestAnalyzer())
+	}, newTestAnalyzer(), newDeleteQueue())
 
 	dwpt := pool.getAndLock()
 	pool.remove(dwpt)
@@ -94,7 +94,7 @@ func TestPoolFullFlushOnlyFree(t *testing.T) {
 		name := fmt.Sprintf("_seg%d", counter)
 		counter++
 		return name
-	}, newTestAnalyzer())
+	}, newTestAnalyzer(), newDeleteQueue())
 
 	// Create 2 free DWPTs
 	d1 := pool.getAndLock()
@@ -120,7 +120,7 @@ func TestPoolFullFlushWaitsForActive(t *testing.T) {
 		name := fmt.Sprintf("_seg%d", counter)
 		counter++
 		return name
-	}, newTestAnalyzer())
+	}, newTestAnalyzer(), newDeleteQueue())
 
 	// d1 is free, d2 is active
 	d1 := pool.getAndLock()
@@ -171,7 +171,7 @@ func TestPoolFullFlushReturnRouting(t *testing.T) {
 		name := fmt.Sprintf("_seg%d", counter)
 		counter++
 		return name
-	}, newTestAnalyzer())
+	}, newTestAnalyzer(), newDeleteQueue())
 
 	// d1 active
 	d1 := pool.getAndLock()
@@ -200,7 +200,7 @@ func TestPoolFullFlushRemoveCountsAsReturn(t *testing.T) {
 		name := fmt.Sprintf("_seg%d", counter)
 		counter++
 		return name
-	}, newTestAnalyzer())
+	}, newTestAnalyzer(), newDeleteQueue())
 
 	d1 := pool.getAndLock()
 	pool.drainFreeAndMarkActive()
@@ -229,7 +229,7 @@ func TestPoolFullFlushIgnoresNewDWPTs(t *testing.T) {
 	pool := newPerThreadPool(func() string {
 		n := counter.Add(1)
 		return fmt.Sprintf("_seg%d", n)
-	}, newTestAnalyzer())
+	}, newTestAnalyzer(), newDeleteQueue())
 
 	// d1 is active when full flush starts
 	d1 := pool.getAndLock()

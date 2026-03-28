@@ -1,9 +1,6 @@
 package index
 
-import (
-	"fmt"
-	"gosearch/store"
-)
+import "gosearch/store"
 
 // ReadersAndUpdates manages a single segment's reader and pending deletions.
 // It lazily opens the DiskSegment and coordinates deletion state via PendingDeletes.
@@ -49,14 +46,12 @@ func (rau *ReadersAndUpdates) getReader() (*DiskSegment, error) {
 	}
 	rau.reader = ds
 
-	// If the DiskSegment has an existing .del file, load it into PendingDeletes
-	// as the initial liveDocs snapshot.
-	if ds.deleted != nil {
-		pd, err := NewPendingDeletesFromDisk(rau.info, ds.deleted)
-		if err != nil {
-			return nil, fmt.Errorf("load deletions for %s: %w", rau.info.Name, err)
-		}
-		rau.pendingDeletes = pd
+	liveDocs, err := loadLiveDocs(rau.dirPath, rau.info)
+	if err != nil {
+		return nil, err
+	}
+	if liveDocs != nil {
+		rau.pendingDeletes = NewPendingDeletesWithLiveDocs(rau.info, liveDocs)
 	}
 
 	return ds, nil

@@ -16,7 +16,7 @@ func newTestAnalyzer() *analysis.Analyzer {
 }
 
 func TestDWPTAddDocument(t *testing.T) {
-	dwpt := newDWPT("_seg0", newTestAnalyzer())
+	dwpt := newDWPT("_seg0", newTestAnalyzer(), newDeleteQueue())
 
 	doc := document.NewDocument()
 	doc.AddField("body", "hello world", document.FieldTypeText)
@@ -40,7 +40,7 @@ func TestDWPTAddDocument(t *testing.T) {
 }
 
 func TestDWPTAddMultipleDocuments(t *testing.T) {
-	dwpt := newDWPT("_seg0", newTestAnalyzer())
+	dwpt := newDWPT("_seg0", newTestAnalyzer(), newDeleteQueue())
 
 	doc0 := document.NewDocument()
 	doc0.AddField("title", "Go Programming", document.FieldTypeText)
@@ -77,7 +77,7 @@ func TestDWPTAddMultipleDocuments(t *testing.T) {
 
 func TestDWPTFlush(t *testing.T) {
 	dir, _ := store.NewFSDirectory(t.TempDir())
-	dwpt := newDWPT("_seg0", newTestAnalyzer())
+	dwpt := newDWPT("_seg0", newTestAnalyzer(), newDeleteQueue())
 
 	doc := document.NewDocument()
 	doc.AddField("body", "hello world", document.FieldTypeText)
@@ -114,7 +114,7 @@ func TestDWPTFlush(t *testing.T) {
 }
 
 func TestDWPTEstimateBytesUsed(t *testing.T) {
-	dwpt := newDWPT("_seg0", newTestAnalyzer())
+	dwpt := newDWPT("_seg0", newTestAnalyzer(), newDeleteQueue())
 
 	if dwpt.estimateBytesUsed() != 0 {
 		t.Error("expected 0 bytes before adding docs")

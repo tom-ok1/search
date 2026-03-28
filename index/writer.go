@@ -12,13 +12,6 @@ import (
 	"gosearch/store"
 )
 
-// DeleteTerm represents a buffered delete-by-term operation.
-// Actual resolution (finding matching docIDs) is deferred until Commit.
-type DeleteTerm struct {
-	Field string
-	Term  string
-}
-
 // IndexWriter adds documents to the index and manages segments.
 // It is safe for concurrent use by multiple goroutines.
 type IndexWriter struct {
@@ -82,6 +75,11 @@ func NewIndexWriter(dir store.Directory, analyzer *analysis.Analyzer, bufferSize
 		w.segmentInfos.Segments = append(w.segmentInfos.Segments, info)
 		w.segmentInfos.Version++
 	}
+	w.docWriter.onGlobalUpdates = func(updates *FrozenBufferedUpdates) {
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		w.applyFrozenUpdates(updates)
+	}
 
 	return w
 }
@@ -120,9 +118,8 @@ func (w *IndexWriter) Flush() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	// Apply pending deletes
-	pendingDeletes := w.docWriter.takePendingDeletes()
-	w.applyDeleteTerms(pendingDeletes)
+	frozen := w.docWriter.freezeGlobalBuffer()
+	w.applyFrozenUpdates(frozen)
 
 	return w.autoMerge()
 }
@@ -138,9 +135,9 @@ func (w *IndexWriter) Commit() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	// 2. Resolve buffered delete terms against disk segments
-	pendingDeletes := w.docWriter.takePendingDeletes()
-	if err := w.applyDeleteTerms(pendingDeletes); err != nil {
+	// 2. Freeze and apply any remaining global deletes
+	frozen := w.docWriter.freezeGlobalBuffer()
+	if err := w.applyFrozenUpdates(frozen); err != nil {
 		return err
 	}
 
@@ -195,27 +192,24 @@ func (w *IndexWriter) Commit() error {
 	return w.autoMerge()
 }
 
-// applyDeleteTerms resolves delete terms against disk segments.
-func (w *IndexWriter) applyDeleteTerms(deleteTerms []DeleteTerm) error {
-	if len(deleteTerms) == 0 {
+// applyFrozenUpdates resolves frozen delete terms against all existing disk segments.
+func (w *IndexWriter) applyFrozenUpdates(frozen *FrozenBufferedUpdates) error {
+	if frozen == nil || !frozen.any() {
 		return nil
 	}
-
 	for _, info := range w.segmentInfos.Segments {
 		rau := w.getOrCreateRAU(info)
 		reader, err := rau.getReader()
 		if err != nil {
 			return fmt.Errorf("open segment %s for delete: %w", info.Name, err)
 		}
-
-		for _, dt := range deleteTerms {
+		for _, dt := range frozen.deleteTerms {
 			iter := reader.PostingsIterator(dt.Field, dt.Term)
 			for iter.Next() {
 				rau.Delete(iter.DocID())
 			}
 		}
 	}
-
 	return nil
 }
 
@@ -243,9 +237,8 @@ func (w *IndexWriter) nrtSegments() ([]SegmentReader, []string, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	// Resolve buffered delete terms
-	pendingDeletes := w.docWriter.takePendingDeletes()
-	if err := w.applyDeleteTerms(pendingDeletes); err != nil {
+	frozen := w.docWriter.freezeGlobalBuffer()
+	if err := w.applyFrozenUpdates(frozen); err != nil {
 		return nil, nil, err
 	}
 

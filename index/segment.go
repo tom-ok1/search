@@ -5,8 +5,10 @@ package index
 type SegmentReader interface {
 	Name() string
 	DocCount() int
-	LiveDocCount() int
-	IsDeleted(docID int) bool
+	// LiveDocs returns a bitset where set bits represent deleted documents.
+	// Returns nil if all documents are alive (no deletions).
+	// Lucene equivalent: SegmentReader.getLiveDocs()
+	LiveDocs() *Bitset
 	DocFreq(field, term string) int
 	FieldLength(field string, docID int) int
 	TotalFieldLength(field string) int

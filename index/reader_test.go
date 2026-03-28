@@ -291,10 +291,14 @@ func TestDirectoryReaderWithDeletions(t *testing.T) {
 	}
 
 	seg := reader.Leaves()[0].Segment
-	if !seg.IsDeleted(1) {
+	liveDocs := seg.LiveDocs()
+	if liveDocs == nil {
+		t.Fatal("LiveDocs should not be nil for segment with deletions")
+	}
+	if !liveDocs.Get(1) {
 		t.Error("doc 1 (id=2) should be deleted")
 	}
-	if seg.IsDeleted(0) {
+	if liveDocs.Get(0) {
 		t.Error("doc 0 (id=1) should not be deleted")
 	}
 }

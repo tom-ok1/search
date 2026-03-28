@@ -21,8 +21,6 @@ type InMemorySegment struct {
 	docCount     int
 	storedFields map[int]map[string][]byte
 	fieldLengths map[string][]int
-	// Deletion marks: localDocID -> deleted
-	deletedDocs map[int]bool
 	// Doc values buffers
 	numericDocValues map[string][]int64  // field -> values indexed by docID
 	sortedDocValues  map[string][]string // field -> values indexed by docID
@@ -34,13 +32,7 @@ func newInMemorySegment(name string) *InMemorySegment {
 		fields:           make(map[string]*FieldIndex),
 		storedFields:     make(map[int]map[string][]byte, 0),
 		fieldLengths:     make(map[string][]int),
-		deletedDocs:      make(map[int]bool),
 		numericDocValues: make(map[string][]int64),
 		sortedDocValues:  make(map[string][]string),
 	}
-}
-
-// MarkDeleted marks a document as deleted.
-func (s *InMemorySegment) MarkDeleted(localDocID int) {
-	s.deletedDocs[localDocID] = true
 }

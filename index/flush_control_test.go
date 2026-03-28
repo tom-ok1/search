@@ -14,7 +14,7 @@ func TestFlushControlMarksFlushPending(t *testing.T) {
 		name := fmt.Sprintf("_seg%d", counter)
 		counter++
 		return name
-	}, newTestAnalyzer())
+	}, newTestAnalyzer(), newDeleteQueue())
 
 	// Small RAM buffer to trigger flush quickly
 	fc := newFlushControl(100, 0, pool)
@@ -41,7 +41,7 @@ func TestFlushControlDoAfterFlush(t *testing.T) {
 		name := fmt.Sprintf("_seg%d", counter)
 		counter++
 		return name
-	}, newTestAnalyzer())
+	}, newTestAnalyzer(), newDeleteQueue())
 
 	fc := newFlushControl(100, 0, pool)
 	dwpt := pool.getAndLock()
@@ -69,7 +69,7 @@ func TestFlushControlStallAndUnstall(t *testing.T) {
 		name := fmt.Sprintf("_seg%d", counter)
 		counter++
 		return name
-	}, newTestAnalyzer())
+	}, newTestAnalyzer(), newDeleteQueue())
 
 	// ramBufferSize=50, stallLimit=2*50=100
 	fc := newFlushControl(50, 0, pool)
@@ -118,7 +118,7 @@ func TestFlushControlMarkForFullFlush(t *testing.T) {
 		name := fmt.Sprintf("_seg%d", counter)
 		counter++
 		return name
-	}, newTestAnalyzer())
+	}, newTestAnalyzer(), newDeleteQueue())
 
 	fc := newFlushControl(1<<30, 0, pool) // large buffer so nothing auto-flushes
 

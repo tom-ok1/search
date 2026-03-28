@@ -498,12 +498,16 @@ func TestCommitPersistsDeletes(t *testing.T) {
 	if reader.TotalDocCount() != 2 {
 		t.Errorf("TotalDocCount: got %d, want 2", reader.TotalDocCount())
 	}
-	// The deletion bitmap should be readable from disk
+	// The deletion bitmap should be readable from disk via LiveDocs()
 	seg := reader.Leaves()[0].Segment
-	if !seg.IsDeleted(0) {
+	liveDocs := seg.LiveDocs()
+	if liveDocs == nil {
+		t.Fatal("LiveDocs should not be nil for segment with deletions")
+	}
+	if !liveDocs.Get(0) {
 		t.Error("doc 0 (id=1) should be deleted after commit + reopen")
 	}
-	if seg.IsDeleted(1) {
+	if liveDocs.Get(1) {
 		t.Error("doc 1 (id=2) should not be deleted")
 	}
 }
@@ -694,10 +698,14 @@ func TestNewWriterDeletesAcrossSessions(t *testing.T) {
 		t.Errorf("LiveDocCount: got %d, want 1", reader.LiveDocCount())
 	}
 	seg := reader.Leaves()[0].Segment
-	if !seg.IsDeleted(0) {
+	liveDocs := seg.LiveDocs()
+	if liveDocs == nil {
+		t.Fatal("LiveDocs should not be nil for segment with deletions")
+	}
+	if !liveDocs.Get(0) {
 		t.Error("doc 0 (id=1) should be deleted")
 	}
-	if seg.IsDeleted(1) {
+	if liveDocs.Get(1) {
 		t.Error("doc 1 (id=2) should not be deleted")
 	}
 }
@@ -1197,6 +1205,122 @@ func TestCommitCleansUpOrphanedSegmentFiles(t *testing.T) {
 		for _, f := range info.Files {
 			if !dir.FileExists(f) {
 				t.Errorf("current segment file %q should still exist", f)
+			}
+		}
+	}
+}
+
+// TestDeleteThenAdd verifies that when a delete is issued before an add with the
+// same ID, the newly added document survives (the delete only affects prior docs).
+func TestDeleteThenAdd(t *testing.T) {
+	analyzer := analysis.NewAnalyzer(
+		analysis.NewWhitespaceTokenizer(),
+		&analysis.LowerCaseFilter{},
+	)
+	dir, _ := store.NewFSDirectory(t.TempDir())
+	writer := NewIndexWriter(dir, analyzer, 100)
+
+	// First, add a document and flush so it's on disk.
+	doc0 := document.NewDocument()
+	doc0.AddField("_id", "1", document.FieldTypeKeyword)
+	doc0.AddField("body", "original version", document.FieldTypeText)
+	writer.AddDocument(doc0)
+	if err := writer.Flush(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Now delete then re-add (update pattern) without flushing in between.
+	writer.DeleteDocuments("_id", "1")
+
+	doc1 := document.NewDocument()
+	doc1.AddField("_id", "1", document.FieldTypeKeyword)
+	doc1.AddField("body", "updated version", document.FieldTypeText)
+	writer.AddDocument(doc1)
+
+	reader, err := OpenNRTReader(writer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+
+	if reader.LiveDocCount() != 1 {
+		t.Errorf("LiveDocCount: got %d, want 1", reader.LiveDocCount())
+	}
+}
+
+// TestAddThenDelete verifies that when a document is added and then deleted
+// (both before flush), the document is properly deleted.
+func TestAddThenDelete(t *testing.T) {
+	analyzer := analysis.NewAnalyzer(
+		analysis.NewWhitespaceTokenizer(),
+		&analysis.LowerCaseFilter{},
+	)
+	dir, _ := store.NewFSDirectory(t.TempDir())
+	writer := NewIndexWriter(dir, analyzer, 100)
+
+	doc := document.NewDocument()
+	doc.AddField("_id", "1", document.FieldTypeKeyword)
+	doc.AddField("body", "some content", document.FieldTypeText)
+	writer.AddDocument(doc)
+
+	writer.DeleteDocuments("_id", "1")
+
+	reader, err := OpenNRTReader(writer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+
+	if reader.LiveDocCount() != 0 {
+		t.Errorf("LiveDocCount: got %d, want 0", reader.LiveDocCount())
+	}
+}
+
+// TestUpdateSameDocTwice verifies that two consecutive updates to the same
+// document ID (both before flush) result in only the latest version surviving.
+func TestUpdateSameDocTwice(t *testing.T) {
+	analyzer := analysis.NewAnalyzer(
+		analysis.NewWhitespaceTokenizer(),
+		&analysis.LowerCaseFilter{},
+	)
+	dir, _ := store.NewFSDirectory(t.TempDir())
+	writer := NewIndexWriter(dir, analyzer, 100)
+
+	// First update: delete + add v1
+	writer.DeleteDocuments("_id", "1")
+
+	v1 := document.NewDocument()
+	v1.AddField("_id", "1", document.FieldTypeKeyword)
+	v1.AddField("body", "version one", document.FieldTypeText)
+	writer.AddDocument(v1)
+
+	// Second update: delete + add v2
+	writer.DeleteDocuments("_id", "1")
+
+	v2 := document.NewDocument()
+	v2.AddField("_id", "1", document.FieldTypeKeyword)
+	v2.AddField("body", "version two", document.FieldTypeText)
+	writer.AddDocument(v2)
+
+	reader, err := OpenNRTReader(writer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+
+	// Only v2 should survive
+	if reader.LiveDocCount() != 1 {
+		t.Errorf("LiveDocCount: got %d, want 1", reader.LiveDocCount())
+	}
+
+	// Verify "version one" docs are all deleted via liveDocs
+	for _, leaf := range reader.Leaves() {
+		seg := leaf.Segment
+		liveDocs := seg.LiveDocs()
+		iter := seg.PostingsIterator("body", "one")
+		for iter.Next() {
+			if liveDocs == nil || !liveDocs.Get(iter.DocID()) {
+				t.Errorf("doc %d with 'one' should be deleted", iter.DocID())
 			}
 		}
 	}

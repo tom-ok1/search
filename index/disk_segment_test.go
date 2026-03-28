@@ -18,7 +18,7 @@ func buildTestSegment(t *testing.T) *InMemorySegment {
 		&analysis.LowerCaseFilter{},
 	)
 
-	dwpt := newDWPT("_seg0", analyzer)
+	dwpt := newDWPT("_seg0", analyzer, newDeleteQueue())
 
 	docs := []struct {
 		title string
@@ -65,9 +65,9 @@ func TestDiskSegmentBasicMetadata(t *testing.T) {
 	if ds.DocCount() != seg.docCount {
 		t.Errorf("DocCount: got %d, want %d", ds.DocCount(), seg.docCount)
 	}
-	wantLive := seg.docCount - len(seg.deletedDocs)
-	if ds.LiveDocCount() != wantLive {
-		t.Errorf("LiveDocCount: got %d, want %d", ds.LiveDocCount(), wantLive)
+	// DiskSegment.LiveDocs() is always nil (deletions are handled by LiveDocsSegmentReader)
+	if ds.LiveDocs() != nil {
+		t.Error("LiveDocs: expected nil for DiskSegment")
 	}
 }
 
@@ -310,26 +310,14 @@ func TestDiskSegmentStoredFieldsOutOfRange(t *testing.T) {
 	}
 }
 
-func TestDiskSegmentIsDeletedWithoutDelFile(t *testing.T) {
+func TestDiskSegmentLiveDocsAlwaysNil(t *testing.T) {
 	seg := buildTestSegment(t)
 	ds, _ := writeAndOpenDiskSegment(t, seg)
 	defer ds.Close()
 
-	// No .del file, so all docs should be alive
-	for i := range ds.DocCount() {
-		if ds.IsDeleted(i) {
-			t.Errorf("doc %d should not be deleted (no .del file)", i)
-		}
-	}
-}
-
-func TestDiskSegmentLiveDocCountNoDeletions(t *testing.T) {
-	seg := buildTestSegment(t)
-	ds, _ := writeAndOpenDiskSegment(t, seg)
-	defer ds.Close()
-
-	if ds.LiveDocCount() != ds.DocCount() {
-		t.Errorf("LiveDocCount without deletions: got %d, want %d", ds.LiveDocCount(), ds.DocCount())
+	// DiskSegment is a pure data reader — LiveDocs() is always nil
+	if ds.LiveDocs() != nil {
+		t.Error("DiskSegment.LiveDocs() should always be nil")
 	}
 }
 

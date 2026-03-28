@@ -11,12 +11,8 @@ type LiveDocsSegmentReader struct {
 func (r *LiveDocsSegmentReader) Name() string  { return r.inner.Name() }
 func (r *LiveDocsSegmentReader) DocCount() int { return r.inner.DocCount() }
 
-func (r *LiveDocsSegmentReader) IsDeleted(docID int) bool {
-	return r.liveDocs.Get(docID)
-}
-
-func (r *LiveDocsSegmentReader) LiveDocCount() int {
-	return r.inner.DocCount() - r.liveDocs.Count()
+func (r *LiveDocsSegmentReader) LiveDocs() *Bitset {
+	return r.liveDocs
 }
 
 func (r *LiveDocsSegmentReader) DocFreq(field, term string) int {
