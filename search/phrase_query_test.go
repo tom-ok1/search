@@ -116,6 +116,42 @@ func TestPhraseQueryNoMatchJapanese(t *testing.T) {
 	}
 }
 
+func TestPhraseQuerySpecialChars(t *testing.T) {
+	seg := setupSpecialCharsTestSegment(t)
+
+	// "🔍 search" is consecutive in doc2
+	q := NewPhraseQuery("body", "🔍", "search")
+	results := collectDocs(t, q, seg)
+	if len(results) != 1 {
+		t.Errorf("expected 1 match for '🔍 search', got %d", len(results))
+	}
+	if len(results) > 0 && results[0].DocID != 2 {
+		t.Errorf("expected doc2, got doc%d", results[0].DocID)
+	}
+}
+
+func TestPhraseQueryEmojiNonAdjacent(t *testing.T) {
+	seg := setupSpecialCharsTestSegment(t)
+
+	// "🔍 🔎" are not adjacent in doc2 ("🔍 search 🔎 engine")
+	q := NewPhraseQuery("body", "🔍", "🔎")
+	results := collectDocs(t, q, seg)
+	if len(results) != 0 {
+		t.Errorf("expected 0 matches for non-adjacent '🔍 🔎', got %d", len(results))
+	}
+}
+
+func TestPhraseQueryAccented(t *testing.T) {
+	seg := setupSpecialCharsTestSegment(t)
+
+	// "café résumé" is consecutive in doc1 (after lowercasing)
+	q := NewPhraseQuery("body", "café", "résumé")
+	results := collectDocs(t, q, seg)
+	if len(results) != 1 {
+		t.Errorf("expected 1 match for 'café résumé', got %d", len(results))
+	}
+}
+
 func TestPhraseQueryThreeTermsJapanese(t *testing.T) {
 	seg := setupJapaneseTestSegment(t)
 

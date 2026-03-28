@@ -80,6 +80,34 @@ func TestTermQueryNoMatchJapanese(t *testing.T) {
 	}
 }
 
+func TestTermQuerySpecialChars(t *testing.T) {
+	seg := setupSpecialCharsTestSegment(t)
+
+	tests := []struct {
+		term     string
+		expected int
+	}{
+		{"user@example.com", 1},
+		{"#tag", 1},
+		{"state-of-the-art", 1},
+		{"node.js", 1},
+		{"🔍", 1},
+		{"🔎", 1},
+		{"𠮷野家", 1},
+		{"café", 2},   // doc1 (lowered from Café) and doc3
+		{"résumé", 1}, // doc1 (lowered from Résumé)
+		{"nonexistent", 0},
+	}
+
+	for _, tt := range tests {
+		q := NewTermQuery("body", tt.term)
+		results := collectDocs(t, q, seg)
+		if len(results) != tt.expected {
+			t.Errorf("term %q: expected %d matches, got %d", tt.term, tt.expected, len(results))
+		}
+	}
+}
+
 func TestTermQueryScoringJapanese(t *testing.T) {
 	seg := setupJapaneseTestSegment(t)
 

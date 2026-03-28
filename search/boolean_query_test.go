@@ -124,6 +124,53 @@ func TestBooleanMustNotJapanese(t *testing.T) {
 	}
 }
 
+func TestBooleanMustSpecialChars(t *testing.T) {
+	seg := setupSpecialCharsTestSegment(t)
+
+	// "café" AND "résumé"
+	q := NewBooleanQuery().
+		Add(NewTermQuery("body", "café"), OccurMust).
+		Add(NewTermQuery("body", "résumé"), OccurMust)
+
+	results := collectDocs(t, q, seg)
+	docIDs := extractDocIDs(results)
+	// Only doc1 has both (after lowercasing)
+	if len(docIDs) != 1 || docIDs[0] != 1 {
+		t.Errorf("expected [1], got %v", docIDs)
+	}
+}
+
+func TestBooleanMustNotSpecialChars(t *testing.T) {
+	seg := setupSpecialCharsTestSegment(t)
+
+	// "café" AND NOT "résumé" — should match doc3 (has café but not résumé)
+	q := NewBooleanQuery().
+		Add(NewTermQuery("body", "café"), OccurMust).
+		Add(NewTermQuery("body", "résumé"), OccurMustNot)
+
+	results := collectDocs(t, q, seg)
+	docIDs := extractDocIDs(results)
+	if len(docIDs) != 1 || docIDs[0] != 3 {
+		t.Errorf("expected [3], got %v", docIDs)
+	}
+}
+
+func TestBooleanShouldSpecialChars(t *testing.T) {
+	seg := setupSpecialCharsTestSegment(t)
+
+	// "🔍" OR "𠮷野家"
+	q := NewBooleanQuery().
+		Add(NewTermQuery("body", "🔍"), OccurShould).
+		Add(NewTermQuery("body", "𠮷野家"), OccurShould)
+
+	results := collectDocs(t, q, seg)
+	docIDs := extractDocIDs(results)
+	// doc2 has 🔍, doc3 has 𠮷野家
+	if !containsDocID(docIDs, 2) || !containsDocID(docIDs, 3) {
+		t.Errorf("expected doc2 and doc3, got %v", docIDs)
+	}
+}
+
 func TestBooleanShouldJapanese(t *testing.T) {
 	seg := setupJapaneseTestSegment(t)
 

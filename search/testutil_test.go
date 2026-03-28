@@ -74,6 +74,36 @@ func containsDocID(ids []int, target int) bool {
 	return slices.Contains(ids, target)
 }
 
+func setupSpecialCharsTestSegment(t *testing.T) index.SegmentReader {
+	t.Helper()
+	dir, _ := store.NewFSDirectory(t.TempDir())
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
+		analysis.NewWhitespaceTokenizer(),
+		&analysis.LowerCaseFilter{},
+	))
+	writer := index.NewIndexWriter(dir, fa, 100)
+
+	docs := []string{
+		"user@example.com #tag state-of-the-art",   // doc0
+		"Café Résumé node.js",                      // doc1
+		"🔍 search 🔎 engine",                      // doc2
+		"𠮷野家 テスト café",                        // doc3
+	}
+
+	for _, text := range docs {
+		doc := document.NewDocument()
+		doc.AddField("body", text, document.FieldTypeText)
+		writer.AddDocument(doc)
+	}
+	writer.Flush()
+	reader, err := index.OpenNRTReader(writer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { reader.Close() })
+	return reader.Leaves()[0].Segment
+}
+
 func setupJapaneseTestSegment(t *testing.T) index.SegmentReader {
 	t.Helper()
 	dir, _ := store.NewFSDirectory(t.TempDir())
