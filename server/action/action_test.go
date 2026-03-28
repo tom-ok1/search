@@ -61,8 +61,8 @@ func TestTransportCreateIndexAction_Execute(t *testing.T) {
 	if meta.Indices["testindex"] == nil {
 		t.Fatal("index not in cluster state")
 	}
-	if meta.Indices["testindex"].NumShards != 1 {
-		t.Errorf("expected 1 shard, got %d", meta.Indices["testindex"].NumShards)
+	if meta.Indices["testindex"].Settings.NumberOfShards != 1 {
+		t.Errorf("expected 1 shard, got %d", meta.Indices["testindex"].Settings.NumberOfShards)
 	}
 
 	// Verify index service created
@@ -97,8 +97,8 @@ func TestTransportCreateIndexAction_DefaultShards(t *testing.T) {
 	}
 
 	meta := cs.Metadata()
-	if meta.Indices["defaultshards"].NumShards != 1 {
-		t.Errorf("expected default 1 shard, got %d", meta.Indices["defaultshards"].NumShards)
+	if meta.Indices["defaultshards"].Settings.NumberOfShards != 1 {
+		t.Errorf("expected default 1 shard, got %d", meta.Indices["defaultshards"].Settings.NumberOfShards)
 	}
 
 	services["defaultshards"].Close()

@@ -189,8 +189,7 @@ func TestIndexService_CreateAndAccess(t *testing.T) {
 			NumberOfShards:   1,
 			NumberOfReplicas: 0,
 		},
-		NumShards: 1,
-		State:     cluster.IndexStateOpen,
+		State: cluster.IndexStateOpen,
 	}
 	m := &mapping.MappingDefinition{
 		Properties: map[string]mapping.FieldMapping{
@@ -266,8 +265,7 @@ func TestIntegration_IndexLifecycle(t *testing.T) {
 			NumberOfShards:   1,
 			NumberOfReplicas: 0,
 		},
-		NumShards: 1,
-		State:     cluster.IndexStateOpen,
+		State: cluster.IndexStateOpen,
 	}
 	m := &mapping.MappingDefinition{
 		Properties: map[string]mapping.FieldMapping{

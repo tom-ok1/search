@@ -26,8 +26,7 @@ func TestClusterState_UpdateMetadata(t *testing.T) {
 				NumberOfShards:   1,
 				NumberOfReplicas: 0,
 			},
-			NumShards: 1,
-			State:     IndexStateOpen,
+			State: IndexStateOpen,
 		}
 		return m
 	})

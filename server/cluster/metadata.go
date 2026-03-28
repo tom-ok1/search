@@ -15,11 +15,10 @@ type Metadata struct {
 }
 
 type IndexMetadata struct {
-	Name      string
-	Settings  IndexSettings
-	Mapping   *mapping.MappingDefinition
-	NumShards int
-	State     IndexState
+	Name     string
+	Settings IndexSettings
+	Mapping  *mapping.MappingDefinition
+	State    IndexState
 }
 
 type IndexSettings struct {

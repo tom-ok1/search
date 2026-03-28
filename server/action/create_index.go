@@ -83,9 +83,8 @@ func (a *TransportCreateIndexAction) Execute(req CreateIndexRequest) (CreateInde
 			NumberOfShards:   numShards,
 			NumberOfReplicas: req.Settings.NumberOfReplicas,
 		},
-		Mapping:   m,
-		NumShards: numShards,
-		State:     cluster.IndexStateOpen,
+		Mapping: m,
+		State:   cluster.IndexStateOpen,
 	}
 
 	// Create IndexService
