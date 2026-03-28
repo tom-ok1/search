@@ -10,6 +10,11 @@ type TokenFilter interface {
 // LowerCaseFilter converts all token terms to lowercase.
 type LowerCaseFilter struct{}
 
+// NewLowerCaseFilter creates a new LowerCaseFilter.
+func NewLowerCaseFilter() *LowerCaseFilter {
+	return &LowerCaseFilter{}
+}
+
 func (f *LowerCaseFilter) Filter(tokens []Token) []Token {
 	for i := range tokens {
 		tokens[i].Term = strings.ToLower(tokens[i].Term)
