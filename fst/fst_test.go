@@ -169,6 +169,80 @@ func TestEmptyFSTError(t *testing.T) {
 	}
 }
 
+func TestJapaneseLookup(t *testing.T) {
+	b := newTestBuilder()
+	// Japanese keys in lexicographic byte order (UTF-8)
+	keys := []string{"名古屋", "大阪", "東京"}
+	// Sort by raw bytes to ensure correct insertion order
+	for i, k := range keys {
+		if i > 0 && k <= keys[i-1] {
+			t.Fatalf("test keys not in byte order: %q <= %q", k, keys[i-1])
+		}
+	}
+	for i, k := range keys {
+		if err := b.Add([]byte(k), uint64(i)); err != nil {
+			t.Fatalf("Add(%q): %v", k, err)
+		}
+	}
+
+	f := buildFST(t, b)
+
+	for i, k := range keys {
+		got, ok := f.Get([]byte(k))
+		if !ok {
+			t.Errorf("Get(%q): not found", k)
+			continue
+		}
+		if got != uint64(i) {
+			t.Errorf("Get(%q)=%d, want %d", k, got, i)
+		}
+	}
+
+	// Non-existent Japanese keys
+	for _, k := range []string{"京都", "福岡", "札幌"} {
+		_, ok := f.Get([]byte(k))
+		if ok {
+			t.Errorf("Get(%q): should not exist", k)
+		}
+	}
+}
+
+func TestJapaneseSharedPrefix(t *testing.T) {
+	b := newTestBuilder()
+	// Keys sharing the prefix "東京" (bytes: E6 9D B1 E4 BA AC)
+	// "東京" < "東京タワー" < "東京都" in byte order
+	keys := []string{"東京", "東京タワー", "東京都"}
+	for i, k := range keys {
+		if i > 0 && k <= keys[i-1] {
+			t.Fatalf("test keys not in byte order: %q <= %q", k, keys[i-1])
+		}
+	}
+	for i, k := range keys {
+		if err := b.Add([]byte(k), uint64(i*10)); err != nil {
+			t.Fatalf("Add(%q): %v", k, err)
+		}
+	}
+
+	f := buildFST(t, b)
+
+	for i, k := range keys {
+		got, ok := f.Get([]byte(k))
+		if !ok {
+			t.Errorf("Get(%q): not found", k)
+			continue
+		}
+		if got != uint64(i*10) {
+			t.Errorf("Get(%q)=%d, want %d", k, got, i*10)
+		}
+	}
+
+	// Partial byte sequences should not match
+	_, ok := f.Get([]byte("東"))
+	if ok {
+		t.Error("Get(東): should not exist (partial key)")
+	}
+}
+
 func TestManyKeys(t *testing.T) {
 	b := newTestBuilder()
 	n := 1000

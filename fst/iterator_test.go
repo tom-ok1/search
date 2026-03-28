@@ -168,6 +168,73 @@ func TestFSTIteratorConsistentWithGet(t *testing.T) {
 
 }
 
+func TestFSTIteratorJapanese(t *testing.T) {
+	// Japanese keys in byte-sorted order
+	keys := []string{"名古屋", "大阪", "東京"}
+	outputs := []uint64{10, 20, 30}
+
+	builder := newTestBuilder()
+	for i, key := range keys {
+		if err := builder.Add([]byte(key), outputs[i]); err != nil {
+			t.Fatalf("Add(%q): %v", key, err)
+		}
+	}
+	f := buildFST(t, builder)
+
+	iter := f.Iterator()
+	var gotKeys []string
+	var gotOutputs []uint64
+	for iter.Next() {
+		gotKeys = append(gotKeys, string(iter.Key()))
+		gotOutputs = append(gotOutputs, iter.Value())
+	}
+
+	if len(gotKeys) != len(keys) {
+		t.Fatalf("got %d keys, want %d", len(gotKeys), len(keys))
+	}
+	for i := range keys {
+		if gotKeys[i] != keys[i] {
+			t.Errorf("key[%d] = %q, want %q", i, gotKeys[i], keys[i])
+		}
+		if gotOutputs[i] != outputs[i] {
+			t.Errorf("output[%d] = %d, want %d", i, gotOutputs[i], outputs[i])
+		}
+	}
+}
+
+func TestFSTIteratorJapaneseSharedPrefixes(t *testing.T) {
+	keys := []string{"東京", "東京タワー", "東京都"}
+	outputs := []uint64{1, 2, 3}
+
+	builder := newTestBuilder()
+	for i, key := range keys {
+		if err := builder.Add([]byte(key), outputs[i]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f := buildFST(t, builder)
+
+	iter := f.Iterator()
+	var gotKeys []string
+	var gotOutputs []uint64
+	for iter.Next() {
+		gotKeys = append(gotKeys, string(iter.Key()))
+		gotOutputs = append(gotOutputs, iter.Value())
+	}
+
+	if len(gotKeys) != len(keys) {
+		t.Fatalf("got %d keys, want %d\ngotKeys: %v", len(gotKeys), len(keys), gotKeys)
+	}
+	for i := range keys {
+		if gotKeys[i] != keys[i] {
+			t.Errorf("key[%d] = %q, want %q", i, gotKeys[i], keys[i])
+		}
+		if gotOutputs[i] != outputs[i] {
+			t.Errorf("output[%d] = %d, want %d", i, gotOutputs[i], outputs[i])
+		}
+	}
+}
+
 func TestFSTIteratorLargeDataset(t *testing.T) {
 	// Build FST with many keys to stress-test the iterator
 	n := 1000
