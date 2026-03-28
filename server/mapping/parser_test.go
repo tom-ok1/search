@@ -185,6 +185,56 @@ func TestParseDocument_LongFieldWithFloatValue(t *testing.T) {
 	assertHasNumericField(t, doc, "count", 42)
 }
 
+func TestParseDocument_TextFieldJapanese(t *testing.T) {
+	m := &MappingDefinition{
+		Properties: map[string]FieldMapping{
+			"title": {Type: FieldTypeText},
+		},
+	}
+	source := []byte(`{"title": "東京タワー"}`)
+
+	doc, err := ParseDocument("doc1", source, m)
+	if err != nil {
+		t.Fatalf("ParseDocument: %v", err)
+	}
+
+	assertHasField(t, doc, "title", "東京タワー", document.FieldTypeText)
+}
+
+func TestParseDocument_KeywordFieldJapanese(t *testing.T) {
+	m := &MappingDefinition{
+		Properties: map[string]FieldMapping{
+			"category": {Type: FieldTypeKeyword},
+		},
+	}
+	source := []byte(`{"category": "観光地"}`)
+
+	doc, err := ParseDocument("doc1", source, m)
+	if err != nil {
+		t.Fatalf("ParseDocument: %v", err)
+	}
+
+	assertHasField(t, doc, "category", "観光地", document.FieldTypeKeyword)
+}
+
+func TestParseDocument_MultipleFieldsJapanese(t *testing.T) {
+	m := &MappingDefinition{
+		Properties: map[string]FieldMapping{
+			"title":    {Type: FieldTypeText},
+			"category": {Type: FieldTypeKeyword},
+		},
+	}
+	source := []byte(`{"title": "東京 大阪 名古屋", "category": "都市"}`)
+
+	doc, err := ParseDocument("doc1", source, m)
+	if err != nil {
+		t.Fatalf("ParseDocument: %v", err)
+	}
+
+	assertHasField(t, doc, "title", "東京 大阪 名古屋", document.FieldTypeText)
+	assertHasField(t, doc, "category", "都市", document.FieldTypeKeyword)
+}
+
 func TestParseDocument_MissingMappedField(t *testing.T) {
 	m := &MappingDefinition{
 		Properties: map[string]FieldMapping{
