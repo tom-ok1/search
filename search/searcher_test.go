@@ -563,3 +563,39 @@ func TestSearchPositionsBooleanQueryExcludesMustNot(t *testing.T) {
 		t.Error("MustNot term 'world' should not appear in positions")
 	}
 }
+
+func TestSearchStoredFieldsJapanese(t *testing.T) {
+	seg := newMockSegment("seg0", 2)
+	seg.stored[0] = map[string][]byte{
+		"title": []byte("東京タワー"),
+		"body":  []byte("東京 港区 にある 電波塔"),
+	}
+	seg.stored[1] = map[string][]byte{
+		"title": []byte("大阪城"),
+		"body":  []byte("大阪 中央区 にある 城"),
+	}
+
+	reader := index.NewIndexReader([]index.SegmentReader{seg})
+	searcher := NewIndexSearcher(reader)
+
+	q := &mockQuery{
+		results: map[string][]mockDocEntry{
+			"seg0": {
+				{DocID: 0, Score: 2.0},
+				{DocID: 1, Score: 1.0},
+			},
+		},
+	}
+
+	results := searcher.Search(q, NewTopKCollector(10))
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(results))
+	}
+
+	if string(results[0].Fields["title"]) != "東京タワー" {
+		t.Errorf("expected title '東京タワー', got %q", results[0].Fields["title"])
+	}
+	if string(results[1].Fields["title"]) != "大阪城" {
+		t.Errorf("expected title '大阪城', got %q", results[1].Fields["title"])
+	}
+}

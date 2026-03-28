@@ -73,3 +73,33 @@ func extractDocIDs(results []SearchResult) []int {
 func containsDocID(ids []int, target int) bool {
 	return slices.Contains(ids, target)
 }
+
+func setupJapaneseTestSegment(t *testing.T) index.SegmentReader {
+	t.Helper()
+	dir, _ := store.NewFSDirectory(t.TempDir())
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
+		analysis.NewWhitespaceTokenizer(),
+		&analysis.LowerCaseFilter{},
+	))
+	writer := index.NewIndexWriter(dir, fa, 100)
+
+	docs := []string{
+		"東京 大阪 名古屋",     // doc0
+		"東京 京都 福岡",       // doc1
+		"大阪 京都 札幌",       // doc2
+		"東京 大阪 東京 大阪",   // doc3: repeated terms
+	}
+
+	for _, text := range docs {
+		doc := document.NewDocument()
+		doc.AddField("body", text, document.FieldTypeText)
+		writer.AddDocument(doc)
+	}
+	writer.Flush()
+	reader, err := index.OpenNRTReader(writer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { reader.Close() })
+	return reader.Leaves()[0].Segment
+}
