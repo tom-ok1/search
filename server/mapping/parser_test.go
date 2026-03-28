@@ -185,6 +185,195 @@ func TestParseDocument_LongFieldWithFloatValue(t *testing.T) {
 	assertHasNumericField(t, doc, "count", 42)
 }
 
+func TestParseDocument_TextFieldJapanese(t *testing.T) {
+	m := &MappingDefinition{
+		Properties: map[string]FieldMapping{
+			"title": {Type: FieldTypeText},
+		},
+	}
+	source := []byte(`{"title": "東京タワー"}`)
+
+	doc, err := ParseDocument("doc1", source, m)
+	if err != nil {
+		t.Fatalf("ParseDocument: %v", err)
+	}
+
+	assertHasField(t, doc, "title", "東京タワー", document.FieldTypeText)
+}
+
+func TestParseDocument_KeywordFieldJapanese(t *testing.T) {
+	m := &MappingDefinition{
+		Properties: map[string]FieldMapping{
+			"category": {Type: FieldTypeKeyword},
+		},
+	}
+	source := []byte(`{"category": "観光地"}`)
+
+	doc, err := ParseDocument("doc1", source, m)
+	if err != nil {
+		t.Fatalf("ParseDocument: %v", err)
+	}
+
+	assertHasField(t, doc, "category", "観光地", document.FieldTypeKeyword)
+}
+
+func TestParseDocument_MultipleFieldsJapanese(t *testing.T) {
+	m := &MappingDefinition{
+		Properties: map[string]FieldMapping{
+			"title":    {Type: FieldTypeText},
+			"category": {Type: FieldTypeKeyword},
+		},
+	}
+	source := []byte(`{"title": "東京 大阪 名古屋", "category": "都市"}`)
+
+	doc, err := ParseDocument("doc1", source, m)
+	if err != nil {
+		t.Fatalf("ParseDocument: %v", err)
+	}
+
+	assertHasField(t, doc, "title", "東京 大阪 名古屋", document.FieldTypeText)
+	assertHasField(t, doc, "category", "都市", document.FieldTypeKeyword)
+}
+
+func TestParseDocument_TextFieldEmoji(t *testing.T) {
+	m := &MappingDefinition{
+		Properties: map[string]FieldMapping{
+			"title": {Type: FieldTypeText},
+		},
+	}
+	source := []byte(`{"title": "hello 🔍 world"}`)
+
+	doc, err := ParseDocument("doc1", source, m)
+	if err != nil {
+		t.Fatalf("ParseDocument: %v", err)
+	}
+
+	assertHasField(t, doc, "title", "hello 🔍 world", document.FieldTypeText)
+}
+
+func TestParseDocument_KeywordWithSpaces(t *testing.T) {
+	m := &MappingDefinition{
+		Properties: map[string]FieldMapping{
+			"city": {Type: FieldTypeKeyword},
+		},
+	}
+	source := []byte(`{"city": "New York"}`)
+
+	doc, err := ParseDocument("doc1", source, m)
+	if err != nil {
+		t.Fatalf("ParseDocument: %v", err)
+	}
+
+	assertHasField(t, doc, "city", "New York", document.FieldTypeKeyword)
+}
+
+func TestParseDocument_KeywordSpecialChars(t *testing.T) {
+	m := &MappingDefinition{
+		Properties: map[string]FieldMapping{
+			"tag": {Type: FieldTypeKeyword},
+		},
+	}
+	tests := []struct {
+		json     string // JSON value (with JSON escaping)
+		expected string // Expected Go string value (after JSON parsing)
+	}{
+		{`"C++"`, "C++"},
+		{`"user@example.com"`, "user@example.com"},
+		{`"path\\to\\file"`, `path\to\file`},
+		{`"007"`, "007"},
+	}
+
+	for _, tt := range tests {
+		source := []byte(`{"tag": ` + tt.json + `}`)
+		doc, err := ParseDocument("doc1", source, m)
+		if err != nil {
+			t.Fatalf("ParseDocument(%s): %v", tt.json, err)
+		}
+		assertHasField(t, doc, "tag", tt.expected, document.FieldTypeKeyword)
+	}
+}
+
+func TestParseDocument_TextFieldAccented(t *testing.T) {
+	m := &MappingDefinition{
+		Properties: map[string]FieldMapping{
+			"body": {Type: FieldTypeText},
+		},
+	}
+	source := []byte(`{"body": "café résumé naïve"}`)
+
+	doc, err := ParseDocument("doc1", source, m)
+	if err != nil {
+		t.Fatalf("ParseDocument: %v", err)
+	}
+
+	assertHasField(t, doc, "body", "café résumé naïve", document.FieldTypeText)
+}
+
+func TestParseDocument_TextFieldCJKExtensionB(t *testing.T) {
+	m := &MappingDefinition{
+		Properties: map[string]FieldMapping{
+			"body": {Type: FieldTypeText},
+		},
+	}
+	source := []byte(`{"body": "𠮷野家 テスト"}`)
+
+	doc, err := ParseDocument("doc1", source, m)
+	if err != nil {
+		t.Fatalf("ParseDocument: %v", err)
+	}
+
+	assertHasField(t, doc, "body", "𠮷野家 テスト", document.FieldTypeText)
+}
+
+func TestParseDocument_SpecialCharsInID(t *testing.T) {
+	m := &MappingDefinition{Properties: map[string]FieldMapping{}}
+
+	// IDs with special characters
+	ids := []string{"user@example.com", "path/to/doc", "doc#1", "doc with spaces"}
+	for _, id := range ids {
+		source := []byte(`{"title": "test"}`)
+		doc, err := ParseDocument(id, source, m)
+		if err != nil {
+			t.Fatalf("ParseDocument(id=%q): %v", id, err)
+		}
+		assertHasField(t, doc, "_id", id, document.FieldTypeKeyword)
+	}
+}
+
+func TestParseDocument_SourcePreservesSpecialChars(t *testing.T) {
+	m := &MappingDefinition{
+		Properties: map[string]FieldMapping{
+			"title": {Type: FieldTypeText},
+		},
+	}
+	source := []byte(`{"title": "café 🔍 𠮷野家"}`)
+
+	doc, err := ParseDocument("doc1", source, m)
+	if err != nil {
+		t.Fatalf("ParseDocument: %v", err)
+	}
+
+	// _source should preserve the raw JSON including special chars
+	assertHasBytesField(t, doc, "_source", source, document.FieldTypeStored)
+}
+
+func TestParseDocument_EscapedJSONInField(t *testing.T) {
+	m := &MappingDefinition{
+		Properties: map[string]FieldMapping{
+			"data": {Type: FieldTypeText},
+		},
+	}
+	// JSON with escaped quotes
+	source := []byte(`{"data": "he said \"hello\""}`)
+
+	doc, err := ParseDocument("doc1", source, m)
+	if err != nil {
+		t.Fatalf("ParseDocument: %v", err)
+	}
+
+	assertHasField(t, doc, "data", `he said "hello"`, document.FieldTypeText)
+}
+
 func TestParseDocument_MissingMappedField(t *testing.T) {
 	m := &MappingDefinition{
 		Properties: map[string]FieldMapping{

@@ -17,7 +17,7 @@ func createSkipperForTest(t *testing.T, prices []int64) *index.DocValuesSkipper 
 		t.Fatal(err)
 	}
 
-	writer := index.NewIndexWriter(dir, analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{}), len(prices)+1)
+	writer := index.NewIndexWriter(dir, analysis.NewFieldAnalyzers(analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{})), len(prices)+1)
 	for _, p := range prices {
 		doc := document.NewDocument()
 		doc.AddField("body", "test", document.FieldTypeText)

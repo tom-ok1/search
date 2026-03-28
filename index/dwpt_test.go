@@ -8,15 +8,14 @@ import (
 	"gosearch/store"
 )
 
-func newTestAnalyzer() *analysis.Analyzer {
-	return analysis.NewAnalyzer(
-		analysis.NewWhitespaceTokenizer(),
-		&analysis.LowerCaseFilter{},
+func newTestFieldAnalyzers() *analysis.FieldAnalyzers {
+	return analysis.NewFieldAnalyzers(
+		analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{}),
 	)
 }
 
 func TestDWPTAddDocument(t *testing.T) {
-	dwpt := newDWPT("_seg0", newTestAnalyzer(), newDeleteQueue())
+	dwpt := newDWPT("_seg0", newTestFieldAnalyzers(), newDeleteQueue())
 
 	doc := document.NewDocument()
 	doc.AddField("body", "hello world", document.FieldTypeText)
@@ -40,7 +39,7 @@ func TestDWPTAddDocument(t *testing.T) {
 }
 
 func TestDWPTAddMultipleDocuments(t *testing.T) {
-	dwpt := newDWPT("_seg0", newTestAnalyzer(), newDeleteQueue())
+	dwpt := newDWPT("_seg0", newTestFieldAnalyzers(), newDeleteQueue())
 
 	doc0 := document.NewDocument()
 	doc0.AddField("title", "Go Programming", document.FieldTypeText)
@@ -77,7 +76,7 @@ func TestDWPTAddMultipleDocuments(t *testing.T) {
 
 func TestDWPTFlush(t *testing.T) {
 	dir, _ := store.NewFSDirectory(t.TempDir())
-	dwpt := newDWPT("_seg0", newTestAnalyzer(), newDeleteQueue())
+	dwpt := newDWPT("_seg0", newTestFieldAnalyzers(), newDeleteQueue())
 
 	doc := document.NewDocument()
 	doc.AddField("body", "hello world", document.FieldTypeText)
@@ -114,7 +113,7 @@ func TestDWPTFlush(t *testing.T) {
 }
 
 func TestDWPTEstimateBytesUsed(t *testing.T) {
-	dwpt := newDWPT("_seg0", newTestAnalyzer(), newDeleteQueue())
+	dwpt := newDWPT("_seg0", newTestFieldAnalyzers(), newDeleteQueue())
 
 	if dwpt.estimateBytesUsed() != 0 {
 		t.Error("expected 0 bytes before adding docs")
@@ -136,5 +135,297 @@ func TestDWPTEstimateBytesUsed(t *testing.T) {
 	bytes2 := dwpt.estimateBytesUsed()
 	if bytes2 <= bytes1 {
 		t.Errorf("expected bytes to grow: %d -> %d", bytes1, bytes2)
+	}
+}
+
+func TestDWPTAddDocumentJapanese(t *testing.T) {
+	dwpt := newDWPT("_seg0", newTestFieldAnalyzers(), newDeleteQueue())
+
+	doc := document.NewDocument()
+	doc.AddField("body", "東京 大阪", document.FieldTypeText)
+	if _, err := dwpt.addDocument(doc); err != nil {
+		t.Fatal(err)
+	}
+
+	if dwpt.segment.docCount != 1 {
+		t.Errorf("docCount: got %d, want 1", dwpt.segment.docCount)
+	}
+	fi := dwpt.segment.fields["body"]
+	if fi == nil {
+		t.Fatal("expected 'body' field to exist")
+	}
+	if _, ok := fi.postings["東京"]; !ok {
+		t.Error("expected posting for '東京'")
+	}
+	if _, ok := fi.postings["大阪"]; !ok {
+		t.Error("expected posting for '大阪'")
+	}
+}
+
+func TestDWPTAddDocumentEmoji(t *testing.T) {
+	dwpt := newDWPT("_seg0", newTestFieldAnalyzers(), newDeleteQueue())
+
+	doc := document.NewDocument()
+	doc.AddField("body", "hello 🔍 world", document.FieldTypeText)
+	if _, err := dwpt.addDocument(doc); err != nil {
+		t.Fatal(err)
+	}
+
+	fi := dwpt.segment.fields["body"]
+	if fi == nil {
+		t.Fatal("expected 'body' field")
+	}
+	if _, ok := fi.postings["hello"]; !ok {
+		t.Error("expected posting for 'hello'")
+	}
+	if _, ok := fi.postings["🔍"]; !ok {
+		t.Error("expected posting for '🔍'")
+	}
+	if _, ok := fi.postings["world"]; !ok {
+		t.Error("expected posting for 'world'")
+	}
+}
+
+func TestDWPTAddDocumentSpecialChars(t *testing.T) {
+	dwpt := newDWPT("_seg0", newTestFieldAnalyzers(), newDeleteQueue())
+
+	doc := document.NewDocument()
+	doc.AddField("body", "user@example.com #tag state-of-the-art", document.FieldTypeText)
+	if _, err := dwpt.addDocument(doc); err != nil {
+		t.Fatal(err)
+	}
+
+	fi := dwpt.segment.fields["body"]
+	if fi == nil {
+		t.Fatal("expected 'body' field")
+	}
+	// Whitespace tokenizer doesn't split on @, #, -
+	if _, ok := fi.postings["user@example.com"]; !ok {
+		t.Error("expected posting for 'user@example.com'")
+	}
+	if _, ok := fi.postings["#tag"]; !ok {
+		t.Error("expected posting for '#tag'")
+	}
+	if _, ok := fi.postings["state-of-the-art"]; !ok {
+		t.Error("expected posting for 'state-of-the-art'")
+	}
+}
+
+func TestDWPTAddDocumentMultipleSpaces(t *testing.T) {
+	dwpt := newDWPT("_seg0", newTestFieldAnalyzers(), newDeleteQueue())
+
+	doc := document.NewDocument()
+	doc.AddField("body", "hello   world", document.FieldTypeText)
+	if _, err := dwpt.addDocument(doc); err != nil {
+		t.Fatal(err)
+	}
+
+	fi := dwpt.segment.fields["body"]
+	if fi == nil {
+		t.Fatal("expected 'body' field")
+	}
+	if _, ok := fi.postings["hello"]; !ok {
+		t.Error("expected posting for 'hello'")
+	}
+	if _, ok := fi.postings["world"]; !ok {
+		t.Error("expected posting for 'world'")
+	}
+	// Should have exactly 2 postings (not 3 or 4)
+	if len(fi.postings) != 2 {
+		t.Errorf("expected 2 unique terms, got %d", len(fi.postings))
+	}
+}
+
+func TestDWPTKeywordWithSpaces(t *testing.T) {
+	dwpt := newDWPT("_seg0", newTestFieldAnalyzers(), newDeleteQueue())
+
+	doc := document.NewDocument()
+	doc.AddField("city", "New York", document.FieldTypeKeyword)
+	if _, err := dwpt.addDocument(doc); err != nil {
+		t.Fatal(err)
+	}
+
+	fi := dwpt.segment.fields["city"]
+	if fi == nil {
+		t.Fatal("expected 'city' field")
+	}
+	// Keyword should preserve spaces as single term
+	if _, ok := fi.postings["New York"]; !ok {
+		t.Error("expected posting for exact keyword 'New York'")
+	}
+	if len(fi.postings) != 1 {
+		t.Errorf("keyword field should have 1 posting, got %d", len(fi.postings))
+	}
+}
+
+func TestDWPTKeywordSpecialChars(t *testing.T) {
+	dwpt := newDWPT("_seg0", newTestFieldAnalyzers(), newDeleteQueue())
+
+	tests := []struct {
+		keyword string
+	}{
+		{"C++"},
+		{""},
+		{"007"},
+		{"@#$%"},
+		{"path\\to\\file"},
+	}
+
+	for i, tt := range tests {
+		doc := document.NewDocument()
+		doc.AddField("tag", tt.keyword, document.FieldTypeKeyword)
+		if _, err := dwpt.addDocument(doc); err != nil {
+			t.Fatalf("doc %d: %v", i, err)
+		}
+	}
+
+	fi := dwpt.segment.fields["tag"]
+	if fi == nil {
+		t.Fatal("expected 'tag' field")
+	}
+	for _, tt := range tests {
+		if tt.keyword == "" {
+			continue // empty keyword may or may not create a posting
+		}
+		if _, ok := fi.postings[tt.keyword]; !ok {
+			t.Errorf("expected posting for keyword %q", tt.keyword)
+		}
+	}
+}
+
+func TestDWPTStoredFieldRoundtripSpecialChars(t *testing.T) {
+	dwpt := newDWPT("_seg0", newTestFieldAnalyzers(), newDeleteQueue())
+
+	values := []string{
+		"hello\tworld\nnewline",
+		"",
+		"path\\to\\file",
+		"he said \"hello\"",
+		"{\"key\": \"value\"}",
+		"café résumé naïve",
+		"🔍 emoji test 🔎",
+		"𠮷野家",
+	}
+
+	for i, val := range values {
+		doc := document.NewDocument()
+		doc.AddField("data", val, document.FieldTypeStored)
+		if _, err := dwpt.addDocument(doc); err != nil {
+			t.Fatalf("doc %d: %v", i, err)
+		}
+	}
+
+	for i, val := range values {
+		stored := dwpt.segment.storedFields[i]
+		got := string(stored["data"])
+		if got != val {
+			t.Errorf("doc %d: stored field = %q, want %q", i, got, val)
+		}
+	}
+}
+
+func TestDWPTAddDocumentCJKExtensionB(t *testing.T) {
+	dwpt := newDWPT("_seg0", newTestFieldAnalyzers(), newDeleteQueue())
+
+	doc := document.NewDocument()
+	// 𠮷 is 4 bytes in UTF-8
+	doc.AddField("body", "𠮷野家 テスト", document.FieldTypeText)
+	if _, err := dwpt.addDocument(doc); err != nil {
+		t.Fatal(err)
+	}
+
+	fi := dwpt.segment.fields["body"]
+	if fi == nil {
+		t.Fatal("expected 'body' field")
+	}
+	if _, ok := fi.postings["𠮷野家"]; !ok {
+		t.Error("expected posting for '𠮷野家'")
+	}
+	if _, ok := fi.postings["テスト"]; !ok {
+		t.Error("expected posting for 'テスト'")
+	}
+}
+
+func TestDWPTPerFieldAnalyzerJapanese(t *testing.T) {
+	fa := analysis.NewFieldAnalyzers(
+		analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{}),
+	)
+	// Use ngram analyzer for "title" field
+	fa.SetFieldAnalyzer("title", analysis.NewAnalyzer(
+		analysis.NewNGramTokenizer(2, 3), &analysis.LowerCaseFilter{},
+	))
+
+	dwpt := newDWPT("_seg0", fa, newDeleteQueue())
+
+	doc := document.NewDocument()
+	doc.AddField("title", "東京都", document.FieldTypeText)
+	doc.AddField("body", "東京 大阪", document.FieldTypeText)
+	if _, err := dwpt.addDocument(doc); err != nil {
+		t.Fatal(err)
+	}
+
+	// "title" with ngram(2,3) on "東京都" should produce: "東京", "京都", "東京都"
+	titleField := dwpt.segment.fields["title"]
+	if titleField == nil {
+		t.Fatal("expected 'title' field")
+	}
+	for _, term := range []string{"東京", "京都", "東京都"} {
+		if _, ok := titleField.postings[term]; !ok {
+			t.Errorf("expected ngram posting for %q in title", term)
+		}
+	}
+
+	// "body" with whitespace tokenizer should produce: "東京", "大阪"
+	bodyField := dwpt.segment.fields["body"]
+	if bodyField == nil {
+		t.Fatal("expected 'body' field")
+	}
+	if _, ok := bodyField.postings["東京"]; !ok {
+		t.Error("expected posting for '東京' in body")
+	}
+	if _, ok := bodyField.postings["大阪"]; !ok {
+		t.Error("expected posting for '大阪' in body")
+	}
+}
+
+func TestDWPTPerFieldAnalyzer(t *testing.T) {
+	fa := analysis.NewFieldAnalyzers(
+		analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{}),
+	)
+	// Use ngram analyzer for "title" field
+	fa.SetFieldAnalyzer("title", analysis.NewAnalyzer(
+		analysis.NewNGramTokenizer(2, 3), &analysis.LowerCaseFilter{},
+	))
+
+	dwpt := newDWPT("_seg0", fa, newDeleteQueue())
+
+	doc := document.NewDocument()
+	doc.AddField("title", "abc", document.FieldTypeText)
+	doc.AddField("body", "hello world", document.FieldTypeText)
+	if _, err := dwpt.addDocument(doc); err != nil {
+		t.Fatal(err)
+	}
+
+	// "title" with ngram(2,3) on "abc" should produce: "ab", "bc", "abc"
+	titleField := dwpt.segment.fields["title"]
+	if titleField == nil {
+		t.Fatal("expected 'title' field")
+	}
+	for _, term := range []string{"ab", "bc", "abc"} {
+		if _, ok := titleField.postings[term]; !ok {
+			t.Errorf("expected ngram posting for %q in title", term)
+		}
+	}
+
+	// "body" with standard analyzer should produce: "hello", "world"
+	bodyField := dwpt.segment.fields["body"]
+	if bodyField == nil {
+		t.Fatal("expected 'body' field")
+	}
+	if _, ok := bodyField.postings["hello"]; !ok {
+		t.Error("expected posting for 'hello' in body")
+	}
+	if _, ok := bodyField.postings["world"]; !ok {
+		t.Error("expected posting for 'world' in body")
 	}
 }

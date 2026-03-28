@@ -24,9 +24,9 @@ type DocumentsWriter struct {
 	onGlobalUpdates func(updates *FrozenBufferedUpdates)
 }
 
-func newDocumentsWriter(dir store.Directory, analyzer *analysis.Analyzer, ramBufferSize int64, maxBufferedDocs int, nameFunc func() string) *DocumentsWriter {
+func newDocumentsWriter(dir store.Directory, fieldAnalyzers *analysis.FieldAnalyzers, ramBufferSize int64, maxBufferedDocs int, nameFunc func() string) *DocumentsWriter {
 	deleteQueue := newDeleteQueue()
-	pool := newPerThreadPool(nameFunc, analyzer, deleteQueue)
+	pool := newPerThreadPool(nameFunc, fieldAnalyzers, deleteQueue)
 	return &DocumentsWriter{
 		pool:         pool,
 		flushControl: newFlushControl(ramBufferSize, maxBufferedDocs, pool),

@@ -16,11 +16,11 @@ import (
 func newTestWriter(t *testing.T, bufferSize int) (*index.IndexWriter, store.Directory) {
 	t.Helper()
 	dir, _ := store.NewFSDirectory(t.TempDir())
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
-	)
-	return index.NewIndexWriter(dir, analyzer, bufferSize), dir
+	))
+	return index.NewIndexWriter(dir, fa, bufferSize), dir
 }
 
 func addTextDoc(t *testing.T, writer *index.IndexWriter, field, text string) {
@@ -1150,11 +1150,11 @@ func TestPhraseQueryDeterministicResults(t *testing.T) {
 
 func TestE2EDeleteQueueCrossSegmentDeletes(t *testing.T) {
 	dir, _ := store.NewFSDirectory(t.TempDir())
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
-	)
-	writer := index.NewIndexWriter(dir, analyzer, 2) // 2 docs per segment
+	))
+	writer := index.NewIndexWriter(dir, fa, 2) // 2 docs per segment
 
 	// Segment 1: doc0 (java), doc1 (go)
 	doc0 := document.NewDocument()
@@ -1214,11 +1214,11 @@ func TestE2EDeleteQueueCrossSegmentDeletes(t *testing.T) {
 
 func TestE2EDeleteDuringConcurrentAdds(t *testing.T) {
 	dir, _ := store.NewFSDirectory(t.TempDir())
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
-	)
-	writer := index.NewIndexWriter(dir, analyzer, 100)
+	))
+	writer := index.NewIndexWriter(dir, fa, 100)
 
 	// Add some initial docs
 	for i := range 10 {
@@ -1251,5 +1251,484 @@ func TestE2EDeleteDuringConcurrentAdds(t *testing.T) {
 	}
 	if reader.LiveDocCount() != 10 {
 		t.Errorf("LiveDocCount: got %d, want 10 (docs 10-19 alive)", reader.LiveDocCount())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Japanese text tests
+// ---------------------------------------------------------------------------
+
+func TestE2EJapaneseTermQuery(t *testing.T) {
+	writer, dir := newTestWriter(t, 100)
+
+	addTextDoc(t, writer, "body", "東京 大阪 名古屋")
+	addTextDoc(t, writer, "body", "東京 京都")
+	addTextDoc(t, writer, "body", "大阪 福岡")
+
+	reader := commitAndOpenReader(t, writer, dir)
+	searcher := search.NewIndexSearcher(reader)
+
+	// "東京" appears in doc0 and doc1
+	results := searcher.Search(search.NewTermQuery("body", "東京"), search.NewTopKCollector(10))
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results for '東京', got %d", len(results))
+	}
+
+	// Verify stored fields roundtrip
+	for _, r := range results {
+		if r.Fields == nil || len(r.Fields["body"]) == 0 {
+			t.Errorf("missing stored fields for docID %d", r.DocID)
+		}
+	}
+
+	// "名古屋" appears in doc0 only
+	results = searcher.Search(search.NewTermQuery("body", "名古屋"), search.NewTopKCollector(10))
+	if len(results) != 1 {
+		t.Errorf("expected 1 result for '名古屋', got %d", len(results))
+	}
+
+	// Non-existent term
+	results = searcher.Search(search.NewTermQuery("body", "札幌"), search.NewTopKCollector(10))
+	if len(results) != 0 {
+		t.Errorf("expected 0 results for '札幌', got %d", len(results))
+	}
+}
+
+func TestE2EJapanesePhraseQuery(t *testing.T) {
+	writer, dir := newTestWriter(t, 100)
+
+	addTextDoc(t, writer, "body", "東京 大阪 名古屋")  // "東京 大阪" is consecutive
+	addTextDoc(t, writer, "body", "大阪 東京 名古屋")  // "東京 大阪" is NOT consecutive here
+
+	reader := commitAndOpenReader(t, writer, dir)
+	searcher := search.NewIndexSearcher(reader)
+
+	// "東京 大阪" as a phrase (consecutive) — should match only doc0
+	results := searcher.Search(search.NewPhraseQuery("body", "東京", "大阪"), search.NewTopKCollector(10))
+	if len(results) != 1 {
+		t.Errorf("expected 1 result for phrase '東京 大阪', got %d", len(results))
+	}
+
+	// "大阪 名古屋" — consecutive in both
+	results = searcher.Search(search.NewPhraseQuery("body", "大阪", "名古屋"), search.NewTopKCollector(10))
+	if len(results) != 1 {
+		t.Errorf("expected 1 result for phrase '大阪 名古屋', got %d", len(results))
+	}
+
+	// "東京 名古屋" — consecutive in doc1 only
+	results = searcher.Search(search.NewPhraseQuery("body", "東京", "名古屋"), search.NewTopKCollector(10))
+	if len(results) != 1 {
+		t.Errorf("expected 1 result for phrase '東京 名古屋', got %d", len(results))
+	}
+}
+
+func TestE2EJapaneseBooleanQuery(t *testing.T) {
+	writer, dir := newTestWriter(t, 100)
+
+	addTextDoc(t, writer, "body", "東京 大阪")      // doc0: matches both
+	addTextDoc(t, writer, "body", "東京 名古屋")     // doc1: matches 東京 only
+	addTextDoc(t, writer, "body", "京都 福岡")       // doc2: matches neither
+
+	reader := commitAndOpenReader(t, writer, dir)
+	searcher := search.NewIndexSearcher(reader)
+
+	// OR query: 東京 OR 大阪 → doc0, doc1, doc2 (大阪 in doc0)
+	results := searcher.Search(search.NewBooleanQuery().
+		Add(search.NewTermQuery("body", "東京"), search.OccurShould).
+		Add(search.NewTermQuery("body", "大阪"), search.OccurShould), search.NewTopKCollector(10))
+	if len(results) != 2 {
+		t.Errorf("expected 2 results for OR query, got %d", len(results))
+	}
+
+	// doc0 should score higher (matches both SHOULD clauses)
+	if len(results) >= 2 && results[0].Score <= results[1].Score {
+		t.Errorf("doc matching both SHOULD clauses should score higher: got %f <= %f",
+			results[0].Score, results[1].Score)
+	}
+}
+
+func TestE2EJapaneseDeleteAndSearch(t *testing.T) {
+	writer, dir := newTestWriter(t, 100)
+
+	doc0 := document.NewDocument()
+	doc0.AddField("id", "東京", document.FieldTypeKeyword)
+	doc0.AddField("body", "東京タワー スカイツリー", document.FieldTypeText)
+	writer.AddDocument(doc0)
+
+	doc1 := document.NewDocument()
+	doc1.AddField("id", "大阪", document.FieldTypeKeyword)
+	doc1.AddField("body", "大阪城 通天閣", document.FieldTypeText)
+	writer.AddDocument(doc1)
+
+	writer.DeleteDocuments("id", "東京")
+
+	reader := commitAndOpenReader(t, writer, dir)
+	searcher := search.NewIndexSearcher(reader)
+
+	// "東京タワー" should return 0 results (doc deleted)
+	results := searcher.Search(search.NewTermQuery("body", "東京タワー"), search.NewTopKCollector(10))
+	if len(results) != 0 {
+		t.Errorf("expected 0 results after deletion, got %d", len(results))
+	}
+
+	// "大阪城" should still be searchable
+	results = searcher.Search(search.NewTermQuery("body", "大阪城"), search.NewTopKCollector(10))
+	if len(results) != 1 {
+		t.Errorf("expected 1 result for '大阪城', got %d", len(results))
+	}
+}
+
+func TestE2EJapaneseScoreOrdering(t *testing.T) {
+	writer, dir := newTestWriter(t, 100)
+
+	// doc0: "東京" appears once
+	addTextDoc(t, writer, "body", "東京 大阪")
+	// doc1: "東京" appears three times — should score higher
+	addTextDoc(t, writer, "body", "東京 東京 東京 大阪")
+
+	reader := commitAndOpenReader(t, writer, dir)
+	searcher := search.NewIndexSearcher(reader)
+
+	results := searcher.Search(search.NewTermQuery("body", "東京"), search.NewTopKCollector(10))
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(results))
+	}
+
+	// Doc with higher term frequency should score higher
+	if results[0].Score <= results[1].Score {
+		t.Errorf("doc with higher TF should score higher: got %f <= %f",
+			results[0].Score, results[1].Score)
+	}
+}
+
+func TestE2EJapaneseForceMergeAndSearch(t *testing.T) {
+	writer, dir := newTestWriter(t, 2)
+
+	addTextDoc(t, writer, "body", "東京 大阪")
+	addTextDoc(t, writer, "body", "名古屋 京都") // auto-flush
+	addTextDoc(t, writer, "body", "福岡 札幌")
+
+	writer.Flush()
+	if err := writer.ForceMerge(1); err != nil {
+		t.Fatal(err)
+	}
+
+	reader := commitAndOpenReader(t, writer, dir)
+	searcher := search.NewIndexSearcher(reader)
+
+	if len(reader.Leaves()) != 1 {
+		t.Errorf("expected 1 segment after merge, got %d", len(reader.Leaves()))
+	}
+
+	results := searcher.Search(search.NewTermQuery("body", "東京"), search.NewTopKCollector(10))
+	if len(results) != 1 {
+		t.Errorf("expected 1 result for '東京' after merge, got %d", len(results))
+	}
+
+	results = searcher.Search(search.NewTermQuery("body", "福岡"), search.NewTopKCollector(10))
+	if len(results) != 1 {
+		t.Errorf("expected 1 result for '福岡' after merge, got %d", len(results))
+	}
+}
+
+func TestE2EJapaneseMultiFieldDocument(t *testing.T) {
+	writer, dir := newTestWriter(t, 100)
+
+	doc := document.NewDocument()
+	doc.AddField("title", "東京タワー", document.FieldTypeText)
+	doc.AddField("body", "東京 港区 にある 電波塔", document.FieldTypeText)
+	doc.AddField("category", "観光地", document.FieldTypeKeyword)
+	writer.AddDocument(doc)
+
+	doc2 := document.NewDocument()
+	doc2.AddField("title", "大阪城", document.FieldTypeText)
+	doc2.AddField("body", "大阪 中央区 にある 城", document.FieldTypeText)
+	doc2.AddField("category", "観光地", document.FieldTypeKeyword)
+	writer.AddDocument(doc2)
+
+	reader := commitAndOpenReader(t, writer, dir)
+	searcher := search.NewIndexSearcher(reader)
+
+	// Search by body field
+	results := searcher.Search(search.NewTermQuery("body", "港区"), search.NewTopKCollector(10))
+	if len(results) != 1 {
+		t.Errorf("expected 1 result for body '港区', got %d", len(results))
+	}
+
+	// Search by title field
+	results = searcher.Search(search.NewTermQuery("title", "東京タワー"), search.NewTopKCollector(10))
+	if len(results) != 1 {
+		t.Errorf("expected 1 result for title '東京タワー', got %d", len(results))
+	}
+
+	// Cross-field should not match
+	results = searcher.Search(search.NewTermQuery("title", "港区"), search.NewTopKCollector(10))
+	if len(results) != 0 {
+		t.Errorf("expected 0 results for '港区' in title field, got %d", len(results))
+	}
+
+	// Keyword field exact match
+	results = searcher.Search(search.NewTermQuery("category", "観光地"), search.NewTopKCollector(10))
+	if len(results) != 2 {
+		t.Errorf("expected 2 results for keyword '観光地', got %d", len(results))
+	}
+}
+
+// --- Edge case tests with special characters ---
+
+func TestE2ESpecialCharTermQuery(t *testing.T) {
+	writer, dir := newTestWriter(t, 100)
+
+	addTextDoc(t, writer, "body", "user@example.com sent email")
+	addTextDoc(t, writer, "body", "#tag is trending")
+	addTextDoc(t, writer, "body", "state-of-the-art technology")
+	addTextDoc(t, writer, "body", "node.js v8.0 runtime")
+
+	reader := commitAndOpenReader(t, writer, dir)
+	searcher := search.NewIndexSearcher(reader)
+
+	tests := []struct {
+		term     string
+		expected int
+	}{
+		{"user@example.com", 1},
+		{"#tag", 1},
+		{"state-of-the-art", 1},
+		{"node.js", 1},
+		{"v8.0", 1},
+		{"nonexistent", 0},
+	}
+	for _, tt := range tests {
+		results := searcher.Search(search.NewTermQuery("body", tt.term), search.NewTopKCollector(10))
+		if len(results) != tt.expected {
+			t.Errorf("term %q: expected %d results, got %d", tt.term, tt.expected, len(results))
+		}
+	}
+}
+
+func TestE2EEmojiTermQuery(t *testing.T) {
+	writer, dir := newTestWriter(t, 100)
+
+	addTextDoc(t, writer, "body", "hello 🔍 world")
+	addTextDoc(t, writer, "body", "search 🔍 engine")
+	addTextDoc(t, writer, "body", "no emoji here")
+
+	reader := commitAndOpenReader(t, writer, dir)
+	searcher := search.NewIndexSearcher(reader)
+
+	// Emoji as search term
+	results := searcher.Search(search.NewTermQuery("body", "🔍"), search.NewTopKCollector(10))
+	if len(results) != 2 {
+		t.Errorf("expected 2 results for '🔍', got %d", len(results))
+	}
+
+	// Regular term should still work
+	results = searcher.Search(search.NewTermQuery("body", "hello"), search.NewTopKCollector(10))
+	if len(results) != 1 {
+		t.Errorf("expected 1 result for 'hello', got %d", len(results))
+	}
+}
+
+func TestE2EPhraseQuerySingleTerm(t *testing.T) {
+	writer, dir := newTestWriter(t, 100)
+
+	addTextDoc(t, writer, "body", "hello world")
+	addTextDoc(t, writer, "body", "world hello")
+
+	reader := commitAndOpenReader(t, writer, dir)
+	searcher := search.NewIndexSearcher(reader)
+
+	// Single-term "phrase" query should behave like a term query
+	results := searcher.Search(search.NewPhraseQuery("body", "hello"), search.NewTopKCollector(10))
+	if len(results) != 2 {
+		t.Errorf("expected 2 results for single-term phrase 'hello', got %d", len(results))
+	}
+}
+
+func TestE2EPhraseQueryTermsExistButNeverAdjacent(t *testing.T) {
+	writer, dir := newTestWriter(t, 100)
+
+	// Both "alpha" and "gamma" exist, but never adjacent
+	addTextDoc(t, writer, "body", "alpha beta gamma")
+	addTextDoc(t, writer, "body", "gamma delta alpha")
+
+	reader := commitAndOpenReader(t, writer, dir)
+	searcher := search.NewIndexSearcher(reader)
+
+	results := searcher.Search(search.NewPhraseQuery("body", "alpha", "gamma"), search.NewTopKCollector(10))
+	if len(results) != 0 {
+		t.Errorf("expected 0 results for non-adjacent 'alpha gamma', got %d", len(results))
+	}
+}
+
+func TestE2EKeywordWithSpacesSearch(t *testing.T) {
+	writer, dir := newTestWriter(t, 100)
+
+	doc := document.NewDocument()
+	doc.AddField("city", "New York", document.FieldTypeKeyword)
+	doc.AddField("body", "big apple", document.FieldTypeText)
+	writer.AddDocument(doc)
+
+	doc2 := document.NewDocument()
+	doc2.AddField("city", "Los Angeles", document.FieldTypeKeyword)
+	doc2.AddField("body", "city of angels", document.FieldTypeText)
+	writer.AddDocument(doc2)
+
+	reader := commitAndOpenReader(t, writer, dir)
+	searcher := search.NewIndexSearcher(reader)
+
+	// Keyword exact match with spaces
+	results := searcher.Search(search.NewTermQuery("city", "New York"), search.NewTopKCollector(10))
+	if len(results) != 1 {
+		t.Errorf("expected 1 result for keyword 'New York', got %d", len(results))
+	}
+
+	// Partial should not match
+	results = searcher.Search(search.NewTermQuery("city", "New"), search.NewTopKCollector(10))
+	if len(results) != 0 {
+		t.Errorf("expected 0 results for partial keyword 'New', got %d", len(results))
+	}
+}
+
+func TestE2EStoredFieldSpecialCharsRoundtrip(t *testing.T) {
+	writer, dir := newTestWriter(t, 100)
+
+	values := []string{
+		"hello\tworld\nnewline",
+		"path\\to\\file",
+		"he said \"hello\"",
+		"{\"key\": \"value\"}",
+		"café résumé",
+		"🔍🔎",
+		"𠮷野家",
+		"",
+	}
+
+	for _, val := range values {
+		doc := document.NewDocument()
+		doc.AddField("data", val, document.FieldTypeStored)
+		doc.AddField("body", "searchable", document.FieldTypeText)
+		writer.AddDocument(doc)
+	}
+
+	reader := commitAndOpenReader(t, writer, dir)
+
+	for i, val := range values {
+		fields := reader.GetStoredFields(i)
+		got := string(fields["data"])
+		if got != val {
+			t.Errorf("doc %d: stored = %q, want %q", i, got, val)
+		}
+	}
+}
+
+func TestE2EAccentedCharSearch(t *testing.T) {
+	writer, dir := newTestWriter(t, 100)
+
+	addTextDoc(t, writer, "body", "Café Résumé Naïve")
+	addTextDoc(t, writer, "body", "café latte")
+
+	reader := commitAndOpenReader(t, writer, dir)
+	searcher := search.NewIndexSearcher(reader)
+
+	// LowerCaseFilter lowercases accented chars
+	results := searcher.Search(search.NewTermQuery("body", "café"), search.NewTopKCollector(10))
+	if len(results) != 2 {
+		t.Errorf("expected 2 results for 'café', got %d", len(results))
+	}
+}
+
+func TestE2ECJKExtensionBSearch(t *testing.T) {
+	writer, dir := newTestWriter(t, 100)
+
+	// 𠮷 is CJK Extension B (4 bytes in UTF-8)
+	addTextDoc(t, writer, "body", "𠮷野家 テスト")
+	addTextDoc(t, writer, "body", "テスト 完了")
+
+	reader := commitAndOpenReader(t, writer, dir)
+	searcher := search.NewIndexSearcher(reader)
+
+	results := searcher.Search(search.NewTermQuery("body", "𠮷野家"), search.NewTopKCollector(10))
+	if len(results) != 1 {
+		t.Errorf("expected 1 result for '𠮷野家', got %d", len(results))
+	}
+
+	results = searcher.Search(search.NewTermQuery("body", "テスト"), search.NewTopKCollector(10))
+	if len(results) != 2 {
+		t.Errorf("expected 2 results for 'テスト', got %d", len(results))
+	}
+}
+
+func TestE2EDeleteBySpecialCharKeyword(t *testing.T) {
+	writer, dir := newTestWriter(t, 100)
+
+	doc0 := document.NewDocument()
+	doc0.AddField("id", "user@example.com", document.FieldTypeKeyword)
+	doc0.AddField("body", "first document", document.FieldTypeText)
+	writer.AddDocument(doc0)
+
+	doc1 := document.NewDocument()
+	doc1.AddField("id", "C++", document.FieldTypeKeyword)
+	doc1.AddField("body", "second document", document.FieldTypeText)
+	writer.AddDocument(doc1)
+
+	writer.DeleteDocuments("id", "user@example.com")
+
+	reader := commitAndOpenReader(t, writer, dir)
+	searcher := search.NewIndexSearcher(reader)
+
+	results := searcher.Search(search.NewTermQuery("body", "first"), search.NewTopKCollector(10))
+	if len(results) != 0 {
+		t.Errorf("expected 0 results after delete, got %d", len(results))
+	}
+
+	results = searcher.Search(search.NewTermQuery("body", "second"), search.NewTopKCollector(10))
+	if len(results) != 1 {
+		t.Errorf("expected 1 result for surviving doc, got %d", len(results))
+	}
+}
+
+func TestE2EForceMergeSpecialChars(t *testing.T) {
+	writer, dir := newTestWriter(t, 2)
+
+	// Create segment 0
+	addTextDoc(t, writer, "body", "café résumé")
+	addTextDoc(t, writer, "body", "user@example.com test") // auto-flush → seg0
+
+	// Create segment 1
+	addTextDoc(t, writer, "body", "🔍 search 🔎")
+	addTextDoc(t, writer, "body", "𠮷野家 テスト") // auto-flush → seg1
+
+	writer.ForceMerge(1)
+	reader := commitAndOpenReader(t, writer, dir)
+
+	if len(reader.Leaves()) != 1 {
+		t.Fatalf("expected 1 merged segment, got %d", len(reader.Leaves()))
+	}
+
+	searcher := search.NewIndexSearcher(reader)
+
+	// Verify all terms survive the merge
+	for _, term := range []string{"café", "résumé", "user@example.com", "🔍", "𠮷野家"} {
+		results := searcher.Search(search.NewTermQuery("body", term), search.NewTopKCollector(10))
+		if len(results) != 1 {
+			t.Errorf("after merge, term %q: expected 1 result, got %d", term, len(results))
+		}
+	}
+}
+
+func TestE2EWhitespaceOnlyDocument(t *testing.T) {
+	writer, dir := newTestWriter(t, 100)
+
+	// Document with whitespace-only text field produces no indexed terms
+	addTextDoc(t, writer, "body", "   ")
+	addTextDoc(t, writer, "body", "hello world")
+
+	reader := commitAndOpenReader(t, writer, dir)
+	searcher := search.NewIndexSearcher(reader)
+
+	results := searcher.Search(search.NewTermQuery("body", "hello"), search.NewTopKCollector(10))
+	if len(results) != 1 {
+		t.Errorf("expected 1 result for 'hello', got %d", len(results))
 	}
 }

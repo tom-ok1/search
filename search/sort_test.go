@@ -17,7 +17,7 @@ func setupIndexWithDV(t *testing.T, docs []testDoc) *index.IndexReader {
 		t.Fatalf("NewFSDirectory: %v", err)
 	}
 
-	writer := index.NewIndexWriter(dir, analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{}), 100)
+	writer := index.NewIndexWriter(dir, analysis.NewFieldAnalyzers(analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{})), 100)
 	for _, td := range docs {
 		doc := document.NewDocument()
 		doc.AddField("body", td.body, document.FieldTypeText)
@@ -166,7 +166,7 @@ func TestSearchWithSortSkipsDeletedDocs(t *testing.T) {
 		t.Fatalf("NewFSDirectory: %v", err)
 	}
 
-	writer := index.NewIndexWriter(dir, analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{}), 100)
+	writer := index.NewIndexWriter(dir, analysis.NewFieldAnalyzers(analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{})), 100)
 
 	docs := []struct {
 		id    string
@@ -225,7 +225,7 @@ func TestSearchWithSortMultipleSegments(t *testing.T) {
 	}
 
 	// Buffer size 2 to force multiple segments
-	writer := index.NewIndexWriter(dir, analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{}), 2)
+	writer := index.NewIndexWriter(dir, analysis.NewFieldAnalyzers(analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{})), 2)
 
 	prices := []int64{400, 100, 300, 200}
 	for _, p := range prices {

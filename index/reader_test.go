@@ -10,12 +10,12 @@ import (
 )
 
 func TestMultiSegmentSearch(t *testing.T) {
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
-	)
+	))
 	dir, _ := store.NewFSDirectory(t.TempDir())
-	writer := NewIndexWriter(dir, analyzer, 2)
+	writer := NewIndexWriter(dir, fa, 2)
 
 	// Add 3 documents (auto-flush after 2nd -> 2 segments)
 	texts := []string{"hello world", "hello go", "world go"}
@@ -50,12 +50,12 @@ func TestMultiSegmentSearch(t *testing.T) {
 }
 
 func TestIndexReaderTotalDocCount(t *testing.T) {
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
-	)
+	))
 	dir, _ := store.NewFSDirectory(t.TempDir())
-	writer := NewIndexWriter(dir, analyzer, 2)
+	writer := NewIndexWriter(dir, fa, 2)
 
 	texts := []string{"hello world", "hello go", "world go"}
 	for _, text := range texts {
@@ -77,12 +77,12 @@ func TestIndexReaderTotalDocCount(t *testing.T) {
 }
 
 func TestIndexReaderLiveDocCountWithDeletions(t *testing.T) {
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
-	)
+	))
 	dir, _ := store.NewFSDirectory(t.TempDir())
-	writer := NewIndexWriter(dir, analyzer, 100)
+	writer := NewIndexWriter(dir, fa, 100)
 
 	ids := []string{"1", "2", "3"}
 	texts := []string{"hello world", "hello go", "world go"}
@@ -111,12 +111,12 @@ func TestIndexReaderLiveDocCountWithDeletions(t *testing.T) {
 }
 
 func TestIndexReaderGetStoredFields(t *testing.T) {
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
-	)
+	))
 	dir, _ := store.NewFSDirectory(t.TempDir())
-	writer := NewIndexWriter(dir, analyzer, 2)
+	writer := NewIndexWriter(dir, fa, 2)
 
 	texts := []string{"hello world", "hello go", "world go"}
 	for _, text := range texts {
@@ -176,12 +176,12 @@ func TestIndexReaderEmptyReader(t *testing.T) {
 }
 
 func TestIndexReaderSingleSegment(t *testing.T) {
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
-	)
+	))
 	dir, _ := store.NewFSDirectory(t.TempDir())
-	writer := NewIndexWriter(dir, analyzer, 100)
+	writer := NewIndexWriter(dir, fa, 100)
 
 	doc := document.NewDocument()
 	doc.AddField("body", "single doc", document.FieldTypeText)
@@ -210,11 +210,11 @@ func TestCommitAndOpenDirectoryReader(t *testing.T) {
 	tmpDir := t.TempDir()
 	dir, _ := store.NewFSDirectory(tmpDir)
 
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
-	)
-	writer := NewIndexWriter(dir, analyzer, 2)
+	))
+	writer := NewIndexWriter(dir, fa, 2)
 
 	docs := []string{"hello world", "hello go", "world go"}
 	for _, text := range docs {
@@ -252,11 +252,11 @@ func TestCommitAndOpenDirectoryReader(t *testing.T) {
 func TestDirectoryReaderWithDeletions(t *testing.T) {
 	tmpDir := t.TempDir()
 	dir, _ := store.NewFSDirectory(tmpDir)
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
-	)
-	writer := NewIndexWriter(dir, analyzer, 100)
+	))
+	writer := NewIndexWriter(dir, fa, 100)
 
 	doc0 := document.NewDocument()
 	doc0.AddField("id", "1", document.FieldTypeKeyword)
@@ -306,13 +306,13 @@ func TestDirectoryReaderWithDeletions(t *testing.T) {
 func TestDirectoryReaderMultipleCommits(t *testing.T) {
 	tmpDir := t.TempDir()
 	dir, _ := store.NewFSDirectory(tmpDir)
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
-	)
+	))
 
 	// First commit
-	writer := NewIndexWriter(dir, analyzer, 100)
+	writer := NewIndexWriter(dir, fa, 100)
 	doc := document.NewDocument()
 	doc.AddField("body", "hello world", document.FieldTypeText)
 	writer.AddDocument(doc)
@@ -329,7 +329,7 @@ func TestDirectoryReaderMultipleCommits(t *testing.T) {
 	reader1.Close()
 
 	// Second commit with new writer (loads existing state automatically)
-	writer2 := NewIndexWriter(dir, analyzer, 100)
+	writer2 := NewIndexWriter(dir, fa, 100)
 
 	doc2 := document.NewDocument()
 	doc2.AddField("body", "hello go", document.FieldTypeText)
@@ -358,11 +358,11 @@ func TestOpenDirectoryReaderNoSegments(t *testing.T) {
 
 func TestNRTReaderReflectsRecentWrites(t *testing.T) {
 	dir, _ := store.NewFSDirectory(t.TempDir())
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
-	)
-	writer := NewIndexWriter(dir, analyzer, 100)
+	))
+	writer := NewIndexWriter(dir, fa, 100)
 
 	doc := document.NewDocument()
 	doc.AddField("body", "hello world", document.FieldTypeText)
@@ -387,11 +387,11 @@ func TestNRTReaderReflectsRecentWrites(t *testing.T) {
 
 func TestNRTReaderWithDeletions(t *testing.T) {
 	dir, _ := store.NewFSDirectory(t.TempDir())
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
-	)
-	writer := NewIndexWriter(dir, analyzer, 100)
+	))
+	writer := NewIndexWriter(dir, fa, 100)
 
 	doc0 := document.NewDocument()
 	doc0.AddField("id", "a", document.FieldTypeKeyword)
@@ -419,17 +419,51 @@ func TestNRTReaderWithDeletions(t *testing.T) {
 	}
 }
 
+func TestIndexReaderGetStoredFieldsJapanese(t *testing.T) {
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
+		analysis.NewWhitespaceTokenizer(),
+		&analysis.LowerCaseFilter{},
+	))
+	dir, _ := store.NewFSDirectory(t.TempDir())
+	writer := NewIndexWriter(dir, fa, 2)
+
+	texts := []string{"東京 大阪", "名古屋 京都", "福岡 札幌"}
+	for _, text := range texts {
+		doc := document.NewDocument()
+		doc.AddField("body", text, document.FieldTypeText)
+		writer.AddDocument(doc)
+	}
+	writer.Flush()
+
+	reader, err := OpenNRTReader(writer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+
+	// Multi-segment: verify stored fields across segments
+	for i, text := range texts {
+		fields := reader.GetStoredFields(i)
+		if fields == nil {
+			t.Fatalf("expected stored fields for global docID %d", i)
+		}
+		if string(fields["body"]) != text {
+			t.Errorf("global doc %d body: got %q, want %q", i, fields["body"], text)
+		}
+	}
+}
+
 // TestNRTReaderProtectsFilesFromDeletion verifies that segment files
 // are not deleted while an NRT reader still holds references to them.
 func TestNRTReaderProtectsFilesFromDeletion(t *testing.T) {
 	tmpDir := t.TempDir()
 	dir, _ := store.NewFSDirectory(tmpDir)
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
-	)
+	))
 	// bufferSize=1 so each doc creates its own segment
-	writer := NewIndexWriter(dir, analyzer, 1)
+	writer := NewIndexWriter(dir, fa, 1)
 
 	// Add initial documents and commit
 	for i := range 3 {

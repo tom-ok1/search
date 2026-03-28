@@ -563,3 +563,100 @@ func TestSearchPositionsBooleanQueryExcludesMustNot(t *testing.T) {
 		t.Error("MustNot term 'world' should not appear in positions")
 	}
 }
+
+func TestSearchStoredFieldsSpecialChars(t *testing.T) {
+	seg := newMockSegment("seg0", 3)
+	seg.stored[0] = map[string][]byte{
+		"title": []byte("café résumé"),
+		"data":  []byte("hello\tworld\nnewline"),
+	}
+	seg.stored[1] = map[string][]byte{
+		"title": []byte("🔍 search 🔎"),
+		"data":  []byte("{\"key\": \"value\"}"),
+	}
+	seg.stored[2] = map[string][]byte{
+		"title": []byte("𠮷野家"),
+		"data":  []byte("path\\to\\file"),
+	}
+
+	reader := index.NewIndexReader([]index.SegmentReader{seg})
+	searcher := NewIndexSearcher(reader)
+
+	q := &mockQuery{
+		results: map[string][]mockDocEntry{
+			"seg0": {
+				{DocID: 0, Score: 3.0},
+				{DocID: 1, Score: 2.0},
+				{DocID: 2, Score: 1.0},
+			},
+		},
+	}
+
+	results := searcher.Search(q, NewTopKCollector(10))
+	if len(results) != 3 {
+		t.Fatalf("expected 3 results, got %d", len(results))
+	}
+
+	// Verify special char stored fields are preserved
+	expectedTitles := map[int]string{
+		0: "café résumé",
+		1: "🔍 search 🔎",
+		2: "𠮷野家",
+	}
+	for _, r := range results {
+		want := expectedTitles[r.DocID]
+		got := string(r.Fields["title"])
+		if got != want {
+			t.Errorf("docID %d: title = %q, want %q", r.DocID, got, want)
+		}
+	}
+
+	expectedData := map[int]string{
+		0: "hello\tworld\nnewline",
+		1: "{\"key\": \"value\"}",
+		2: "path\\to\\file",
+	}
+	for _, r := range results {
+		want := expectedData[r.DocID]
+		got := string(r.Fields["data"])
+		if got != want {
+			t.Errorf("docID %d: data = %q, want %q", r.DocID, got, want)
+		}
+	}
+}
+
+func TestSearchStoredFieldsJapanese(t *testing.T) {
+	seg := newMockSegment("seg0", 2)
+	seg.stored[0] = map[string][]byte{
+		"title": []byte("東京タワー"),
+		"body":  []byte("東京 港区 にある 電波塔"),
+	}
+	seg.stored[1] = map[string][]byte{
+		"title": []byte("大阪城"),
+		"body":  []byte("大阪 中央区 にある 城"),
+	}
+
+	reader := index.NewIndexReader([]index.SegmentReader{seg})
+	searcher := NewIndexSearcher(reader)
+
+	q := &mockQuery{
+		results: map[string][]mockDocEntry{
+			"seg0": {
+				{DocID: 0, Score: 2.0},
+				{DocID: 1, Score: 1.0},
+			},
+		},
+	}
+
+	results := searcher.Search(q, NewTopKCollector(10))
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(results))
+	}
+
+	if string(results[0].Fields["title"]) != "東京タワー" {
+		t.Errorf("expected title '東京タワー', got %q", results[0].Fields["title"])
+	}
+	if string(results[1].Fields["title"]) != "大阪城" {
+		t.Errorf("expected title '大阪城', got %q", results[1].Fields["title"])
+	}
+}

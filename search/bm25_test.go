@@ -30,11 +30,11 @@ func TestBM25IDF(t *testing.T) {
 
 func TestBM25Scoring(t *testing.T) {
 	dir, _ := store.NewFSDirectory(t.TempDir())
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
-	)
-	writer := index.NewIndexWriter(dir, analyzer, 100)
+	))
+	writer := index.NewIndexWriter(dir, fa, 100)
 
 	// doc0: "fox" appears twice in a short document
 	doc0 := document.NewDocument()
@@ -120,5 +120,59 @@ func TestBM25ScoreZeroAvgDocLen(t *testing.T) {
 	}
 	if score <= 0 {
 		t.Errorf("BM25 score should be positive, got %f", score)
+	}
+}
+
+func TestBM25ScoringJapanese(t *testing.T) {
+	dir, _ := store.NewFSDirectory(t.TempDir())
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
+		analysis.NewWhitespaceTokenizer(),
+		&analysis.LowerCaseFilter{},
+	))
+	writer := index.NewIndexWriter(dir, fa, 100)
+
+	// doc0: "東京" appears twice in a short document
+	doc0 := document.NewDocument()
+	doc0.AddField("body", "東京 東京", document.FieldTypeText)
+	writer.AddDocument(doc0)
+
+	// doc1: "東京" appears once in a longer document
+	doc1 := document.NewDocument()
+	doc1.AddField("body", "東京 大阪 名古屋 京都 福岡 札幌", document.FieldTypeText)
+	writer.AddDocument(doc1)
+
+	// doc2: does not contain "東京"
+	doc2 := document.NewDocument()
+	doc2.AddField("body", "大阪 京都 福岡", document.FieldTypeText)
+	writer.AddDocument(doc2)
+
+	writer.Flush()
+	reader, err := index.OpenNRTReader(writer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	seg := reader.Leaves()[0].Segment
+
+	q := NewTermQuery("body", "東京")
+	results := collectDocs(t, q, seg)
+
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(results))
+	}
+
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Score > results[j].Score
+	})
+
+	// doc0 should rank higher (short doc with higher TF)
+	if results[0].DocID != 0 {
+		t.Errorf("expected doc0 first, got doc%d", results[0].DocID)
+	}
+
+	for _, r := range results {
+		if r.Score <= 0 {
+			t.Errorf("expected positive score, got %f", r.Score)
+		}
 	}
 }

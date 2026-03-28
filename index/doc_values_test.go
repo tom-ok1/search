@@ -11,7 +11,7 @@ import (
 func TestNumericDocValuesRoundTrip(t *testing.T) {
 	dir := createTempDir(t)
 
-	writer := NewIndexWriter(dir, analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{}), 100)
+	writer := NewIndexWriter(dir, analysis.NewFieldAnalyzers(analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{})), 100)
 
 	// Add documents with numeric doc values
 	for _, price := range []int64{100, 250, 50, 300, 75} {
@@ -66,7 +66,7 @@ func TestNumericDocValuesRoundTrip(t *testing.T) {
 func TestSortedDocValuesRoundTrip(t *testing.T) {
 	dir := createTempDir(t)
 
-	writer := NewIndexWriter(dir, analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{}), 100)
+	writer := NewIndexWriter(dir, analysis.NewFieldAnalyzers(analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{})), 100)
 
 	categories := []string{"electronics", "books", "electronics", "clothing", "books"}
 	for _, cat := range categories {
@@ -129,7 +129,7 @@ func TestDocValuesMerge(t *testing.T) {
 	dir := createTempDir(t)
 
 	// Use buffer size 2 to force multiple segments
-	writer := NewIndexWriter(dir, analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{}), 2)
+	writer := NewIndexWriter(dir, analysis.NewFieldAnalyzers(analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{})), 2)
 
 	// Add 4 documents across 2 segments
 	prices := []int64{100, 200, 300, 400}
@@ -216,7 +216,7 @@ func TestDocValuesMergeWithDeletions(t *testing.T) {
 	dir := createTempDir(t)
 
 	// Buffer size 2 to force 2 segments
-	writer := NewIndexWriter(dir, analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{}), 2)
+	writer := NewIndexWriter(dir, analysis.NewFieldAnalyzers(analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{})), 2)
 
 	// Add 4 docs: doc0(id=a,price=100), doc1(id=b,price=200), doc2(id=c,price=300), doc3(id=d,price=400)
 	ids := []string{"a", "b", "c", "d"}
@@ -313,7 +313,7 @@ func TestDocValuesMergeWithDeletions(t *testing.T) {
 func TestSortedDocValuesWithMissingValues(t *testing.T) {
 	dir := createTempDir(t)
 
-	writer := NewIndexWriter(dir, analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{}), 100)
+	writer := NewIndexWriter(dir, analysis.NewFieldAnalyzers(analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{})), 100)
 
 	// Doc0 has category, doc1 does not, doc2 has category
 	doc0 := document.NewDocument()
@@ -390,7 +390,7 @@ func TestSortedDocValuesWithMissingValues(t *testing.T) {
 func TestNumericDocValuesZeroValue(t *testing.T) {
 	dir := createTempDir(t)
 
-	writer := NewIndexWriter(dir, analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{}), 100)
+	writer := NewIndexWriter(dir, analysis.NewFieldAnalyzers(analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{})), 100)
 
 	// Explicitly add a numeric DV field with value 0
 	doc := document.NewDocument()
@@ -444,7 +444,7 @@ func TestSortedDocValuesMerge(t *testing.T) {
 	dir := createTempDir(t)
 
 	// Buffer size 2 to force multiple segments.
-	writer := NewIndexWriter(dir, analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{}), 2)
+	writer := NewIndexWriter(dir, analysis.NewFieldAnalyzers(analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{})), 2)
 
 	// 6 docs across 3 segments, with overlapping and unique values.
 	cats := []string{"cherry", "apple", "banana", "apple", "date", "cherry"}
@@ -510,6 +510,178 @@ func TestSortedDocValuesMerge(t *testing.T) {
 		}
 		if string(got) != want {
 			t.Errorf("LookupOrd(%d) = %q, want %q", i, got, want)
+		}
+	}
+
+	writer.Close()
+}
+
+func TestSortedDocValuesSpecialChars(t *testing.T) {
+	dir := createTempDir(t)
+	writer := NewIndexWriter(dir, analysis.NewFieldAnalyzers(analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{})), 100)
+
+	// Special character values for sorted doc values
+	values := []string{
+		"café",
+		"path\\to\\file",
+		"🔍emoji",
+		"𠮷野家",
+		"café", // duplicate
+		"C++",
+	}
+	for _, val := range values {
+		doc := document.NewDocument()
+		doc.AddField("body", "item", document.FieldTypeText)
+		doc.AddSortedDocValuesField("tag", val)
+		if err := writer.AddDocument(doc); err != nil {
+			t.Fatalf("AddDocument: %v", err)
+		}
+	}
+
+	if err := writer.Commit(); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+
+	reader, err := OpenDirectoryReader(dir)
+	if err != nil {
+		t.Fatalf("OpenDirectoryReader: %v", err)
+	}
+
+	seg := reader.Leaves()[0].Segment
+	sdv := seg.SortedDocValues("tag")
+	if sdv == nil {
+		t.Fatal("expected non-nil SortedDocValues")
+	}
+
+	// Verify each doc maps to its correct value
+	for i, wantVal := range values {
+		ord, err := sdv.OrdValue(i)
+		if err != nil {
+			t.Fatalf("OrdValue(%d): %v", i, err)
+		}
+		got, err := sdv.LookupOrd(ord)
+		if err != nil {
+			t.Fatalf("LookupOrd(%d): %v", ord, err)
+		}
+		if string(got) != wantVal {
+			t.Errorf("doc %d: got %q, want %q", i, got, wantVal)
+		}
+	}
+
+	// Duplicate values should share the same ordinal
+	ord0, _ := sdv.OrdValue(0) // "café"
+	ord4, _ := sdv.OrdValue(4) // "café" again
+	if ord0 != ord4 {
+		t.Errorf("duplicate values should share ordinal: doc0=%d, doc4=%d", ord0, ord4)
+	}
+
+	writer.Close()
+}
+
+func TestSortedDocValuesEmptyStringIsMissing(t *testing.T) {
+	dir := createTempDir(t)
+	writer := NewIndexWriter(dir, analysis.NewFieldAnalyzers(analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{})), 100)
+
+	doc := document.NewDocument()
+	doc.AddField("body", "item", document.FieldTypeText)
+	doc.AddSortedDocValuesField("tag", "")
+	if err := writer.AddDocument(doc); err != nil {
+		t.Fatalf("AddDocument: %v", err)
+	}
+
+	doc2 := document.NewDocument()
+	doc2.AddField("body", "item2", document.FieldTypeText)
+	doc2.AddSortedDocValuesField("tag", "nonempty")
+	if err := writer.AddDocument(doc2); err != nil {
+		t.Fatalf("AddDocument: %v", err)
+	}
+
+	if err := writer.Commit(); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+
+	reader, err := OpenDirectoryReader(dir)
+	if err != nil {
+		t.Fatalf("OpenDirectoryReader: %v", err)
+	}
+
+	seg := reader.Leaves()[0].Segment
+	sdv := seg.SortedDocValues("tag")
+	if sdv == nil {
+		t.Fatal("expected non-nil SortedDocValues")
+	}
+
+	// Empty string sorted doc values are treated as missing (ordinal -1)
+	ord, err := sdv.OrdValue(0)
+	if err != nil {
+		t.Fatalf("OrdValue(0): %v", err)
+	}
+	if ord != -1 {
+		t.Errorf("expected ordinal -1 for empty string (treated as missing), got %d", ord)
+	}
+
+	// Doc1 has non-empty value
+	ord1, err := sdv.OrdValue(1)
+	if err != nil {
+		t.Fatalf("OrdValue(1): %v", err)
+	}
+	if ord1 < 0 {
+		t.Errorf("expected valid ordinal for 'nonempty', got %d", ord1)
+	}
+
+	writer.Close()
+}
+
+func TestSortedDocValuesMergeSpecialChars(t *testing.T) {
+	dir := createTempDir(t)
+	writer := NewIndexWriter(dir, analysis.NewFieldAnalyzers(analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{})), 2)
+
+	values := []string{"🔍emoji", "café", "𠮷野家", "café"} // 2 segments: [🔍emoji, café], [𠮷野家, café]
+	for _, val := range values {
+		doc := document.NewDocument()
+		doc.AddField("body", "item", document.FieldTypeText)
+		doc.AddSortedDocValuesField("tag", val)
+		if err := writer.AddDocument(doc); err != nil {
+			t.Fatalf("AddDocument: %v", err)
+		}
+	}
+
+	if err := writer.Commit(); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+
+	if err := writer.ForceMerge(1); err != nil {
+		t.Fatalf("ForceMerge: %v", err)
+	}
+	if err := writer.Commit(); err != nil {
+		t.Fatalf("Commit after merge: %v", err)
+	}
+
+	reader, err := OpenDirectoryReader(dir)
+	if err != nil {
+		t.Fatalf("OpenDirectoryReader: %v", err)
+	}
+	if len(reader.Leaves()) != 1 {
+		t.Fatalf("expected 1 leaf after merge, got %d", len(reader.Leaves()))
+	}
+
+	seg := reader.Leaves()[0].Segment
+	sdv := seg.SortedDocValues("tag")
+	if sdv == nil {
+		t.Fatal("expected non-nil SortedDocValues after merge")
+	}
+
+	for i, wantVal := range values {
+		ord, err := sdv.OrdValue(i)
+		if err != nil {
+			t.Fatalf("OrdValue(%d): %v", i, err)
+		}
+		got, err := sdv.LookupOrd(ord)
+		if err != nil {
+			t.Fatalf("LookupOrd(%d): %v", ord, err)
+		}
+		if string(got) != wantVal {
+			t.Errorf("doc %d: got %q, want %q", i, got, wantVal)
 		}
 	}
 

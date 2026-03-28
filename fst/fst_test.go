@@ -169,6 +169,291 @@ func TestEmptyFSTError(t *testing.T) {
 	}
 }
 
+func TestJapaneseLookup(t *testing.T) {
+	b := newTestBuilder()
+	// Japanese keys in lexicographic byte order (UTF-8)
+	keys := []string{"名古屋", "大阪", "東京"}
+	// Sort by raw bytes to ensure correct insertion order
+	for i, k := range keys {
+		if i > 0 && k <= keys[i-1] {
+			t.Fatalf("test keys not in byte order: %q <= %q", k, keys[i-1])
+		}
+	}
+	for i, k := range keys {
+		if err := b.Add([]byte(k), uint64(i)); err != nil {
+			t.Fatalf("Add(%q): %v", k, err)
+		}
+	}
+
+	f := buildFST(t, b)
+
+	for i, k := range keys {
+		got, ok := f.Get([]byte(k))
+		if !ok {
+			t.Errorf("Get(%q): not found", k)
+			continue
+		}
+		if got != uint64(i) {
+			t.Errorf("Get(%q)=%d, want %d", k, got, i)
+		}
+	}
+
+	// Non-existent Japanese keys
+	for _, k := range []string{"京都", "福岡", "札幌"} {
+		_, ok := f.Get([]byte(k))
+		if ok {
+			t.Errorf("Get(%q): should not exist", k)
+		}
+	}
+}
+
+func TestJapaneseSharedPrefix(t *testing.T) {
+	b := newTestBuilder()
+	// Keys sharing the prefix "東京" (bytes: E6 9D B1 E4 BA AC)
+	// "東京" < "東京タワー" < "東京都" in byte order
+	keys := []string{"東京", "東京タワー", "東京都"}
+	for i, k := range keys {
+		if i > 0 && k <= keys[i-1] {
+			t.Fatalf("test keys not in byte order: %q <= %q", k, keys[i-1])
+		}
+	}
+	for i, k := range keys {
+		if err := b.Add([]byte(k), uint64(i*10)); err != nil {
+			t.Fatalf("Add(%q): %v", k, err)
+		}
+	}
+
+	f := buildFST(t, b)
+
+	for i, k := range keys {
+		got, ok := f.Get([]byte(k))
+		if !ok {
+			t.Errorf("Get(%q): not found", k)
+			continue
+		}
+		if got != uint64(i*10) {
+			t.Errorf("Get(%q)=%d, want %d", k, got, i*10)
+		}
+	}
+
+	// Partial byte sequences should not match
+	_, ok := f.Get([]byte("東"))
+	if ok {
+		t.Error("Get(東): should not exist (partial key)")
+	}
+}
+
+func TestPrefixKeys(t *testing.T) {
+	b := newTestBuilder()
+	// "app" is a prefix of "apple"
+	keys := []string{"app", "apple", "application"}
+	for i, k := range keys {
+		if err := b.Add([]byte(k), uint64(i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f := buildFST(t, b)
+
+	for i, k := range keys {
+		got, ok := f.Get([]byte(k))
+		if !ok {
+			t.Errorf("Get(%q): not found", k)
+			continue
+		}
+		if got != uint64(i) {
+			t.Errorf("Get(%q)=%d, want %d", k, got, i)
+		}
+	}
+	// "appl" is not a key
+	_, ok := f.Get([]byte("appl"))
+	if ok {
+		t.Error("Get(appl): should not exist")
+	}
+}
+
+func TestSingleByteKeys(t *testing.T) {
+	b := newTestBuilder()
+	// Single byte keys in sorted order
+	keys := []string{"a", "b", "c", "z"}
+	for i, k := range keys {
+		if err := b.Add([]byte(k), uint64(i*100)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f := buildFST(t, b)
+
+	for i, k := range keys {
+		got, ok := f.Get([]byte(k))
+		if !ok {
+			t.Errorf("Get(%q): not found", k)
+			continue
+		}
+		if got != uint64(i*100) {
+			t.Errorf("Get(%q)=%d, want %d", k, got, i*100)
+		}
+	}
+	_, ok := f.Get([]byte("d"))
+	if ok {
+		t.Error("Get(d): should not exist")
+	}
+}
+
+func TestKeysWithNullBytes(t *testing.T) {
+	b := newTestBuilder()
+	// Keys containing null bytes (0x00)
+	key1 := []byte{0x00, 0x01}
+	key2 := []byte{0x00, 0x02}
+	key3 := []byte{0x01, 0x00}
+
+	if err := b.Add(key1, 10); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Add(key2, 20); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Add(key3, 30); err != nil {
+		t.Fatal(err)
+	}
+	f := buildFST(t, b)
+
+	got, ok := f.Get(key1)
+	if !ok || got != 10 {
+		t.Errorf("Get(0x00 0x01)=(%d, %v), want (10, true)", got, ok)
+	}
+	got, ok = f.Get(key2)
+	if !ok || got != 20 {
+		t.Errorf("Get(0x00 0x02)=(%d, %v), want (20, true)", got, ok)
+	}
+	got, ok = f.Get(key3)
+	if !ok || got != 30 {
+		t.Errorf("Get(0x01 0x00)=(%d, %v), want (30, true)", got, ok)
+	}
+}
+
+func TestKeysDifferingOnlyInLastByte(t *testing.T) {
+	b := newTestBuilder()
+	keys := []string{"prefixa", "prefixb", "prefixc", "prefixz"}
+	for i, k := range keys {
+		if err := b.Add([]byte(k), uint64(i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f := buildFST(t, b)
+
+	for i, k := range keys {
+		got, ok := f.Get([]byte(k))
+		if !ok {
+			t.Errorf("Get(%q): not found", k)
+			continue
+		}
+		if got != uint64(i) {
+			t.Errorf("Get(%q)=%d, want %d", k, got, i)
+		}
+	}
+	// "prefix" alone should not exist
+	_, ok := f.Get([]byte("prefix"))
+	if ok {
+		t.Error("Get(prefix): should not exist")
+	}
+}
+
+func TestSpecialCharKeys(t *testing.T) {
+	b := newTestBuilder()
+	// Keys with special characters, sorted by byte order
+	keys := []string{"#tag", "@user", "hello_world", "node.js", "state-of-the-art", "user@example.com"}
+	for i, k := range keys {
+		if err := b.Add([]byte(k), uint64(i)); err != nil {
+			t.Fatalf("Add(%q): %v", k, err)
+		}
+	}
+	f := buildFST(t, b)
+
+	for i, k := range keys {
+		got, ok := f.Get([]byte(k))
+		if !ok {
+			t.Errorf("Get(%q): not found", k)
+			continue
+		}
+		if got != uint64(i) {
+			t.Errorf("Get(%q)=%d, want %d", k, got, i)
+		}
+	}
+}
+
+func TestEmojiKeys(t *testing.T) {
+	b := newTestBuilder()
+	// Emoji are multi-byte UTF-8 sequences, sorted by byte order
+	keys := []string{"hello", "hello🔍", "world🔎"}
+	for i, k := range keys {
+		if err := b.Add([]byte(k), uint64(i)); err != nil {
+			t.Fatalf("Add(%q): %v", k, err)
+		}
+	}
+	f := buildFST(t, b)
+
+	for i, k := range keys {
+		got, ok := f.Get([]byte(k))
+		if !ok {
+			t.Errorf("Get(%q): not found", k)
+			continue
+		}
+		if got != uint64(i) {
+			t.Errorf("Get(%q)=%d, want %d", k, got, i)
+		}
+	}
+	// Partial emoji bytes should not match
+	_, ok := f.Get([]byte("hello\xf0"))
+	if ok {
+		t.Error("Get(hello + partial emoji): should not exist")
+	}
+}
+
+func TestCJKExtensionBKeys(t *testing.T) {
+	b := newTestBuilder()
+	// 𠮷 is CJK Extension B (4 bytes in UTF-8: F0 A0 AE B7)
+	// Sort by byte order
+	keys := []string{"𠮷", "𠮷野家"}
+	for i, k := range keys {
+		if err := b.Add([]byte(k), uint64(i*10)); err != nil {
+			t.Fatalf("Add(%q): %v", k, err)
+		}
+	}
+	f := buildFST(t, b)
+
+	for i, k := range keys {
+		got, ok := f.Get([]byte(k))
+		if !ok {
+			t.Errorf("Get(%q): not found", k)
+			continue
+		}
+		if got != uint64(i*10) {
+			t.Errorf("Get(%q)=%d, want %d", k, got, i*10)
+		}
+	}
+}
+
+func TestBackslashAndQuoteKeys(t *testing.T) {
+	b := newTestBuilder()
+	keys := []string{"\"quoted\"", "path\\to\\file"}
+	for i, k := range keys {
+		if err := b.Add([]byte(k), uint64(i)); err != nil {
+			t.Fatalf("Add(%q): %v", k, err)
+		}
+	}
+	f := buildFST(t, b)
+
+	for i, k := range keys {
+		got, ok := f.Get([]byte(k))
+		if !ok {
+			t.Errorf("Get(%q): not found", k)
+			continue
+		}
+		if got != uint64(i) {
+			t.Errorf("Get(%q)=%d, want %d", k, got, i)
+		}
+	}
+}
+
 func TestManyKeys(t *testing.T) {
 	b := newTestBuilder()
 	n := 1000

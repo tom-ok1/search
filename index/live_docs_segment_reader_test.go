@@ -13,11 +13,11 @@ func createTestDiskSegment(t *testing.T) *DiskSegment {
 	t.Helper()
 	tmpDir := t.TempDir()
 	dir, _ := store.NewFSDirectory(tmpDir)
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
-	)
-	writer := NewIndexWriter(dir, analyzer, 100)
+	))
+	writer := NewIndexWriter(dir, fa, 100)
 
 	docs := []struct {
 		id   string

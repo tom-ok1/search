@@ -13,11 +13,11 @@ func setupRAUSegment(t *testing.T) (*SegmentCommitInfo, string, store.Directory)
 	t.Helper()
 	tmpDir := t.TempDir()
 	dir, _ := store.NewFSDirectory(tmpDir)
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
-	)
-	writer := NewIndexWriter(dir, analyzer, 100)
+	))
+	writer := NewIndexWriter(dir, fa, 100)
 
 	for _, text := range []string{"hello world", "hello go", "world go"} {
 		doc := document.NewDocument()

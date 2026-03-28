@@ -17,7 +17,7 @@ import (
 type IndexWriter struct {
 	mu             sync.Mutex
 	dir            store.Directory
-	analyzer       *analysis.Analyzer
+	fieldAnalyzers *analysis.FieldAnalyzers
 	segmentInfos   *SegmentInfos
 	segmentCounter int32
 	readerMap      map[string]*ReadersAndUpdates
@@ -29,12 +29,12 @@ type IndexWriter struct {
 // NewIndexWriter creates a new IndexWriter. bufferSize controls the approximate
 // number of documents buffered in RAM before auto-flushing (converted internally
 // to a RAM byte threshold).
-func NewIndexWriter(dir store.Directory, analyzer *analysis.Analyzer, bufferSize int) *IndexWriter {
+func NewIndexWriter(dir store.Directory, fieldAnalyzers *analysis.FieldAnalyzers, bufferSize int) *IndexWriter {
 	w := &IndexWriter{
-		dir:         dir,
-		analyzer:    analyzer,
-		readerMap:   make(map[string]*ReadersAndUpdates),
-		fileDeleter: NewFileDeleter(dir),
+		dir:            dir,
+		fieldAnalyzers: fieldAnalyzers,
+		readerMap:      make(map[string]*ReadersAndUpdates),
+		fileDeleter:    NewFileDeleter(dir),
 	}
 
 	// Try to load existing committed state from the directory.
@@ -66,7 +66,7 @@ func NewIndexWriter(dir store.Directory, analyzer *analysis.Analyzer, bufferSize
 	// max docs per DWPT for deterministic flush behavior.
 	const defaultRAMBufferSize = 256 * 1024 * 1024 // 256 MB
 
-	w.docWriter = newDocumentsWriter(dir, analyzer, defaultRAMBufferSize, bufferSize, func() string {
+	w.docWriter = newDocumentsWriter(dir, fieldAnalyzers, defaultRAMBufferSize, bufferSize, func() string {
 		return w.nextSegmentName()
 	})
 	w.docWriter.onSegmentFlushed = func(info *SegmentCommitInfo) {

@@ -12,7 +12,7 @@ import (
 // document indexing without locks. Each indexing goroutine gets its own DWPT.
 type DocumentsWriterPerThread struct {
 	segment        *InMemorySegment
-	analyzer       *analysis.Analyzer
+	fieldAnalyzers *analysis.FieldAnalyzers
 	bytesUsed      int64
 	flushPending   bool
 	deleteQueue    *DeleteQueue
@@ -20,10 +20,10 @@ type DocumentsWriterPerThread struct {
 	pendingUpdates *BufferedUpdates
 }
 
-func newDWPT(segmentName string, analyzer *analysis.Analyzer, deleteQueue *DeleteQueue) *DocumentsWriterPerThread {
+func newDWPT(segmentName string, fieldAnalyzers *analysis.FieldAnalyzers, deleteQueue *DeleteQueue) *DocumentsWriterPerThread {
 	return &DocumentsWriterPerThread{
 		segment:        newInMemorySegment(segmentName),
-		analyzer:       analyzer,
+		fieldAnalyzers: fieldAnalyzers,
 		deleteQueue:    deleteQueue,
 		deleteSlice:    deleteQueue.newSlice(),
 		pendingUpdates: newBufferedUpdates(),
@@ -42,7 +42,7 @@ func (dwpt *DocumentsWriterPerThread) addDocument(doc *document.Document) (int64
 	for _, field := range doc.Fields {
 		switch field.Type {
 		case document.FieldTypeText:
-			tokens, err := dwpt.analyzer.Analyze(field.Value)
+			tokens, err := dwpt.fieldAnalyzers.AnalyzeField(field.Name, field.Value)
 			if err != nil {
 				return 0, err
 			}

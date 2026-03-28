@@ -15,11 +15,11 @@ import (
 func newTestWriterWithPolicy(t *testing.T, bufferSize int, policy index.MergePolicy) (*index.IndexWriter, store.Directory) {
 	t.Helper()
 	dir, _ := store.NewFSDirectory(t.TempDir())
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
 		&analysis.LowerCaseFilter{},
-	)
-	w := index.NewIndexWriter(dir, analyzer, bufferSize)
+	))
+	w := index.NewIndexWriter(dir, fa, bufferSize)
 	w.SetMergePolicy(policy)
 	return w, dir
 }

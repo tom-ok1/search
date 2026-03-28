@@ -1,6 +1,8 @@
 // server/cluster/metadata.go
 package cluster
 
+import "gosearch/server/mapping"
+
 type IndexState int
 
 const (
@@ -13,10 +15,10 @@ type Metadata struct {
 }
 
 type IndexMetadata struct {
-	Name      string
-	Settings  IndexSettings
-	NumShards int
-	State     IndexState
+	Name     string
+	Settings IndexSettings
+	Mapping  *mapping.MappingDefinition
+	State    IndexState
 }
 
 type IndexSettings struct {

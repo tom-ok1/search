@@ -10,10 +10,10 @@ import (
 func createTestWriter(t *testing.T) (*IndexWriter, store.Directory) {
 	t.Helper()
 	dir, _ := store.NewFSDirectory(t.TempDir())
-	analyzer := analysis.NewAnalyzer(
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
 		analysis.NewWhitespaceTokenizer(),
-	)
-	w := NewIndexWriter(dir, analyzer, 1000)
+	))
+	w := NewIndexWriter(dir, fa, 1000)
 	return w, dir
 }
 
@@ -173,6 +173,205 @@ func TestMergeSegmentsPositionsPreserved(t *testing.T) {
 	positions := pi.Positions()
 	if len(positions) != 2 || positions[0] != 0 || positions[1] != 2 {
 		t.Errorf("positions = %v, want [0, 2]", positions)
+	}
+}
+
+func TestMergeSegmentsJapanese(t *testing.T) {
+	w, dir := createTestWriter(t)
+	defer w.Close()
+
+	addDoc(t, w, map[string]string{"body": "東京 大阪"})
+	addDoc(t, w, map[string]string{"body": "東京 名古屋"})
+	w.Flush()
+
+	addDoc(t, w, map[string]string{"body": "大阪 京都"})
+	w.Flush()
+
+	dirPath := dir.FilePath("")
+	inputs := make([]MergeInput, 2)
+	for i, info := range w.segmentInfos.Segments {
+		ds, err := OpenDiskSegment(dirPath, info.Name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer ds.Close()
+		inputs[i] = MergeInput{
+			Segment:   ds,
+			IsDeleted: func(docID int) bool { return false },
+		}
+	}
+
+	result, err := MergeSegmentsToDisk(dir, inputs, "_merged")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if result.DocCount != 3 {
+		t.Errorf("merged docCount = %d, want 3", result.DocCount)
+	}
+
+	merged, err := OpenDiskSegment(dirPath, "_merged")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer merged.Close()
+
+	if df := merged.DocFreq("body", "東京"); df != 2 {
+		t.Errorf("東京 doc_freq = %d, want 2", df)
+	}
+	if df := merged.DocFreq("body", "大阪"); df != 2 {
+		t.Errorf("大阪 doc_freq = %d, want 2", df)
+	}
+	if df := merged.DocFreq("body", "京都"); df != 1 {
+		t.Errorf("京都 doc_freq = %d, want 1", df)
+	}
+}
+
+func TestMergeSegmentsPositionsPreservedJapanese(t *testing.T) {
+	w, dir := createTestWriter(t)
+	defer w.Close()
+
+	addDoc(t, w, map[string]string{"body": "東京 大阪 東京"})
+	w.Flush()
+
+	dirPath := dir.FilePath("")
+	info := w.segmentInfos.Segments[0]
+	ds, err := OpenDiskSegment(dirPath, info.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ds.Close()
+
+	inputs := []MergeInput{{
+		Segment:   ds,
+		IsDeleted: func(docID int) bool { return false },
+	}}
+
+	_, err = MergeSegmentsToDisk(dir, inputs, "_merged")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	merged, err := OpenDiskSegment(dirPath, "_merged")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer merged.Close()
+
+	pi := merged.PostingsIterator("body", "東京")
+	if !pi.Next() {
+		t.Fatal("expected 1 posting for '東京'")
+	}
+	if pi.Freq() != 2 {
+		t.Errorf("freq = %d, want 2", pi.Freq())
+	}
+	positions := pi.Positions()
+	if len(positions) != 2 || positions[0] != 0 || positions[1] != 2 {
+		t.Errorf("positions = %v, want [0, 2]", positions)
+	}
+}
+
+func TestMergeSegmentsSpecialChars(t *testing.T) {
+	w, dir := createTestWriter(t)
+	defer w.Close()
+
+	addDoc(t, w, map[string]string{"body": "café résumé"})
+	addDoc(t, w, map[string]string{"body": "user@example.com test"})
+	w.Flush()
+
+	addDoc(t, w, map[string]string{"body": "🔍 search"})
+	addDoc(t, w, map[string]string{"body": "𠮷野家 テスト"})
+	w.Flush()
+
+	dirPath := dir.FilePath("")
+	inputs := make([]MergeInput, 2)
+	for i, info := range w.segmentInfos.Segments {
+		ds, err := OpenDiskSegment(dirPath, info.Name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer ds.Close()
+		inputs[i] = MergeInput{
+			Segment:   ds,
+			IsDeleted: func(docID int) bool { return false },
+		}
+	}
+
+	result, err := MergeSegmentsToDisk(dir, inputs, "_merged")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.DocCount != 4 {
+		t.Errorf("merged docCount = %d, want 4", result.DocCount)
+	}
+
+	merged, err := OpenDiskSegment(dirPath, "_merged")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer merged.Close()
+
+	// Verify special char terms survive merge
+	for _, term := range []string{"café", "résumé", "user@example.com", "🔍", "𠮷野家", "テスト"} {
+		if merged.DocFreq("body", term) != 1 {
+			t.Errorf("after merge, DocFreq(%q) = %d, want 1", term, merged.DocFreq("body", term))
+		}
+	}
+}
+
+func TestMergeSegmentsWithDeletionsSpecialChars(t *testing.T) {
+	w, dir := createTestWriter(t)
+	defer w.Close()
+
+	addDoc(t, w, map[string]string{"body": "café test"})
+	addDoc(t, w, map[string]string{"body": "🔍 search"})
+	w.Flush()
+
+	addDoc(t, w, map[string]string{"body": "𠮷野家 テスト"})
+	w.Flush()
+
+	dirPath := dir.FilePath("")
+	inputs := make([]MergeInput, 2)
+	for i, info := range w.segmentInfos.Segments {
+		ds, err := OpenDiskSegment(dirPath, info.Name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer ds.Close()
+		localI := i
+		inputs[i] = MergeInput{
+			Segment: ds,
+			// Delete doc1 from segment 0 (the emoji doc)
+			IsDeleted: func(docID int) bool {
+				return localI == 0 && docID == 1
+			},
+		}
+	}
+
+	result, err := MergeSegmentsToDisk(dir, inputs, "_merged")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.DocCount != 2 {
+		t.Errorf("merged docCount = %d, want 2 (one deleted)", result.DocCount)
+	}
+
+	merged, err := OpenDiskSegment(dirPath, "_merged")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer merged.Close()
+
+	// café and 𠮷野家 should survive
+	if merged.DocFreq("body", "café") != 1 {
+		t.Errorf("DocFreq(café) = %d, want 1", merged.DocFreq("body", "café"))
+	}
+	if merged.DocFreq("body", "𠮷野家") != 1 {
+		t.Errorf("DocFreq(𠮷野家) = %d, want 1", merged.DocFreq("body", "𠮷野家"))
+	}
+	// 🔍 was deleted
+	if merged.DocFreq("body", "🔍") != 0 {
+		t.Errorf("DocFreq(🔍) = %d, want 0 (deleted)", merged.DocFreq("body", "🔍"))
 	}
 }
 
