@@ -419,6 +419,40 @@ func TestNRTReaderWithDeletions(t *testing.T) {
 	}
 }
 
+func TestIndexReaderGetStoredFieldsJapanese(t *testing.T) {
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
+		analysis.NewWhitespaceTokenizer(),
+		&analysis.LowerCaseFilter{},
+	))
+	dir, _ := store.NewFSDirectory(t.TempDir())
+	writer := NewIndexWriter(dir, fa, 2)
+
+	texts := []string{"東京 大阪", "名古屋 京都", "福岡 札幌"}
+	for _, text := range texts {
+		doc := document.NewDocument()
+		doc.AddField("body", text, document.FieldTypeText)
+		writer.AddDocument(doc)
+	}
+	writer.Flush()
+
+	reader, err := OpenNRTReader(writer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+
+	// Multi-segment: verify stored fields across segments
+	for i, text := range texts {
+		fields := reader.GetStoredFields(i)
+		if fields == nil {
+			t.Fatalf("expected stored fields for global docID %d", i)
+		}
+		if string(fields["body"]) != text {
+			t.Errorf("global doc %d body: got %q, want %q", i, fields["body"], text)
+		}
+	}
+}
+
 // TestNRTReaderProtectsFilesFromDeletion verifies that segment files
 // are not deleted while an NRT reader still holds references to them.
 func TestNRTReaderProtectsFilesFromDeletion(t *testing.T) {

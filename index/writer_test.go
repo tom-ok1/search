@@ -1210,6 +1210,184 @@ func TestCommitCleansUpOrphanedSegmentFiles(t *testing.T) {
 	}
 }
 
+func TestInvertedIndexJapanese(t *testing.T) {
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
+		analysis.NewWhitespaceTokenizer(),
+		&analysis.LowerCaseFilter{},
+	))
+	dir, _ := store.NewFSDirectory(t.TempDir())
+	writer := NewIndexWriter(dir, fa, 100)
+
+	doc0 := document.NewDocument()
+	doc0.AddField("title", "東京 大阪 名古屋", document.FieldTypeText)
+	writer.AddDocument(doc0)
+
+	doc1 := document.NewDocument()
+	doc1.AddField("title", "東京 京都", document.FieldTypeText)
+	writer.AddDocument(doc1)
+
+	if err := writer.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := OpenNRTReader(writer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	seg := reader.Leaves()[0].Segment
+
+	// "東京" appears in both documents
+	if seg.DocFreq("title", "東京") != 2 {
+		t.Errorf("DocFreq(東京): got %d, want 2", seg.DocFreq("title", "東京"))
+	}
+	// "名古屋" appears only in doc0
+	if seg.DocFreq("title", "名古屋") != 1 {
+		t.Errorf("DocFreq(名古屋): got %d, want 1", seg.DocFreq("title", "名古屋"))
+	}
+	// Non-existent Japanese term
+	if seg.DocFreq("title", "福岡") != 0 {
+		t.Error("expected docFreq 0 for '福岡'")
+	}
+}
+
+func TestPostingFreqAndPositionsJapanese(t *testing.T) {
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
+		analysis.NewWhitespaceTokenizer(),
+		&analysis.LowerCaseFilter{},
+	))
+	dir, _ := store.NewFSDirectory(t.TempDir())
+	writer := NewIndexWriter(dir, fa, 100)
+
+	doc := document.NewDocument()
+	doc.AddField("body", "東京 大阪 東京", document.FieldTypeText)
+	writer.AddDocument(doc)
+
+	if err := writer.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := OpenNRTReader(writer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	seg := reader.Leaves()[0].Segment
+
+	iter := seg.PostingsIterator("body", "東京")
+	if !iter.Next() {
+		t.Fatal("expected at least one posting for '東京'")
+	}
+	if iter.Freq() != 2 {
+		t.Errorf("expected freq 2, got %d", iter.Freq())
+	}
+	// "東京" appears at positions 0 and 2
+	positions := iter.Positions()
+	if positions[0] != 0 || positions[1] != 2 {
+		t.Errorf("expected positions [0,2], got %v", positions)
+	}
+}
+
+func TestKeywordFieldJapanese(t *testing.T) {
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
+		analysis.NewWhitespaceTokenizer(),
+		&analysis.LowerCaseFilter{},
+	))
+	dir, _ := store.NewFSDirectory(t.TempDir())
+	writer := NewIndexWriter(dir, fa, 100)
+
+	doc := document.NewDocument()
+	doc.AddField("category", "技術", document.FieldTypeKeyword)
+	writer.AddDocument(doc)
+
+	doc2 := document.NewDocument()
+	doc2.AddField("category", "科学", document.FieldTypeKeyword)
+	writer.AddDocument(doc2)
+
+	doc3 := document.NewDocument()
+	doc3.AddField("category", "技術", document.FieldTypeKeyword)
+	writer.AddDocument(doc3)
+
+	writer.Flush()
+
+	reader, err := OpenNRTReader(writer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	seg := reader.Leaves()[0].Segment
+
+	if seg.DocFreq("category", "技術") != 2 {
+		t.Errorf("DocFreq(技術): got %d, want 2", seg.DocFreq("category", "技術"))
+	}
+	if seg.DocFreq("category", "科学") != 1 {
+		t.Errorf("DocFreq(科学): got %d, want 1", seg.DocFreq("category", "科学"))
+	}
+}
+
+func TestStoredFieldJapanese(t *testing.T) {
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
+		analysis.NewWhitespaceTokenizer(),
+		&analysis.LowerCaseFilter{},
+	))
+	dir, _ := store.NewFSDirectory(t.TempDir())
+	writer := NewIndexWriter(dir, fa, 100)
+
+	doc := document.NewDocument()
+	doc.AddField("body", "東京タワー スカイツリー", document.FieldTypeText)
+	writer.AddDocument(doc)
+	writer.Flush()
+
+	reader, err := OpenNRTReader(writer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+
+	fields, err := reader.Leaves()[0].Segment.StoredFields(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(fields["body"]) != "東京タワー スカイツリー" {
+		t.Errorf("stored body: got %q, want %q", fields["body"], "東京タワー スカイツリー")
+	}
+}
+
+func TestDeleteDocumentJapanese(t *testing.T) {
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
+		analysis.NewWhitespaceTokenizer(),
+		&analysis.LowerCaseFilter{},
+	))
+	dir, _ := store.NewFSDirectory(t.TempDir())
+	writer := NewIndexWriter(dir, fa, 100)
+
+	doc0 := document.NewDocument()
+	doc0.AddField("id", "東京", document.FieldTypeKeyword)
+	doc0.AddField("body", "東京タワー", document.FieldTypeText)
+	writer.AddDocument(doc0)
+
+	doc1 := document.NewDocument()
+	doc1.AddField("id", "大阪", document.FieldTypeKeyword)
+	doc1.AddField("body", "大阪城", document.FieldTypeText)
+	writer.AddDocument(doc1)
+
+	if err := writer.Flush(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Delete the document with id=東京
+	if err := writer.DeleteDocuments("id", "東京"); err != nil {
+		t.Fatal(err)
+	}
+
+	reader, err := OpenNRTReader(writer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	if reader.LiveDocCount() != 1 {
+		t.Errorf("expected 1 live doc, got %d", reader.LiveDocCount())
+	}
+}
+
 // TestDeleteThenAdd verifies that when a delete is issued before an add with the
 // same ID, the newly added document survives (the delete only affects prior docs).
 func TestDeleteThenAdd(t *testing.T) {

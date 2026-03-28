@@ -138,6 +138,72 @@ func TestDWPTEstimateBytesUsed(t *testing.T) {
 	}
 }
 
+func TestDWPTAddDocumentJapanese(t *testing.T) {
+	dwpt := newDWPT("_seg0", newTestFieldAnalyzers(), newDeleteQueue())
+
+	doc := document.NewDocument()
+	doc.AddField("body", "東京 大阪", document.FieldTypeText)
+	if _, err := dwpt.addDocument(doc); err != nil {
+		t.Fatal(err)
+	}
+
+	if dwpt.segment.docCount != 1 {
+		t.Errorf("docCount: got %d, want 1", dwpt.segment.docCount)
+	}
+	fi := dwpt.segment.fields["body"]
+	if fi == nil {
+		t.Fatal("expected 'body' field to exist")
+	}
+	if _, ok := fi.postings["東京"]; !ok {
+		t.Error("expected posting for '東京'")
+	}
+	if _, ok := fi.postings["大阪"]; !ok {
+		t.Error("expected posting for '大阪'")
+	}
+}
+
+func TestDWPTPerFieldAnalyzerJapanese(t *testing.T) {
+	fa := analysis.NewFieldAnalyzers(
+		analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{}),
+	)
+	// Use ngram analyzer for "title" field
+	fa.SetFieldAnalyzer("title", analysis.NewAnalyzer(
+		analysis.NewNGramTokenizer(2, 3), &analysis.LowerCaseFilter{},
+	))
+
+	dwpt := newDWPT("_seg0", fa, newDeleteQueue())
+
+	doc := document.NewDocument()
+	doc.AddField("title", "東京都", document.FieldTypeText)
+	doc.AddField("body", "東京 大阪", document.FieldTypeText)
+	if _, err := dwpt.addDocument(doc); err != nil {
+		t.Fatal(err)
+	}
+
+	// "title" with ngram(2,3) on "東京都" should produce: "東京", "京都", "東京都"
+	titleField := dwpt.segment.fields["title"]
+	if titleField == nil {
+		t.Fatal("expected 'title' field")
+	}
+	for _, term := range []string{"東京", "京都", "東京都"} {
+		if _, ok := titleField.postings[term]; !ok {
+			t.Errorf("expected ngram posting for %q in title", term)
+		}
+	}
+
+	// "body" with whitespace tokenizer should produce: "東京", "大阪"
+	bodyField := dwpt.segment.fields["body"]
+	if bodyField == nil {
+		t.Fatal("expected 'body' field")
+	}
+	if _, ok := bodyField.postings["東京"]; !ok {
+		t.Error("expected posting for '東京' in body")
+	}
+	if _, ok := bodyField.postings["大阪"]; !ok {
+		t.Error("expected posting for '大阪' in body")
+	}
+}
+
 func TestDWPTPerFieldAnalyzer(t *testing.T) {
 	fa := analysis.NewFieldAnalyzers(
 		analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{}),

@@ -369,6 +369,64 @@ func TestDiskSegmentMultipleFields(t *testing.T) {
 	}
 }
 
+func TestDiskSegmentJapanese(t *testing.T) {
+	fa := analysis.NewFieldAnalyzers(
+		analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{}),
+	)
+	dwpt := newDWPT("_seg0", fa, newDeleteQueue())
+
+	docs := []string{"東京 大阪", "東京 名古屋", "大阪 京都"}
+	for _, text := range docs {
+		doc := document.NewDocument()
+		doc.AddField("title", text, document.FieldTypeText)
+		dwpt.addDocument(doc)
+	}
+
+	ds, _ := writeAndOpenDiskSegment(t, dwpt.segment)
+	defer ds.Close()
+
+	// "東京" appears in doc 0 and 1
+	if ds.DocFreq("title", "東京") != 2 {
+		t.Errorf("DocFreq(東京): got %d, want 2", ds.DocFreq("title", "東京"))
+	}
+	// "大阪" appears in doc 0 and 2
+	if ds.DocFreq("title", "大阪") != 2 {
+		t.Errorf("DocFreq(大阪): got %d, want 2", ds.DocFreq("title", "大阪"))
+	}
+	// "名古屋" appears in doc 1 only
+	if ds.DocFreq("title", "名古屋") != 1 {
+		t.Errorf("DocFreq(名古屋): got %d, want 1", ds.DocFreq("title", "名古屋"))
+	}
+
+	// Verify postings iterator for "東京"
+	iter := ds.PostingsIterator("title", "東京")
+	var docIDs []int
+	for iter.Next() {
+		docIDs = append(docIDs, iter.DocID())
+	}
+	if len(docIDs) != 2 || docIDs[0] != 0 || docIDs[1] != 1 {
+		t.Errorf("PostingsIterator(東京): got docIDs %v, want [0,1]", docIDs)
+	}
+
+	// Verify stored fields roundtrip
+	for i, text := range docs {
+		stored, err := ds.StoredFields(i)
+		if err != nil {
+			t.Fatalf("StoredFields(%d): %v", i, err)
+		}
+		if string(stored["title"]) != text {
+			t.Errorf("StoredFields(%d)[title]: got %q, want %q", i, stored["title"], text)
+		}
+	}
+
+	// Field lengths: each doc has 2 tokens
+	for i := range docs {
+		if ds.FieldLength("title", i) != 2 {
+			t.Errorf("FieldLength(title, %d): got %d, want 2", i, ds.FieldLength("title", i))
+		}
+	}
+}
+
 func TestOpenDiskSegmentNonExistentPath(t *testing.T) {
 	_, err := OpenDiskSegment("/nonexistent/path", "_seg0")
 	if err == nil {

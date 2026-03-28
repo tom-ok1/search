@@ -176,6 +176,101 @@ func TestMergeSegmentsPositionsPreserved(t *testing.T) {
 	}
 }
 
+func TestMergeSegmentsJapanese(t *testing.T) {
+	w, dir := createTestWriter(t)
+	defer w.Close()
+
+	addDoc(t, w, map[string]string{"body": "東京 大阪"})
+	addDoc(t, w, map[string]string{"body": "東京 名古屋"})
+	w.Flush()
+
+	addDoc(t, w, map[string]string{"body": "大阪 京都"})
+	w.Flush()
+
+	dirPath := dir.FilePath("")
+	inputs := make([]MergeInput, 2)
+	for i, info := range w.segmentInfos.Segments {
+		ds, err := OpenDiskSegment(dirPath, info.Name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer ds.Close()
+		inputs[i] = MergeInput{
+			Segment:   ds,
+			IsDeleted: func(docID int) bool { return false },
+		}
+	}
+
+	result, err := MergeSegmentsToDisk(dir, inputs, "_merged")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if result.DocCount != 3 {
+		t.Errorf("merged docCount = %d, want 3", result.DocCount)
+	}
+
+	merged, err := OpenDiskSegment(dirPath, "_merged")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer merged.Close()
+
+	if df := merged.DocFreq("body", "東京"); df != 2 {
+		t.Errorf("東京 doc_freq = %d, want 2", df)
+	}
+	if df := merged.DocFreq("body", "大阪"); df != 2 {
+		t.Errorf("大阪 doc_freq = %d, want 2", df)
+	}
+	if df := merged.DocFreq("body", "京都"); df != 1 {
+		t.Errorf("京都 doc_freq = %d, want 1", df)
+	}
+}
+
+func TestMergeSegmentsPositionsPreservedJapanese(t *testing.T) {
+	w, dir := createTestWriter(t)
+	defer w.Close()
+
+	addDoc(t, w, map[string]string{"body": "東京 大阪 東京"})
+	w.Flush()
+
+	dirPath := dir.FilePath("")
+	info := w.segmentInfos.Segments[0]
+	ds, err := OpenDiskSegment(dirPath, info.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ds.Close()
+
+	inputs := []MergeInput{{
+		Segment:   ds,
+		IsDeleted: func(docID int) bool { return false },
+	}}
+
+	_, err = MergeSegmentsToDisk(dir, inputs, "_merged")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	merged, err := OpenDiskSegment(dirPath, "_merged")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer merged.Close()
+
+	pi := merged.PostingsIterator("body", "東京")
+	if !pi.Next() {
+		t.Fatal("expected 1 posting for '東京'")
+	}
+	if pi.Freq() != 2 {
+		t.Errorf("freq = %d, want 2", pi.Freq())
+	}
+	positions := pi.Positions()
+	if len(positions) != 2 || positions[0] != 0 || positions[1] != 2 {
+		t.Errorf("positions = %v, want [0, 2]", positions)
+	}
+}
+
 func TestMergeSegmentsDifferentFields(t *testing.T) {
 	w, dir := createTestWriter(t)
 	defer w.Close()
