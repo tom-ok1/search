@@ -12,7 +12,9 @@ type RefreshRequest struct {
 }
 
 type RefreshResponse struct {
-	Shards int
+	Shards       int
+	FailedShards int
+	Failures     []string
 }
 
 type TransportRefreshAction struct {
@@ -44,12 +46,17 @@ func (a *TransportRefreshAction) Execute(req RefreshRequest) (RefreshResponse, e
 		return RefreshResponse{}, fmt.Errorf("no such index [%s]", req.Index)
 	}
 
+	var failures []string
 	for i := 0; i < svc.NumShards(); i++ {
 		shard := svc.Shard(i)
 		if err := shard.Refresh(); err != nil {
-			return RefreshResponse{}, fmt.Errorf("refresh shard %d: %w", i, err)
+			failures = append(failures, fmt.Sprintf("shard %d: %v", i, err))
 		}
 	}
 
-	return RefreshResponse{Shards: svc.NumShards()}, nil
+	return RefreshResponse{
+		Shards:       svc.NumShards(),
+		FailedShards: len(failures),
+		Failures:     failures,
+	}, nil
 }
