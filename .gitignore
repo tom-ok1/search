@@ -1,1 +1,4 @@
 ./lucene/**
+docs/superpowers/
+elasticsearch/
+lucene/
