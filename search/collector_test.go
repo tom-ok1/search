@@ -150,3 +150,30 @@ func TestTopKCollector_ReverseInsertOrder(t *testing.T) {
 		}
 	}
 }
+
+func TestTopKCollector_TieBreakByDocID(t *testing.T) {
+	c := NewTopKCollector(3)
+	lc := c.GetLeafCollector(leafCtx(0))
+	ms := &mockScorable{}
+	lc.SetScorer(ms)
+
+	// Insert docs with equal scores in reverse docID order
+	collectWithScorer(lc, ms, 5, 1.0)
+	collectWithScorer(lc, ms, 3, 1.0)
+	collectWithScorer(lc, ms, 1, 1.0)
+	collectWithScorer(lc, ms, 4, 1.0)
+	collectWithScorer(lc, ms, 2, 1.0)
+
+	results := c.Results()
+	if len(results) != 3 {
+		t.Fatalf("expected 3 results, got %d", len(results))
+	}
+
+	// Lucene convention: lowest docID wins ties, so top-3 should be docs 1, 2, 3
+	expectedDocIDs := []int{1, 2, 3}
+	for i, want := range expectedDocIDs {
+		if results[i].DocID != want {
+			t.Errorf("results[%d].DocID = %d, want %d (full results: %v)", i, results[i].DocID, want, results)
+		}
+	}
+}
