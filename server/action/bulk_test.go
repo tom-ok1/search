@@ -80,3 +80,39 @@ func TestTransportBulkAction_PartialErrors(t *testing.T) {
 		t.Error("second item should fail for nonexistent index")
 	}
 }
+
+func TestTransportBulkAction_CreateAction(t *testing.T) {
+	cs, services, dataPath, registry := newTestDeps(t)
+
+	createIdxAction := NewTransportCreateIndexAction(cs, services, dataPath, registry)
+	createIdxAction.Execute(CreateIndexRequest{
+		Name: "docs",
+		Mappings: &mapping.MappingDefinition{
+			Properties: map[string]mapping.FieldMapping{
+				"title": {Type: mapping.FieldTypeText},
+			},
+		},
+	})
+	defer services["docs"].Close()
+
+	bulkAction := NewTransportBulkAction(cs, services)
+	resp, err := bulkAction.Execute(BulkRequest{
+		Items: []BulkItem{
+			{
+				Action: "create",
+				Index:  "docs",
+				ID:     "1",
+				Source: json.RawMessage(`{"title":"hello"}`),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if resp.Errors {
+		t.Errorf("expected no errors, got errors: %+v", resp.Items)
+	}
+	if resp.Items[0].Status != 201 {
+		t.Errorf("expected status 201, got %d", resp.Items[0].Status)
+	}
+}

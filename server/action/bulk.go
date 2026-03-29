@@ -81,7 +81,7 @@ func (a *TransportBulkAction) Execute(req BulkRequest) (BulkResponse, error) {
 			}
 		} else {
 			switch item.Action {
-			case "index":
+			case "index", "create":
 				resp.Status = 201
 			case "delete":
 				resp.Status = 200
@@ -112,7 +112,7 @@ func (a *TransportBulkAction) executeItem(item BulkItem) error {
 	shard := svc.Shard(shardID)
 
 	switch item.Action {
-	case "index":
+	case "index", "create":
 		return shard.Index(item.ID, item.Source)
 	case "delete":
 		return shard.Delete(item.ID)
