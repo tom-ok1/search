@@ -208,7 +208,7 @@ func TestQueryParser_BoolFilter(t *testing.T) {
 	if len(bq.Clauses) != 1 {
 		t.Fatalf("expected 1 clause, got %d", len(bq.Clauses))
 	}
-	if bq.Clauses[0].Occur != search.OccurMust {
-		t.Errorf("expected OccurMust for filter clause, got %v", bq.Clauses[0].Occur)
+	if bq.Clauses[0].Occur != search.OccurFilter {
+		t.Errorf("expected OccurFilter for filter clause, got %v", bq.Clauses[0].Occur)
 	}
 }

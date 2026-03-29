@@ -6,9 +6,10 @@ import "gosearch/index"
 type Occur int
 
 const (
-	OccurMust    Occur = iota // AND
-	OccurShould               // OR
-	OccurMustNot              // NOT
+	OccurMust    Occur = iota // AND (contributes to scoring)
+	OccurShould               // OR  (contributes to scoring)
+	OccurMustNot              // NOT (no scoring)
+	OccurFilter               // AND (no scoring)
 )
 
 // BooleanClause is a single clause in a BooleanQuery.
@@ -46,7 +47,7 @@ func (q *BooleanQuery) CreateWeight(searcher *IndexSearcher, scoreMode ScoreMode
 	w := &booleanWeight{query: q}
 	for _, clause := range q.Clauses {
 		childScoreMode := scoreMode
-		if clause.Occur == OccurMustNot {
+		if clause.Occur == OccurMustNot || clause.Occur == OccurFilter {
 			childScoreMode = ScoreModeNone
 		}
 		cw := clause.Query.CreateWeight(searcher, childScoreMode)
@@ -70,6 +71,7 @@ func (w *booleanWeight) Query() Query { return w.query }
 
 func (w *booleanWeight) Scorer(ctx index.LeafReaderContext) Scorer {
 	var mustScorers []Scorer
+	var filterScorers []Scorer
 	var shouldScorers []Scorer
 	var mustNotScorers []Scorer
 
@@ -82,6 +84,11 @@ func (w *booleanWeight) Scorer(ctx index.LeafReaderContext) Scorer {
 				return nil
 			}
 			mustScorers = append(mustScorers, scorer)
+		case OccurFilter:
+			if scorer == nil {
+				return nil
+			}
+			filterScorers = append(filterScorers, scorer)
 		case OccurShould:
 			if scorer != nil {
 				shouldScorers = append(shouldScorers, scorer)
@@ -93,16 +100,24 @@ func (w *booleanWeight) Scorer(ctx index.LeafReaderContext) Scorer {
 		}
 	}
 
+	// Build the required scorer by combining MUST (scoring) and FILTER (non-scoring)
+	// clauses, following Lucene's BooleanScorerSupplier.req() approach.
+	reqScorer := buildRequiredScorer(filterScorers, mustScorers)
+
 	var mainScorer Scorer
 
-	if len(mustScorers) > 0 {
-		mainScorer = NewConjunctionScorer(mustScorers)
+	if reqScorer != nil {
 		if len(shouldScorers) > 0 {
-			mainScorer = newBoostedScorer(mainScorer, shouldScorers)
+			// MUST/FILTER + SHOULD: SHOULD boosts the score
+			mainScorer = newBoostedScorer(reqScorer, shouldScorers)
+		} else {
+			mainScorer = reqScorer
 		}
 	} else if len(shouldScorers) > 0 {
 		mainScorer = NewDisjunctionScorer(shouldScorers)
-	} else {
+	}
+
+	if mainScorer == nil {
 		return nil
 	}
 
@@ -213,3 +228,48 @@ func (s *exclusionScorer) advanceToNonExcluded(doc int) int {
 	s.docID = NoMoreDocs
 	return NoMoreDocs
 }
+
+// buildRequiredScorer combines FILTER (non-scoring) and MUST (scoring) scorers
+// into a single scorer, following Lucene's BooleanScorerSupplier.req() method.
+// All scorers participate in matching, but only MUST scorers contribute to scoring.
+func buildRequiredScorer(filterScorers, mustScorers []Scorer) Scorer {
+	totalRequired := len(filterScorers) + len(mustScorers)
+	if totalRequired == 0 {
+		return nil
+	}
+
+	// Single clause shortcut
+	if totalRequired == 1 {
+		if len(mustScorers) == 1 {
+			return mustScorers[0]
+		}
+		// Single FILTER only — wrap to return 0 score
+		return newConstantScoreScorer(filterScorers[0], 0.0)
+	}
+
+	// Multiple clauses: combine all into a ConjunctionScorer with scoring separation
+	allRequired := make([]Scorer, 0, totalRequired)
+	allRequired = append(allRequired, filterScorers...)
+	allRequired = append(allRequired, mustScorers...)
+
+	if len(mustScorers) == 0 {
+		// All filters, no scoring — score is always 0
+		return NewConjunctionScorerWithScoring(allRequired, nil)
+	}
+
+	return NewConjunctionScorerWithScoring(allRequired, mustScorers)
+}
+
+// constantScoreScorer wraps a scorer and returns a constant score.
+type constantScoreScorer struct {
+	inner Scorer
+	score float64
+}
+
+func newConstantScoreScorer(inner Scorer, score float64) Scorer {
+	return &constantScoreScorer{inner: inner, score: score}
+}
+
+func (s *constantScoreScorer) Iterator() DocIdSetIterator { return s.inner.Iterator() }
+func (s *constantScoreScorer) DocID() int                 { return s.inner.DocID() }
+func (s *constantScoreScorer) Score() float64             { return s.score }

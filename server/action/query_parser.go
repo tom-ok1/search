@@ -112,7 +112,7 @@ func (p *QueryParser) parseBool(value any) (search.Query, error) {
 
 	clauseTypes := map[string]search.Occur{
 		"must":     search.OccurMust,
-		"filter":   search.OccurMust,
+		"filter":   search.OccurFilter,
 		"should":   search.OccurShould,
 		"must_not": search.OccurMustNot,
 	}
