@@ -64,6 +64,22 @@ func NewNode(config NodeConfig) (*Node, error) {
 	rc.RegisterHandler(restaction.NewRestDeleteIndexAction(deleteAction))
 	rc.RegisterHandler(restaction.NewRestGetIndexAction(getAction))
 
+	// Document CRUD actions
+	indexDocAction := action.NewTransportIndexAction(cs, indexServices)
+	getDocAction := action.NewTransportGetAction(cs, indexServices)
+	deleteDocAction := action.NewTransportDeleteDocumentAction(cs, indexServices)
+	refreshAction := action.NewTransportRefreshAction(cs, indexServices)
+
+	ar.Register(indexDocAction)
+	ar.Register(getDocAction)
+	ar.Register(deleteDocAction)
+	ar.Register(refreshAction)
+
+	rc.RegisterHandler(restaction.NewRestIndexAction(indexDocAction))
+	rc.RegisterHandler(restaction.NewRestGetAction(getDocAction))
+	rc.RegisterHandler(restaction.NewRestDeleteDocumentAction(deleteDocAction))
+	rc.RegisterHandler(restaction.NewRestRefreshAction(refreshAction))
+
 	return n, nil
 }
 

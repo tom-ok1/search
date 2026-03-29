@@ -280,3 +280,111 @@ func TestNode_CreateIndex_InvalidBody(t *testing.T) {
 		t.Errorf("expected 400 for invalid body, got %d", resp.StatusCode)
 	}
 }
+
+func TestNode_IndexAndGetDocument(t *testing.T) {
+	addr, _ := startTestNode(t)
+
+	// Create index
+	req, _ := http.NewRequest("PUT", fmt.Sprintf("http://%s/myindex", addr),
+		strings.NewReader(`{"mappings":{"properties":{"title":{"type":"text"}}}}`))
+	http.DefaultClient.Do(req)
+
+	// Index a document
+	req, _ = http.NewRequest("PUT", fmt.Sprintf("http://%s/myindex/_doc/1", addr),
+		strings.NewReader(`{"title":"hello world"}`))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT _doc: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 201, got %d: %s", resp.StatusCode, body)
+	}
+
+	var indexResult map[string]any
+	json.NewDecoder(resp.Body).Decode(&indexResult)
+	if indexResult["result"] != "created" {
+		t.Errorf("expected result=created, got %v", indexResult["result"])
+	}
+
+	// Refresh
+	req, _ = http.NewRequest("POST", fmt.Sprintf("http://%s/myindex/_refresh", addr), nil)
+	resp2, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST _refresh: %v", err)
+	}
+	resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("refresh expected 200, got %d", resp2.StatusCode)
+	}
+
+	// Get the document
+	resp3, err := http.Get(fmt.Sprintf("http://%s/myindex/_doc/1", addr))
+	if err != nil {
+		t.Fatalf("GET _doc: %v", err)
+	}
+	defer resp3.Body.Close()
+	if resp3.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp3.StatusCode)
+	}
+
+	var getResult map[string]any
+	json.NewDecoder(resp3.Body).Decode(&getResult)
+	if getResult["found"] != true {
+		t.Errorf("expected found=true, got %v", getResult["found"])
+	}
+	if getResult["_id"] != "1" {
+		t.Errorf("expected _id=1, got %v", getResult["_id"])
+	}
+}
+
+func TestNode_DeleteDocument(t *testing.T) {
+	addr, _ := startTestNode(t)
+
+	// Create index + doc
+	req, _ := http.NewRequest("PUT", fmt.Sprintf("http://%s/myindex", addr),
+		strings.NewReader(`{"mappings":{"properties":{"title":{"type":"text"}}}}`))
+	http.DefaultClient.Do(req)
+
+	req, _ = http.NewRequest("PUT", fmt.Sprintf("http://%s/myindex/_doc/1", addr),
+		strings.NewReader(`{"title":"hello"}`))
+	http.DefaultClient.Do(req)
+
+	// Delete document
+	req, _ = http.NewRequest("DELETE", fmt.Sprintf("http://%s/myindex/_doc/1", addr), nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("DELETE _doc: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var result map[string]any
+	json.NewDecoder(resp.Body).Decode(&result)
+	if result["result"] != "deleted" {
+		t.Errorf("expected result=deleted, got %v", result["result"])
+	}
+}
+
+func TestNode_GetDocument_NotFound(t *testing.T) {
+	addr, _ := startTestNode(t)
+
+	req, _ := http.NewRequest("PUT", fmt.Sprintf("http://%s/myindex", addr), strings.NewReader(`{}`))
+	http.DefaultClient.Do(req)
+
+	// Refresh so searcher is not nil
+	req, _ = http.NewRequest("POST", fmt.Sprintf("http://%s/myindex/_refresh", addr), nil)
+	http.DefaultClient.Do(req)
+
+	resp, err := http.Get(fmt.Sprintf("http://%s/myindex/_doc/999", addr))
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", resp.StatusCode)
+	}
+}
