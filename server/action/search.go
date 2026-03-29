@@ -1,6 +1,7 @@
 package action
 
 import (
+	"container/heap"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -90,7 +91,8 @@ func (a *TransportSearchAction) Execute(req SearchRequest) (SearchResponse, erro
 	// Query phase: collect top `size` from each shard, then merge
 	numShards := svc.NumShards()
 
-	var allResults []search.SearchResult
+	// Collect top-K from each shard
+	shardResults := make([][]search.SearchResult, 0, numShards)
 	totalHits := 0
 	for i := range numShards {
 		shard := svc.Shard(i)
@@ -102,14 +104,13 @@ func (a *TransportSearchAction) Execute(req SearchRequest) (SearchResponse, erro
 		collector := search.NewTopKCollector(size)
 		results := searcher.Search(query, collector)
 		totalHits += collector.TotalHits()
-		allResults = append(allResults, results...)
+		if len(results) > 0 {
+			shardResults = append(shardResults, results)
+		}
 	}
 
-	// Merge phase: sort by score descending, take top `size`
-	sortByScoreDesc(allResults)
-	if len(allResults) > size {
-		allResults = allResults[:size]
-	}
+	// Merge phase: k-way merge of sorted shard results using a max-heap
+	allResults := mergeTopDocs(shardResults, size)
 
 	// Fetch phase: build SearchHits
 	maxScore := 0.0
@@ -142,10 +143,59 @@ func (a *TransportSearchAction) Execute(req SearchRequest) (SearchResponse, erro
 	}, nil
 }
 
-func sortByScoreDesc(results []search.SearchResult) {
-	for i := 1; i < len(results); i++ {
-		for j := i; j > 0 && results[j].Score > results[j-1].Score; j-- {
-			results[j], results[j-1] = results[j-1], results[j]
+// mergeTopDocs performs a k-way merge of pre-sorted (descending by score) shard
+// results, returning the top n results. This mirrors Lucene's TopDocs.merge
+// which uses a priority queue over shard cursors.
+func mergeTopDocs(shardResults [][]search.SearchResult, n int) []search.SearchResult {
+	if len(shardResults) == 0 {
+		return nil
+	}
+
+	// Initialize the heap with one cursor per shard, pointing at index 0
+	h := make(shardRefHeap, 0, len(shardResults))
+	for i, results := range shardResults {
+		h = append(h, shardRef{shardIndex: i, hitIndex: 0, score: results[0].Score})
+	}
+	heap.Init(&h)
+
+	merged := make([]search.SearchResult, 0, n)
+	for len(merged) < n && h.Len() > 0 {
+		top := &h[0]
+		merged = append(merged, shardResults[top.shardIndex][top.hitIndex])
+
+		top.hitIndex++
+		if top.hitIndex < len(shardResults[top.shardIndex]) {
+			top.score = shardResults[top.shardIndex][top.hitIndex].Score
+			heap.Fix(&h, 0)
+		} else {
+			heap.Pop(&h)
 		}
 	}
+	return merged
+}
+
+// shardRef tracks the current position within a single shard's results.
+type shardRef struct {
+	shardIndex int
+	hitIndex   int
+	score      float64
+}
+
+// shardRefHeap is a max-heap ordered by score (highest first).
+type shardRefHeap []shardRef
+
+func (h shardRefHeap) Len() int           { return len(h) }
+func (h shardRefHeap) Less(i, j int) bool { return h[i].score > h[j].score } // max-heap
+func (h shardRefHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+
+func (h *shardRefHeap) Push(x any) {
+	*h = append(*h, x.(shardRef))
+}
+
+func (h *shardRefHeap) Pop() any {
+	old := *h
+	n := len(old)
+	ref := old[n-1]
+	*h = old[:n-1]
+	return ref
 }
