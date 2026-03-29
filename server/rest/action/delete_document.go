@@ -40,7 +40,12 @@ func (h *RestDeleteDocumentAction) HandleRequest(req *rest.RestRequest, resp *re
 		return
 	}
 
-	resp.WriteJSON(http.StatusOK, map[string]any{
+	status := http.StatusOK
+	if result.Result == "not_found" {
+		status = http.StatusNotFound
+	}
+
+	resp.WriteJSON(status, map[string]any{
 		"_index": result.Index,
 		"_id":    result.ID,
 		"result": result.Result,

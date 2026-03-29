@@ -3,6 +3,7 @@ package action
 import (
 	"fmt"
 
+	"gosearch/search"
 	"gosearch/server/cluster"
 	"gosearch/server/index"
 )
@@ -50,6 +51,18 @@ func (a *TransportDeleteDocumentAction) Execute(req DeleteDocumentRequest) (Dele
 	shardID := index.RouteShard(req.ID, svc.NumShards())
 	shard := svc.Shard(shardID)
 
+	// Check if document exists before deleting
+	result := "not_found"
+	searcher := shard.Searcher()
+	if searcher != nil {
+		query := search.NewTermQuery("_id", req.ID)
+		collector := search.NewTopKCollector(1)
+		results := searcher.Search(query, collector)
+		if len(results) > 0 {
+			result = "deleted"
+		}
+	}
+
 	if err := shard.Delete(req.ID); err != nil {
 		return DeleteDocumentResponse{}, fmt.Errorf("delete document: %w", err)
 	}
@@ -57,6 +70,6 @@ func (a *TransportDeleteDocumentAction) Execute(req DeleteDocumentRequest) (Dele
 	return DeleteDocumentResponse{
 		Index:  req.Index,
 		ID:     req.ID,
-		Result: "deleted",
+		Result: result,
 	}, nil
 }
