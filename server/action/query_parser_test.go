@@ -144,3 +144,30 @@ func TestQueryParser_UnknownQuery(t *testing.T) {
 		t.Fatal("expected error for unknown query type")
 	}
 }
+
+func TestQueryParser_TermRejectsObjectValue(t *testing.T) {
+	p := newTestParser()
+
+	// ES expanded form — should error since we don't support it yet
+	_, err := p.ParseQuery(map[string]any{
+		"term": map[string]any{
+			"status": map[string]any{"value": "active", "boost": 1.5},
+		},
+	})
+	if err == nil {
+		t.Error("expected error for object value in term query, got nil")
+	}
+}
+
+func TestQueryParser_TermRejectsArrayValue(t *testing.T) {
+	p := newTestParser()
+
+	_, err := p.ParseQuery(map[string]any{
+		"term": map[string]any{
+			"status": []any{"active", "pending"},
+		},
+	})
+	if err == nil {
+		t.Error("expected error for array value in term query, got nil")
+	}
+}

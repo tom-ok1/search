@@ -1,6 +1,7 @@
 package action
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -51,8 +52,12 @@ func (p *QueryParser) parseTerm(value any) (search.Query, error) {
 	}
 
 	for field, v := range obj {
-		termValue := fmt.Sprintf("%v", v)
-		return search.NewTermQuery(field, termValue), nil
+		switch v.(type) {
+		case string, float64, bool, json.Number:
+			return search.NewTermQuery(field, fmt.Sprintf("%v", v)), nil
+		default:
+			return nil, fmt.Errorf("term query value for [%s] must be a scalar (string, number, or bool)", field)
+		}
 	}
 	return nil, fmt.Errorf("term query must specify a field")
 }
