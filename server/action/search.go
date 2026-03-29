@@ -184,9 +184,14 @@ type shardRef struct {
 // shardRefHeap is a max-heap ordered by score (highest first).
 type shardRefHeap []shardRef
 
-func (h shardRefHeap) Len() int           { return len(h) }
-func (h shardRefHeap) Less(i, j int) bool { return h[i].score > h[j].score } // max-heap
-func (h shardRefHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h shardRefHeap) Len() int { return len(h) }
+func (h shardRefHeap) Less(i, j int) bool {
+	if h[i].score != h[j].score {
+		return h[i].score > h[j].score
+	}
+	return h[i].shardIndex < h[j].shardIndex
+}
+func (h shardRefHeap) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
 
 func (h *shardRefHeap) Push(x any) {
 	*h = append(*h, x.(shardRef))

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"testing"
 
+	"gosearch/search"
 	"gosearch/server/mapping"
 )
 
@@ -123,5 +124,49 @@ func TestTransportSearchAction_Size(t *testing.T) {
 	}
 	if resp.Hits.Total.Value != 5 {
 		t.Errorf("expected total=5, got %d", resp.Hits.Total.Value)
+	}
+}
+
+func TestMergeTopDocs_TieBreakByShardIndex(t *testing.T) {
+	// All shards have docs with the same score - deterministic tie-breaking required
+	shard0 := []search.SearchResult{
+		{DocID: 10, Score: 5.0},
+		{DocID: 11, Score: 3.0},
+	}
+	shard1 := []search.SearchResult{
+		{DocID: 20, Score: 5.0},
+		{DocID: 21, Score: 3.0},
+	}
+	shard2 := []search.SearchResult{
+		{DocID: 30, Score: 5.0},
+		{DocID: 31, Score: 3.0},
+	}
+
+	merged := mergeTopDocs([][]search.SearchResult{shard0, shard1, shard2}, 6)
+	if len(merged) != 6 {
+		t.Fatalf("expected 6 results, got %d", len(merged))
+	}
+
+	// Equal scores: lower shard index should come first (Lucene-style tie-breaking)
+	// First 3 results all have score 5.0, should be in shard order: 10, 20, 30
+	if merged[0].DocID != 10 {
+		t.Errorf("merged[0].DocID = %d, want 10 (shard 0 wins tie)", merged[0].DocID)
+	}
+	if merged[1].DocID != 20 {
+		t.Errorf("merged[1].DocID = %d, want 20 (shard 1 second)", merged[1].DocID)
+	}
+	if merged[2].DocID != 30 {
+		t.Errorf("merged[2].DocID = %d, want 30 (shard 2 third)", merged[2].DocID)
+	}
+
+	// Next 3 results all have score 3.0, should also be in shard order: 11, 21, 31
+	if merged[3].DocID != 11 {
+		t.Errorf("merged[3].DocID = %d, want 11 (shard 0 wins tie)", merged[3].DocID)
+	}
+	if merged[4].DocID != 21 {
+		t.Errorf("merged[4].DocID = %d, want 21 (shard 1 second)", merged[4].DocID)
+	}
+	if merged[5].DocID != 31 {
+		t.Errorf("merged[5].DocID = %d, want 31 (shard 2 third)", merged[5].DocID)
 	}
 }
