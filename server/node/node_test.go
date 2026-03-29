@@ -388,3 +388,93 @@ func TestNode_GetDocument_NotFound(t *testing.T) {
 		t.Errorf("expected 404, got %d", resp.StatusCode)
 	}
 }
+
+func TestNode_Search(t *testing.T) {
+	addr, _ := startTestNode(t)
+
+	// Create index
+	req, _ := http.NewRequest("PUT", fmt.Sprintf("http://%s/myindex", addr),
+		strings.NewReader(`{"mappings":{"properties":{"title":{"type":"text"},"status":{"type":"keyword"}}}}`))
+	http.DefaultClient.Do(req)
+
+	// Index documents
+	for i, doc := range []string{
+		`{"title":"hello world","status":"active"}`,
+		`{"title":"hello go","status":"active"}`,
+		`{"title":"goodbye world","status":"archived"}`,
+	} {
+		req, _ = http.NewRequest("PUT", fmt.Sprintf("http://%s/myindex/_doc/%d", addr, i+1),
+			strings.NewReader(doc))
+		http.DefaultClient.Do(req)
+	}
+
+	// Refresh
+	req, _ = http.NewRequest("POST", fmt.Sprintf("http://%s/myindex/_refresh", addr), nil)
+	http.DefaultClient.Do(req)
+
+	// Search with match query
+	req, _ = http.NewRequest("POST", fmt.Sprintf("http://%s/myindex/_search", addr),
+		strings.NewReader(`{"query":{"match":{"title":"hello"}},"size":10}`))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST _search: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, body)
+	}
+
+	var result map[string]any
+	json.NewDecoder(resp.Body).Decode(&result)
+
+	hits, ok := result["hits"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected hits in response, got %v", result)
+	}
+	total := hits["total"].(map[string]any)
+	if total["value"] != float64(2) {
+		t.Errorf("expected 2 hits, got %v", total["value"])
+	}
+	hitList := hits["hits"].([]any)
+	if len(hitList) != 2 {
+		t.Errorf("expected 2 hit entries, got %d", len(hitList))
+	}
+}
+
+func TestNode_SearchMatchAll(t *testing.T) {
+	addr, _ := startTestNode(t)
+
+	req, _ := http.NewRequest("PUT", fmt.Sprintf("http://%s/myindex", addr),
+		strings.NewReader(`{"mappings":{"properties":{"title":{"type":"text"}}}}`))
+	http.DefaultClient.Do(req)
+
+	req, _ = http.NewRequest("PUT", fmt.Sprintf("http://%s/myindex/_doc/1", addr),
+		strings.NewReader(`{"title":"test"}`))
+	http.DefaultClient.Do(req)
+
+	req, _ = http.NewRequest("POST", fmt.Sprintf("http://%s/myindex/_refresh", addr), nil)
+	http.DefaultClient.Do(req)
+
+	// Search with GET (no body = match_all)
+	resp, err := http.Get(fmt.Sprintf("http://%s/myindex/_search", addr))
+	if err != nil {
+		t.Fatalf("GET _search: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, body)
+	}
+
+	var result map[string]any
+	json.NewDecoder(resp.Body).Decode(&result)
+
+	hits := result["hits"].(map[string]any)
+	total := hits["total"].(map[string]any)
+	if total["value"] != float64(1) {
+		t.Errorf("expected 1 hit for match_all, got %v", total["value"])
+	}
+}

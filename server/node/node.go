@@ -80,6 +80,11 @@ func NewNode(config NodeConfig) (*Node, error) {
 	rc.RegisterHandler(restaction.NewRestDeleteDocumentAction(deleteDocAction))
 	rc.RegisterHandler(restaction.NewRestRefreshAction(refreshAction))
 
+	// Search action
+	searchAction := action.NewTransportSearchAction(cs, indexServices, registry)
+	ar.Register(searchAction)
+	rc.RegisterHandler(restaction.NewRestSearchAction(searchAction))
+
 	return n, nil
 }
 
