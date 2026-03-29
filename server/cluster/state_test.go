@@ -44,6 +44,25 @@ func TestClusterState_UpdateMetadata(t *testing.T) {
 	}
 }
 
+func TestNewClusterStateWith_CustomPersistedState(t *testing.T) {
+	ps := NewInMemoryPersistedState()
+	ps.SetMetadata(&Metadata{
+		Indices: map[string]*IndexMetadata{
+			"pre-existing": {Name: "pre-existing", State: IndexStateOpen},
+		},
+	})
+
+	cs := NewClusterStateWith(ps)
+
+	meta := cs.Metadata()
+	if len(meta.Indices) != 1 {
+		t.Fatalf("expected 1 index, got %d", len(meta.Indices))
+	}
+	if meta.Indices["pre-existing"] == nil {
+		t.Error("expected 'pre-existing' index to exist")
+	}
+}
+
 func TestClusterState_ConcurrentAccess(t *testing.T) {
 	cs := NewClusterState()
 	done := make(chan struct{})
