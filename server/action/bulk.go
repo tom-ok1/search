@@ -10,7 +10,7 @@ import (
 )
 
 type BulkItem struct {
-	Action string          // "index" or "delete"
+	Action string // "index" or "delete"
 	Index  string
 	ID     string
 	Source json.RawMessage // nil for delete

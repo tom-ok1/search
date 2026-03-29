@@ -84,10 +84,10 @@ func setupSpecialCharsTestSegment(t *testing.T) index.SegmentReader {
 	writer := index.NewIndexWriter(dir, fa, 100)
 
 	docs := []string{
-		"user@example.com #tag state-of-the-art",   // doc0
-		"Café Résumé node.js",                      // doc1
+		"user@example.com #tag state-of-the-art", // doc0
+		"Café Résumé node.js",                    // doc1
 		"🔍 search 🔎 engine",                      // doc2
-		"𠮷野家 テスト café",                        // doc3
+		"𠮷野家 テスト café",                           // doc3
 	}
 
 	for _, text := range docs {
@@ -114,10 +114,10 @@ func setupJapaneseTestSegment(t *testing.T) index.SegmentReader {
 	writer := index.NewIndexWriter(dir, fa, 100)
 
 	docs := []string{
-		"東京 大阪 名古屋",     // doc0
-		"東京 京都 福岡",       // doc1
-		"大阪 京都 札幌",       // doc2
-		"東京 大阪 東京 大阪",   // doc3: repeated terms
+		"東京 大阪 名古屋",   // doc0
+		"東京 京都 福岡",    // doc1
+		"大阪 京都 札幌",    // doc2
+		"東京 大阪 東京 大阪", // doc3: repeated terms
 	}
 
 	for _, text := range docs {

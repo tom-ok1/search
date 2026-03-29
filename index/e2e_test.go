@@ -1297,8 +1297,8 @@ func TestE2EJapaneseTermQuery(t *testing.T) {
 func TestE2EJapanesePhraseQuery(t *testing.T) {
 	writer, dir := newTestWriter(t, 100)
 
-	addTextDoc(t, writer, "body", "東京 大阪 名古屋")  // "東京 大阪" is consecutive
-	addTextDoc(t, writer, "body", "大阪 東京 名古屋")  // "東京 大阪" is NOT consecutive here
+	addTextDoc(t, writer, "body", "東京 大阪 名古屋") // "東京 大阪" is consecutive
+	addTextDoc(t, writer, "body", "大阪 東京 名古屋") // "東京 大阪" is NOT consecutive here
 
 	reader := commitAndOpenReader(t, writer, dir)
 	searcher := search.NewIndexSearcher(reader)
@@ -1325,9 +1325,9 @@ func TestE2EJapanesePhraseQuery(t *testing.T) {
 func TestE2EJapaneseBooleanQuery(t *testing.T) {
 	writer, dir := newTestWriter(t, 100)
 
-	addTextDoc(t, writer, "body", "東京 大阪")      // doc0: matches both
-	addTextDoc(t, writer, "body", "東京 名古屋")     // doc1: matches 東京 only
-	addTextDoc(t, writer, "body", "京都 福岡")       // doc2: matches neither
+	addTextDoc(t, writer, "body", "東京 大阪")  // doc0: matches both
+	addTextDoc(t, writer, "body", "東京 名古屋") // doc1: matches 東京 only
+	addTextDoc(t, writer, "body", "京都 福岡")  // doc2: matches neither
 
 	reader := commitAndOpenReader(t, writer, dir)
 	searcher := search.NewIndexSearcher(reader)
