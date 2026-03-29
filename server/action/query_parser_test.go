@@ -171,3 +171,18 @@ func TestQueryParser_TermRejectsArrayValue(t *testing.T) {
 		t.Error("expected error for array value in term query, got nil")
 	}
 }
+
+func TestQueryParser_MatchZeroTokensMatchesNothing(t *testing.T) {
+	p := newTestParser()
+
+	q, err := p.ParseQuery(map[string]any{
+		"match": map[string]any{"title": ""},
+	})
+	if err != nil {
+		t.Fatalf("ParseQuery: %v", err)
+	}
+
+	if _, ok := q.(*search.MatchNoneQuery); !ok {
+		t.Errorf("expected MatchNoneQuery for empty match, got %T", q)
+	}
+}

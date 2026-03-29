@@ -87,7 +87,7 @@ func (p *QueryParser) parseMatch(value any) (search.Query, error) {
 		}
 
 		if len(tokens) == 0 {
-			return search.NewMatchAllQuery(), nil
+			return search.NewMatchNoneQuery(), nil
 		}
 		if len(tokens) == 1 {
 			return search.NewTermQuery(field, tokens[0].Term), nil
