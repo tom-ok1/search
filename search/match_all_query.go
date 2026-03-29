@@ -12,7 +12,7 @@ func NewMatchAllQuery() *MatchAllQuery {
 }
 
 func (q *MatchAllQuery) CreateWeight(searcher *IndexSearcher, scoreMode ScoreMode) Weight {
-	return &matchAllWeight{query: q, reader: searcher.Reader()}
+	return &matchAllWeight{query: q}
 }
 
 func (q *MatchAllQuery) ExtractTerms() []FieldTerm {
@@ -20,8 +20,7 @@ func (q *MatchAllQuery) ExtractTerms() []FieldTerm {
 }
 
 type matchAllWeight struct {
-	query  *MatchAllQuery
-	reader *index.IndexReader
+	query *MatchAllQuery
 }
 
 func (w *matchAllWeight) Query() Query {
