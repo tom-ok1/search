@@ -41,6 +41,19 @@ func ParseDocument(id string, source []byte, m *MappingDefinition) (*document.Do
 }
 
 func addField(doc *document.Document, name string, value any, fm FieldMapping) error {
+	// Handle array values: index each element as a separate field (same as Elasticsearch).
+	if arr, ok := value.([]any); ok {
+		for _, elem := range arr {
+			if err := addScalarField(doc, name, elem, fm); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return addScalarField(doc, name, value, fm)
+}
+
+func addScalarField(doc *document.Document, name string, value any, fm FieldMapping) error {
 	switch fm.Type {
 	case FieldTypeText:
 		s, err := toString(value)
@@ -97,7 +110,7 @@ func toString(v any) (string, error) {
 	case nil:
 		return "", fmt.Errorf("null value")
 	default:
-		return fmt.Sprintf("%v", v), nil
+		return "", fmt.Errorf("cannot convert %T to string", v)
 	}
 }
 
