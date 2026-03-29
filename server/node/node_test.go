@@ -478,3 +478,70 @@ func TestNode_SearchMatchAll(t *testing.T) {
 		t.Errorf("expected 1 hit for match_all, got %v", total["value"])
 	}
 }
+
+func TestNode_Bulk(t *testing.T) {
+	addr, _ := startTestNode(t)
+
+	req, _ := http.NewRequest("PUT", fmt.Sprintf("http://%s/myindex", addr),
+		strings.NewReader(`{"mappings":{"properties":{"title":{"type":"text"}}}}`))
+	http.DefaultClient.Do(req)
+
+	bulkBody := `{"index":{"_index":"myindex","_id":"1"}}
+{"title":"first document"}
+{"index":{"_index":"myindex","_id":"2"}}
+{"title":"second document"}
+{"delete":{"_index":"myindex","_id":"1"}}
+`
+	req, _ = http.NewRequest("POST", fmt.Sprintf("http://%s/_bulk", addr),
+		strings.NewReader(bulkBody))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST _bulk: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, body)
+	}
+
+	var result map[string]any
+	json.NewDecoder(resp.Body).Decode(&result)
+	if result["errors"] != false {
+		t.Errorf("expected errors=false, got %v", result["errors"])
+	}
+	items := result["items"].([]any)
+	if len(items) != 3 {
+		t.Errorf("expected 3 items, got %d", len(items))
+	}
+}
+
+func TestNode_BulkWithDefaultIndex(t *testing.T) {
+	addr, _ := startTestNode(t)
+
+	req, _ := http.NewRequest("PUT", fmt.Sprintf("http://%s/myindex", addr),
+		strings.NewReader(`{"mappings":{"properties":{"title":{"type":"text"}}}}`))
+	http.DefaultClient.Do(req)
+
+	bulkBody := `{"index":{"_id":"1"}}
+{"title":"uses default index"}
+`
+	req, _ = http.NewRequest("POST", fmt.Sprintf("http://%s/myindex/_bulk", addr),
+		strings.NewReader(bulkBody))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST _bulk: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, body)
+	}
+
+	var result map[string]any
+	json.NewDecoder(resp.Body).Decode(&result)
+	if result["errors"] != false {
+		t.Errorf("expected errors=false, got %v", result["errors"])
+	}
+}

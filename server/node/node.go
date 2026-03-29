@@ -85,6 +85,11 @@ func NewNode(config NodeConfig) (*Node, error) {
 	ar.Register(searchAction)
 	rc.RegisterHandler(restaction.NewRestSearchAction(searchAction))
 
+	// Bulk action
+	bulkAction := action.NewTransportBulkAction(cs, indexServices)
+	ar.Register(bulkAction)
+	rc.RegisterHandler(restaction.NewRestBulkAction(bulkAction))
+
 	return n, nil
 }
 
