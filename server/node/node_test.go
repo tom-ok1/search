@@ -351,6 +351,10 @@ func TestNode_DeleteDocument(t *testing.T) {
 		strings.NewReader(`{"title":"hello"}`))
 	http.DefaultClient.Do(req)
 
+	// Refresh so searcher can find the document
+	req, _ = http.NewRequest("POST", fmt.Sprintf("http://%s/myindex/_refresh", addr), nil)
+	http.DefaultClient.Do(req)
+
 	// Delete document
 	req, _ = http.NewRequest("DELETE", fmt.Sprintf("http://%s/myindex/_doc/1", addr), nil)
 	resp, err := http.DefaultClient.Do(req)
