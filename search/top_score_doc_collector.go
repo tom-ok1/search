@@ -8,8 +8,9 @@ import (
 
 // TopKCollector collects the top-K documents by score using a min-heap.
 type TopKCollector struct {
-	k       int
-	results minHeap
+	k         int
+	totalHits int
+	results   minHeap
 }
 
 func NewTopKCollector(k int) *TopKCollector {
@@ -29,6 +30,9 @@ func (c *TopKCollector) GetLeafCollector(ctx index.LeafReaderContext) LeafCollec
 
 // ScoreMode returns ScoreModeComplete because score-based ranking needs scores.
 func (c *TopKCollector) ScoreMode() ScoreMode { return ScoreModeComplete }
+
+// TotalHits returns the total number of documents that matched the query.
+func (c *TopKCollector) TotalHits() int { return c.totalHits }
 
 // Results returns collected documents in descending score order.
 func (c *TopKCollector) Results() []SearchResult {
@@ -54,11 +58,13 @@ func (lc *topKLeafCollector) CompetitiveIterator() DocIdSetIterator { return nil
 
 func (lc *topKLeafCollector) Collect(docID int) {
 	score := lc.scorer.Score()
+	lc.parent.totalHits++
 	globalDocID := lc.docBase + docID
 	result := SearchResult{DocID: globalDocID, Score: score}
 	if len(lc.parent.results) < lc.parent.k {
 		heap.Push(&lc.parent.results, result)
-	} else if score > lc.parent.results[0].Score {
+	} else if score > lc.parent.results[0].Score ||
+		(score == lc.parent.results[0].Score && globalDocID < lc.parent.results[0].DocID) {
 		lc.parent.results[0] = result
 		heap.Fix(&lc.parent.results, 0)
 	}
@@ -69,9 +75,16 @@ type minHeap []SearchResult
 
 var _ heap.Interface = (*minHeap)(nil)
 
-func (h minHeap) Len() int           { return len(h) }
-func (h minHeap) Less(i, j int) bool { return h[i].Score < h[j].Score }
-func (h minHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h minHeap) Len() int { return len(h) }
+func (h minHeap) Less(i, j int) bool {
+	if h[i].Score != h[j].Score {
+		return h[i].Score < h[j].Score
+	}
+	// Tie-break: higher DocID is "less" in the min-heap, so lower DocIDs survive eviction.
+	// This matches Lucene's convention where lower docIDs win ties.
+	return h[i].DocID > h[j].DocID
+}
+func (h minHeap) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
 
 func (h *minHeap) Push(x any) {
 	*h = append(*h, x.(SearchResult))

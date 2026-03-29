@@ -3,28 +3,40 @@ package search
 // ConjunctionScorer implements AND semantics for multiple scorers.
 // Uses the lead iterator (cheapest by cost) and advances others to match.
 // It also implements DocIdSetIterator directly to avoid per-call allocations.
+//
+// Like Lucene's ConjunctionScorer, it separates "required" scorers (used for
+// iteration/matching) from "scoring" scorers (used for score computation).
+// This allows FILTER clauses to participate in matching without affecting scores.
 type ConjunctionScorer struct {
-	scorers []Scorer
-	iters   []DocIdSetIterator // cached iterators, [0] is the lead
-	docID   int
+	scorers        []Scorer           // all required scorers, sorted by cost
+	scoringScorers []Scorer           // subset used for Score() computation
+	iters          []DocIdSetIterator // cached iterators, [0] is the lead
+	docID          int
 }
 
-// NewConjunctionScorer creates a ConjunctionScorer from multiple scorers.
-// Returns nil if any scorer is nil (no documents can match).
+// NewConjunctionScorer creates a ConjunctionScorer where all scorers
+// contribute to both matching and scoring.
 func NewConjunctionScorer(scorers []Scorer) Scorer {
-	if len(scorers) == 0 {
+	return NewConjunctionScorerWithScoring(scorers, scorers)
+}
+
+// NewConjunctionScorerWithScoring creates a ConjunctionScorer where `required`
+// scorers determine matching, but only `scoringScorers` contribute to Score().
+// This mirrors Lucene's ConjunctionScorer(required, scoringScorers) constructor.
+func NewConjunctionScorerWithScoring(required []Scorer, scoringScorers []Scorer) Scorer {
+	if len(required) == 0 {
 		return nil
 	}
-	for _, s := range scorers {
+	for _, s := range required {
 		if s == nil {
 			return nil
 		}
 	}
 
 	// Cache iterators once, then sort scorers+iters together by cost
-	n := len(scorers)
+	n := len(required)
 	sorted := make([]Scorer, n)
-	copy(sorted, scorers)
+	copy(sorted, required)
 	iters := make([]DocIdSetIterator, n)
 	costs := make([]int64, n)
 	for i, s := range sorted {
@@ -42,10 +54,15 @@ func NewConjunctionScorer(scorers []Scorer) Scorer {
 		}
 	}
 
+	// Copy scoring scorers so the caller's slice isn't affected
+	ss := make([]Scorer, len(scoringScorers))
+	copy(ss, scoringScorers)
+
 	return &ConjunctionScorer{
-		scorers: sorted,
-		iters:   iters,
-		docID:   -1,
+		scorers:        sorted,
+		scoringScorers: ss,
+		iters:          iters,
+		docID:          -1,
 	}
 }
 
@@ -57,9 +74,13 @@ func (s *ConjunctionScorer) DocID() int {
 	return s.docID
 }
 
+// Score returns the sum of scores from scoringScorers only.
+// Their iterators are already positioned at the current doc because
+// scoringScorers is a subset of required, whose iterators are all
+// advanced together in advanceToMatch.
 func (s *ConjunctionScorer) Score() float64 {
 	total := 0.0
-	for _, scorer := range s.scorers {
+	for _, scorer := range s.scoringScorers {
 		total += scorer.Score()
 	}
 	return total

@@ -64,6 +64,32 @@ func NewNode(config NodeConfig) (*Node, error) {
 	rc.RegisterHandler(restaction.NewRestDeleteIndexAction(deleteAction))
 	rc.RegisterHandler(restaction.NewRestGetIndexAction(getAction))
 
+	// Document CRUD actions
+	indexDocAction := action.NewTransportIndexAction(cs, indexServices)
+	getDocAction := action.NewTransportGetAction(cs, indexServices)
+	deleteDocAction := action.NewTransportDeleteDocumentAction(cs, indexServices)
+	refreshAction := action.NewTransportRefreshAction(cs, indexServices)
+
+	ar.Register(indexDocAction)
+	ar.Register(getDocAction)
+	ar.Register(deleteDocAction)
+	ar.Register(refreshAction)
+
+	rc.RegisterHandler(restaction.NewRestIndexAction(indexDocAction))
+	rc.RegisterHandler(restaction.NewRestGetAction(getDocAction))
+	rc.RegisterHandler(restaction.NewRestDeleteDocumentAction(deleteDocAction))
+	rc.RegisterHandler(restaction.NewRestRefreshAction(refreshAction))
+
+	// Search action
+	searchAction := action.NewTransportSearchAction(cs, indexServices, registry)
+	ar.Register(searchAction)
+	rc.RegisterHandler(restaction.NewRestSearchAction(searchAction))
+
+	// Bulk action
+	bulkAction := action.NewTransportBulkAction(cs, indexServices)
+	ar.Register(bulkAction)
+	rc.RegisterHandler(restaction.NewRestBulkAction(bulkAction))
+
 	return n, nil
 }
 
