@@ -87,13 +87,11 @@ func (a *TransportSearchAction) Execute(req SearchRequest) (SearchResponse, erro
 		size = 10
 	}
 
-	// Query phase: collect from all shards
-	// We collect a large number from each shard to get accurate total counts and proper merging
-	// In production, this would be configurable, but for now we use a large default
+	// Query phase: collect top `size` from each shard, then merge
 	numShards := svc.NumShards()
-	shardSize := 10000 // Large enough to get all results for accurate totals
 
 	var allResults []search.SearchResult
+	totalHits := 0
 	for i := range numShards {
 		shard := svc.Shard(i)
 		searcher := shard.Searcher()
@@ -101,14 +99,14 @@ func (a *TransportSearchAction) Execute(req SearchRequest) (SearchResponse, erro
 			continue
 		}
 
-		collector := search.NewTopKCollector(shardSize)
+		collector := search.NewTopKCollector(size)
 		results := searcher.Search(query, collector)
+		totalHits += collector.TotalHits()
 		allResults = append(allResults, results...)
 	}
 
 	// Merge phase: sort by score descending, take top `size`
 	sortByScoreDesc(allResults)
-	totalHits := len(allResults)
 	if len(allResults) > size {
 		allResults = allResults[:size]
 	}

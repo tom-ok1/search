@@ -8,8 +8,9 @@ import (
 
 // TopKCollector collects the top-K documents by score using a min-heap.
 type TopKCollector struct {
-	k       int
-	results minHeap
+	k         int
+	totalHits int
+	results   minHeap
 }
 
 func NewTopKCollector(k int) *TopKCollector {
@@ -29,6 +30,9 @@ func (c *TopKCollector) GetLeafCollector(ctx index.LeafReaderContext) LeafCollec
 
 // ScoreMode returns ScoreModeComplete because score-based ranking needs scores.
 func (c *TopKCollector) ScoreMode() ScoreMode { return ScoreModeComplete }
+
+// TotalHits returns the total number of documents that matched the query.
+func (c *TopKCollector) TotalHits() int { return c.totalHits }
 
 // Results returns collected documents in descending score order.
 func (c *TopKCollector) Results() []SearchResult {
@@ -54,6 +58,7 @@ func (lc *topKLeafCollector) CompetitiveIterator() DocIdSetIterator { return nil
 
 func (lc *topKLeafCollector) Collect(docID int) {
 	score := lc.scorer.Score()
+	lc.parent.totalHits++
 	globalDocID := lc.docBase + docID
 	result := SearchResult{DocID: globalDocID, Score: score}
 	if len(lc.parent.results) < lc.parent.k {
