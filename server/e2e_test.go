@@ -137,6 +137,21 @@ func TestE2E_FullLifecycle(t *testing.T) {
 		}
 	}
 
+	// 6b. Search: bool query with filter
+	req, _ = http.NewRequest("POST", fmt.Sprintf("http://%s/products/_search", addr),
+		strings.NewReader(`{"query":{"bool":{
+			"filter":[{"term":{"category":"clothing"}}]
+		}}}`))
+	resp, _ = http.DefaultClient.Do(req)
+	json.NewDecoder(resp.Body).Decode(&searchResult)
+	resp.Body.Close()
+
+	hits = searchResult["hits"].(map[string]any)
+	total = hits["total"].(map[string]any)
+	if total["value"] != float64(1) {
+		t.Errorf("bool filter (clothing): expected 1 hit, got %v", total["value"])
+	}
+
 	// 7. Get document by ID
 	resp, _ = http.Get(fmt.Sprintf("http://%s/products/_doc/1", addr))
 	var getResult map[string]any

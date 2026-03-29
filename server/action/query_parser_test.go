@@ -186,3 +186,29 @@ func TestQueryParser_MatchZeroTokensMatchesNothing(t *testing.T) {
 		t.Errorf("expected MatchNoneQuery for empty match, got %T", q)
 	}
 }
+
+func TestQueryParser_BoolFilter(t *testing.T) {
+	p := newTestParser()
+
+	q, err := p.ParseQuery(map[string]any{
+		"bool": map[string]any{
+			"filter": []any{
+				map[string]any{"term": map[string]any{"status": "active"}},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ParseQuery: %v", err)
+	}
+
+	bq, ok := q.(*search.BooleanQuery)
+	if !ok {
+		t.Fatalf("expected BooleanQuery, got %T", q)
+	}
+	if len(bq.Clauses) != 1 {
+		t.Fatalf("expected 1 clause, got %d", len(bq.Clauses))
+	}
+	if bq.Clauses[0].Occur != search.OccurMust {
+		t.Errorf("expected OccurMust for filter clause, got %v", bq.Clauses[0].Occur)
+	}
+}
