@@ -1,0 +1,10 @@
+{"index":{"_index":"books","_id":"1"}}
+{"title":"The Go Programming Language","author":"Alan Donovan","year":2015,"description":"The authoritative resource for learning Go programming language","tags":["programming","go","computer science"]}
+{"index":{"_index":"books","_id":"2"}}
+{"title":"Designing Data-Intensive Applications","author":"Martin Kleppmann","year":2017,"description":"A guide to the big ideas behind reliable scalable and maintainable systems","tags":["distributed systems","databases","architecture"]}
+{"index":{"_index":"books","_id":"3"}}
+{"title":"Introduction to Information Retrieval","author":"Christopher Manning","year":2008,"description":"Comprehensive introduction to information retrieval including text indexing and search","tags":["search","information retrieval","nlp"]}
+{"index":{"_index":"books","_id":"4"}}
+{"title":"Lucene in Action","author":"Michael McCandless","year":2010,"description":"Covers the Lucene search library for indexing and searching text","tags":["search","lucene","java"]}
+{"index":{"_index":"books","_id":"5"}}
+{"title":"Search Engines Information Retrieval in Practice","author":"Bruce Croft","year":2009,"description":"Practical approach to building search engines and information retrieval systems","tags":["search","information retrieval","practice"]}

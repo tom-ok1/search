@@ -127,6 +127,182 @@ func TestTransportSearchAction_Size(t *testing.T) {
 	}
 }
 
+func TestSearch_MatchPhrase(t *testing.T) {
+	cs, services, dataPath, registry := newTestDeps(t)
+
+	createAction := NewTransportCreateIndexAction(cs, services, dataPath, registry)
+	_, err := createAction.Execute(CreateIndexRequest{
+		Name: "articles",
+		Mappings: &mapping.MappingDefinition{
+			Properties: map[string]mapping.FieldMapping{
+				"title": {Type: mapping.FieldTypeText},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	defer services["articles"].Close()
+
+	indexAction := NewTransportIndexAction(cs, services)
+	for _, tc := range []struct {
+		id, title string
+	}{
+		{"1", "the quick brown fox"},
+		{"2", "quick fox brown"},
+		{"3", "brown fox quick"},
+	} {
+		_, err := indexAction.Execute(IndexDocumentRequest{
+			Index:  "articles",
+			ID:     tc.id,
+			Source: json.RawMessage(fmt.Sprintf(`{"title":%q}`, tc.title)),
+		})
+		if err != nil {
+			t.Fatalf("index %s: %v", tc.id, err)
+		}
+	}
+
+	refreshAction := NewTransportRefreshAction(cs, services)
+	refreshAction.Execute(RefreshRequest{Index: "articles"})
+
+	searchAction := NewTransportSearchAction(cs, services, registry)
+	resp, err := searchAction.Execute(SearchRequest{
+		Index:     "articles",
+		QueryJSON: map[string]any{"match_phrase": map[string]any{"title": "quick brown"}},
+		Size:      10,
+	})
+	if err != nil {
+		t.Fatalf("search error: %v", err)
+	}
+
+	// Only doc 1 has "quick brown" as consecutive terms
+	if resp.Hits.Total.Value != 1 {
+		t.Errorf("total hits = %d, want 1", resp.Hits.Total.Value)
+	}
+	if len(resp.Hits.Hits) != 1 {
+		t.Fatalf("hits = %d, want 1", len(resp.Hits.Hits))
+	}
+}
+
+func TestSearch_MultiMatch(t *testing.T) {
+	cs, services, dataPath, registry := newTestDeps(t)
+
+	createAction := NewTransportCreateIndexAction(cs, services, dataPath, registry)
+	_, err := createAction.Execute(CreateIndexRequest{
+		Name: "articles",
+		Mappings: &mapping.MappingDefinition{
+			Properties: map[string]mapping.FieldMapping{
+				"title": {Type: mapping.FieldTypeText},
+				"body":  {Type: mapping.FieldTypeText},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	defer services["articles"].Close()
+
+	indexAction := NewTransportIndexAction(cs, services)
+	for _, tc := range []struct {
+		id, source string
+	}{
+		{"1", `{"title": "golang tutorial", "body": "learn programming"}`},
+		{"2", `{"title": "cooking recipes", "body": "golang tips"}`},
+		{"3", `{"title": "travel guide", "body": "vacation spots"}`},
+	} {
+		_, err := indexAction.Execute(IndexDocumentRequest{
+			Index:  "articles",
+			ID:     tc.id,
+			Source: json.RawMessage(tc.source),
+		})
+		if err != nil {
+			t.Fatalf("index %s: %v", tc.id, err)
+		}
+	}
+
+	refreshAction := NewTransportRefreshAction(cs, services)
+	refreshAction.Execute(RefreshRequest{Index: "articles"})
+
+	searchAction := NewTransportSearchAction(cs, services, registry)
+	resp, err := searchAction.Execute(SearchRequest{
+		Index: "articles",
+		QueryJSON: map[string]any{
+			"multi_match": map[string]any{
+				"query":  "golang",
+				"fields": []any{"title", "body"},
+			},
+		},
+		Size: 10,
+	})
+	if err != nil {
+		t.Fatalf("search error: %v", err)
+	}
+
+	// Docs 1 (title match) and 2 (body match) should be found
+	if resp.Hits.Total.Value != 2 {
+		t.Errorf("total hits = %d, want 2", resp.Hits.Total.Value)
+	}
+}
+
+func TestSearch_Exists(t *testing.T) {
+	cs, services, dataPath, registry := newTestDeps(t)
+
+	createAction := NewTransportCreateIndexAction(cs, services, dataPath, registry)
+	_, err := createAction.Execute(CreateIndexRequest{
+		Name: "products",
+		Mappings: &mapping.MappingDefinition{
+			Properties: map[string]mapping.FieldMapping{
+				"name":  {Type: mapping.FieldTypeText},
+				"color": {Type: mapping.FieldTypeKeyword},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	defer services["products"].Close()
+
+	indexAction := NewTransportIndexAction(cs, services)
+	for _, tc := range []struct {
+		id, source string
+	}{
+		{"1", `{"name": "widget", "color": "red"}`},
+		{"2", `{"name": "gadget"}`},
+		{"3", `{"name": "thing", "color": "blue"}`},
+	} {
+		_, err := indexAction.Execute(IndexDocumentRequest{
+			Index:  "products",
+			ID:     tc.id,
+			Source: json.RawMessage(tc.source),
+		})
+		if err != nil {
+			t.Fatalf("index %s: %v", tc.id, err)
+		}
+	}
+
+	refreshAction := NewTransportRefreshAction(cs, services)
+	refreshAction.Execute(RefreshRequest{Index: "products"})
+
+	searchAction := NewTransportSearchAction(cs, services, registry)
+	resp, err := searchAction.Execute(SearchRequest{
+		Index: "products",
+		QueryJSON: map[string]any{
+			"exists": map[string]any{
+				"field": "color",
+			},
+		},
+		Size: 10,
+	})
+	if err != nil {
+		t.Fatalf("search error: %v", err)
+	}
+
+	// Only docs 1 and 3 have "color"
+	if resp.Hits.Total.Value != 2 {
+		t.Errorf("total hits = %d, want 2", resp.Hits.Total.Value)
+	}
+}
+
 func TestMergeTopDocs_TieBreakByShardIndex(t *testing.T) {
 	// All shards have docs with the same score - deterministic tie-breaking required
 	shard0 := []search.SearchResult{

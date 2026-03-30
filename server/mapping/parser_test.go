@@ -394,6 +394,214 @@ func TestParseDocument_MissingMappedField(t *testing.T) {
 	}
 }
 
+func TestParseDocument_KeywordArrayField(t *testing.T) {
+	m := &MappingDefinition{
+		Properties: map[string]FieldMapping{
+			"tags": {Type: FieldTypeKeyword},
+		},
+	}
+	source := []byte(`{"tags": ["search", "information retrieval", "nlp"]}`)
+
+	doc, err := ParseDocument("doc1", source, m)
+	if err != nil {
+		t.Fatalf("ParseDocument: %v", err)
+	}
+
+	assertHasField(t, doc, "tags", "search", document.FieldTypeKeyword)
+	assertHasField(t, doc, "tags", "information retrieval", document.FieldTypeKeyword)
+	assertHasField(t, doc, "tags", "nlp", document.FieldTypeKeyword)
+	// 3 keyword fields + 3 sorted doc values fields = 6 total
+	assertFieldCount(t, doc, "tags", 6)
+}
+
+func TestParseDocument_TextArrayField(t *testing.T) {
+	m := &MappingDefinition{
+		Properties: map[string]FieldMapping{
+			"comments": {Type: FieldTypeText},
+		},
+	}
+	source := []byte(`{"comments": ["great book", "must read"]}`)
+
+	doc, err := ParseDocument("doc1", source, m)
+	if err != nil {
+		t.Fatalf("ParseDocument: %v", err)
+	}
+
+	assertHasField(t, doc, "comments", "great book", document.FieldTypeText)
+	assertHasField(t, doc, "comments", "must read", document.FieldTypeText)
+	assertFieldCount(t, doc, "comments", 2)
+}
+
+func TestParseDocument_EmptyArrayField(t *testing.T) {
+	m := &MappingDefinition{
+		Properties: map[string]FieldMapping{
+			"tags": {Type: FieldTypeKeyword},
+		},
+	}
+	source := []byte(`{"tags": []}`)
+
+	doc, err := ParseDocument("doc1", source, m)
+	if err != nil {
+		t.Fatalf("ParseDocument: %v", err)
+	}
+
+	assertFieldCount(t, doc, "tags", 0)
+}
+
+func TestParseDocument_SingleElementArrayField(t *testing.T) {
+	m := &MappingDefinition{
+		Properties: map[string]FieldMapping{
+			"tags": {Type: FieldTypeKeyword},
+		},
+	}
+	source := []byte(`{"tags": ["only-one"]}`)
+
+	doc, err := ParseDocument("doc1", source, m)
+	if err != nil {
+		t.Fatalf("ParseDocument: %v", err)
+	}
+
+	assertHasField(t, doc, "tags", "only-one", document.FieldTypeKeyword)
+	// 1 keyword field + 1 sorted doc values field = 2 total
+	assertFieldCount(t, doc, "tags", 2)
+}
+
+func TestParseDocument_LongArrayField(t *testing.T) {
+	m := &MappingDefinition{
+		Properties: map[string]FieldMapping{
+			"scores": {Type: FieldTypeLong},
+		},
+	}
+	source := []byte(`{"scores": [10, 20, 30]}`)
+
+	doc, err := ParseDocument("doc1", source, m)
+	if err != nil {
+		t.Fatalf("ParseDocument: %v", err)
+	}
+
+	assertHasField(t, doc, "scores", "10", document.FieldTypeKeyword)
+	assertHasField(t, doc, "scores", "20", document.FieldTypeKeyword)
+	assertHasField(t, doc, "scores", "30", document.FieldTypeKeyword)
+}
+
+func TestParseDocument_BooleanArrayField(t *testing.T) {
+	m := &MappingDefinition{
+		Properties: map[string]FieldMapping{
+			"flags": {Type: FieldTypeBoolean},
+		},
+	}
+	source := []byte(`{"flags": [true, false]}`)
+
+	doc, err := ParseDocument("doc1", source, m)
+	if err != nil {
+		t.Fatalf("ParseDocument: %v", err)
+	}
+
+	assertHasField(t, doc, "flags", "true", document.FieldTypeKeyword)
+	assertHasField(t, doc, "flags", "false", document.FieldTypeKeyword)
+}
+
+func TestParseDocument_LargeIntegerPrecision(t *testing.T) {
+	m := &MappingDefinition{
+		Properties: map[string]FieldMapping{
+			"big_id": {Type: FieldTypeLong},
+		},
+	}
+
+	// 2^53 + 1 = 9007199254740993 — this value loses precision with float64
+	source := []byte(`{"big_id": 9007199254740993}`)
+	doc, err := ParseDocument("1", source, m)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Find the keyword field for big_id
+	for _, f := range doc.Fields {
+		if f.Name == "big_id" && f.Type == document.FieldTypeKeyword {
+			want := "9007199254740993"
+			if f.Value != want {
+				t.Errorf("big_id keyword = %q, want %q (precision lost)", f.Value, want)
+			}
+			return
+		}
+	}
+	t.Fatal("big_id keyword field not found")
+}
+
+func TestParseDocument_LargeIntegerDocValues(t *testing.T) {
+	m := &MappingDefinition{
+		Properties: map[string]FieldMapping{
+			"big_id": {Type: FieldTypeLong},
+		},
+	}
+
+	source := []byte(`{"big_id": 9007199254740993}`)
+	doc, err := ParseDocument("1", source, m)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Find the numeric doc values field for big_id
+	for _, f := range doc.Fields {
+		if f.Name == "big_id" && f.Type == document.FieldTypeNumericDocValues {
+			var want int64 = 9007199254740993
+			if f.NumericValue != want {
+				t.Errorf("big_id numeric = %d, want %d", f.NumericValue, want)
+			}
+			return
+		}
+	}
+	t.Fatal("big_id numeric doc values field not found")
+}
+
+func TestParseDocument_KeywordHasSortedDocValues(t *testing.T) {
+	m := &MappingDefinition{
+		Properties: map[string]FieldMapping{
+			"status": {Type: FieldTypeKeyword},
+		},
+	}
+
+	source := []byte(`{"status": "active"}`)
+	doc, err := ParseDocument("1", source, m)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	for _, f := range doc.Fields {
+		if f.Name == "status" && f.Type == document.FieldTypeSortedDocValues {
+			if f.Value != "active" {
+				t.Errorf("sorted doc value = %q, want %q", f.Value, "active")
+			}
+			return
+		}
+	}
+	t.Fatal("keyword field 'status' missing FieldTypeSortedDocValues")
+}
+
+func TestParseDocument_BooleanHasSortedDocValues(t *testing.T) {
+	m := &MappingDefinition{
+		Properties: map[string]FieldMapping{
+			"active": {Type: FieldTypeBoolean},
+		},
+	}
+
+	source := []byte(`{"active": true}`)
+	doc, err := ParseDocument("1", source, m)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	for _, f := range doc.Fields {
+		if f.Name == "active" && f.Type == document.FieldTypeSortedDocValues {
+			if f.Value != "true" {
+				t.Errorf("sorted doc value = %q, want %q", f.Value, "true")
+			}
+			return
+		}
+	}
+	t.Fatal("boolean field 'active' missing FieldTypeSortedDocValues")
+}
+
 // --- test helpers ---
 
 func assertHasField(t *testing.T, doc *document.Document, name, value string, ft document.FieldType) {
@@ -424,6 +632,19 @@ func assertHasNumericField(t *testing.T, doc *document.Document, name string, va
 		}
 	}
 	t.Errorf("expected numeric doc values field {Name:%q, NumericValue:%d} not found", name, value)
+}
+
+func assertFieldCount(t *testing.T, doc *document.Document, name string, expected int) {
+	t.Helper()
+	count := 0
+	for _, f := range doc.Fields {
+		if f.Name == name {
+			count++
+		}
+	}
+	if count != expected {
+		t.Errorf("expected %d fields named %q, got %d", expected, name, count)
+	}
 }
 
 func assertHasNumericDocValues(t *testing.T, doc *document.Document, name string) {

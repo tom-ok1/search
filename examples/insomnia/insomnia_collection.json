@@ -1,0 +1,213 @@
+{
+  "_type": "export",
+  "__export_format": 4,
+  "__export_source": "insomnia.desktop",
+  "resources": [
+    {
+      "_id": "wrk_gosearch",
+      "_type": "workspace",
+      "name": "GoSearch API",
+      "description": "GoSearch Elasticsearch-compatible API",
+      "scope": "collection"
+    },
+    {
+      "_id": "env_gosearch",
+      "_type": "environment",
+      "parentId": "wrk_gosearch",
+      "name": "Local",
+      "data": {
+        "base_url": "http://localhost:9200",
+        "index": "books"
+      }
+    },
+    {
+      "_id": "fld_index",
+      "_type": "request_group",
+      "parentId": "wrk_gosearch",
+      "name": "Index Management"
+    },
+    {
+      "_id": "fld_docs",
+      "_type": "request_group",
+      "parentId": "wrk_gosearch",
+      "name": "Document Operations"
+    },
+    {
+      "_id": "fld_search",
+      "_type": "request_group",
+      "parentId": "wrk_gosearch",
+      "name": "Search"
+    },
+    {
+      "_id": "fld_bulk",
+      "_type": "request_group",
+      "parentId": "wrk_gosearch",
+      "name": "Bulk Operations"
+    },
+    {
+      "_id": "req_create_index",
+      "_type": "request",
+      "parentId": "fld_index",
+      "name": "Create Index",
+      "method": "PUT",
+      "url": "{{ _.base_url }}/{{ _.index }}",
+      "body": {
+        "mimeType": "application/json",
+        "text": "{\n  \"settings\": {\n    \"number_of_shards\": 1,\n    \"number_of_replicas\": 0\n  },\n  \"mappings\": {\n    \"properties\": {\n      \"title\":       {\"type\": \"text\"},\n      \"author\":      {\"type\": \"text\"},\n      \"year\":        {\"type\": \"long\"},\n      \"description\": {\"type\": \"text\"},\n      \"tags\":        {\"type\": \"keyword\"}\n    }\n  }\n}"
+      },
+      "headers": [
+        { "name": "Content-Type", "value": "application/json" }
+      ]
+    },
+    {
+      "_id": "req_get_index",
+      "_type": "request",
+      "parentId": "fld_index",
+      "name": "Get Index",
+      "method": "GET",
+      "url": "{{ _.base_url }}/{{ _.index }}",
+      "headers": []
+    },
+    {
+      "_id": "req_delete_index",
+      "_type": "request",
+      "parentId": "fld_index",
+      "name": "Delete Index",
+      "method": "DELETE",
+      "url": "{{ _.base_url }}/{{ _.index }}",
+      "headers": []
+    },
+    {
+      "_id": "req_index_doc",
+      "_type": "request",
+      "parentId": "fld_docs",
+      "name": "Index Document",
+      "method": "PUT",
+      "url": "{{ _.base_url }}/{{ _.index }}/_doc/1",
+      "body": {
+        "mimeType": "application/json",
+        "text": "{\n  \"title\": \"The Go Programming Language\",\n  \"author\": \"Alan Donovan\",\n  \"year\": 2015,\n  \"description\": \"The authoritative resource for learning Go\",\n  \"tags\": [\"programming\", \"go\"]\n}"
+      },
+      "headers": [
+        { "name": "Content-Type", "value": "application/json" }
+      ]
+    },
+    {
+      "_id": "req_get_doc",
+      "_type": "request",
+      "parentId": "fld_docs",
+      "name": "Get Document",
+      "method": "GET",
+      "url": "{{ _.base_url }}/{{ _.index }}/_doc/1",
+      "headers": []
+    },
+    {
+      "_id": "req_delete_doc",
+      "_type": "request",
+      "parentId": "fld_docs",
+      "name": "Delete Document",
+      "method": "DELETE",
+      "url": "{{ _.base_url }}/{{ _.index }}/_doc/1",
+      "headers": []
+    },
+    {
+      "_id": "req_refresh",
+      "_type": "request",
+      "parentId": "fld_docs",
+      "name": "Refresh Index",
+      "method": "POST",
+      "url": "{{ _.base_url }}/{{ _.index }}/_refresh",
+      "headers": []
+    },
+    {
+      "_id": "req_search_match",
+      "_type": "request",
+      "parentId": "fld_search",
+      "name": "Search - Match",
+      "method": "POST",
+      "url": "{{ _.base_url }}/{{ _.index }}/_search",
+      "body": {
+        "mimeType": "application/json",
+        "text": "{\n  \"query\": {\n    \"match\": {\n      \"title\": \"go programming\"\n    }\n  },\n  \"size\": 10\n}"
+      },
+      "headers": [
+        { "name": "Content-Type", "value": "application/json" }
+      ]
+    },
+    {
+      "_id": "req_search_term",
+      "_type": "request",
+      "parentId": "fld_search",
+      "name": "Search - Term",
+      "method": "POST",
+      "url": "{{ _.base_url }}/{{ _.index }}/_search",
+      "body": {
+        "mimeType": "application/json",
+        "text": "{\n  \"query\": {\n    \"term\": {\n      \"tags\": \"search\"\n    }\n  }\n}"
+      },
+      "headers": [
+        { "name": "Content-Type", "value": "application/json" }
+      ]
+    },
+    {
+      "_id": "req_search_match_all",
+      "_type": "request",
+      "parentId": "fld_search",
+      "name": "Search - Match All",
+      "method": "POST",
+      "url": "{{ _.base_url }}/{{ _.index }}/_search",
+      "body": {
+        "mimeType": "application/json",
+        "text": "{\n  \"query\": {\n    \"match_all\": {}\n  }\n}"
+      },
+      "headers": [
+        { "name": "Content-Type", "value": "application/json" }
+      ]
+    },
+    {
+      "_id": "req_search_bool",
+      "_type": "request",
+      "parentId": "fld_search",
+      "name": "Search - Bool Query",
+      "method": "POST",
+      "url": "{{ _.base_url }}/{{ _.index }}/_search",
+      "body": {
+        "mimeType": "application/json",
+        "text": "{\n  \"query\": {\n    \"bool\": {\n      \"must\": [\n        { \"match\": { \"description\": \"search\" } }\n      ],\n      \"filter\": [\n        { \"term\": { \"tags\": \"search\" } }\n      ]\n    }\n  }\n}"
+      },
+      "headers": [
+        { "name": "Content-Type", "value": "application/json" }
+      ]
+    },
+    {
+      "_id": "req_bulk",
+      "_type": "request",
+      "parentId": "fld_bulk",
+      "name": "Bulk Index",
+      "method": "POST",
+      "url": "{{ _.base_url }}/_bulk",
+      "body": {
+        "mimeType": "application/json",
+        "text": "{\"index\":{\"_index\":\"books\",\"_id\":\"10\"}}\n{\"title\":\"Clean Code\",\"author\":\"Robert Martin\",\"year\":2008,\"description\":\"A handbook of agile software craftsmanship\",\"tags\":[\"programming\",\"best practices\"]}\n{\"index\":{\"_index\":\"books\",\"_id\":\"11\"}}\n{\"title\":\"The Pragmatic Programmer\",\"author\":\"David Thomas\",\"year\":2019,\"description\":\"Your journey to mastery in software development\",\"tags\":[\"programming\",\"best practices\"]}\n"
+      },
+      "headers": [
+        { "name": "Content-Type", "value": "application/x-ndjson" }
+      ]
+    },
+    {
+      "_id": "req_bulk_delete",
+      "_type": "request",
+      "parentId": "fld_bulk",
+      "name": "Bulk Delete",
+      "method": "POST",
+      "url": "{{ _.base_url }}/_bulk",
+      "body": {
+        "mimeType": "application/json",
+        "text": "{\"delete\":{\"_index\":\"books\",\"_id\":\"10\"}}\n{\"delete\":{\"_index\":\"books\",\"_id\":\"11\"}}\n"
+      },
+      "headers": [
+        { "name": "Content-Type", "value": "application/x-ndjson" }
+      ]
+    }
+  ]
+}

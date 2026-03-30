@@ -35,6 +35,12 @@ func (p *QueryParser) ParseQuery(queryJSON map[string]any) (search.Query, error)
 			return p.parseTerm(value)
 		case "match":
 			return p.parseMatch(value)
+		case "match_phrase":
+			return p.parseMatchPhrase(value)
+		case "exists":
+			return p.parseExists(value)
+		case "multi_match":
+			return p.parseMultiMatch(value)
 		case "bool":
 			return p.parseBool(value)
 		default:
@@ -62,6 +68,32 @@ func (p *QueryParser) parseTerm(value any) (search.Query, error) {
 	return nil, fmt.Errorf("term query must specify a field")
 }
 
+// extractMatchParams extracts query text and optional analyzer override from
+// a match/match_phrase field value. ES accepts both scalar form ("hello") and
+// object form ({"query": "hello", "analyzer": "custom"}).
+func extractMatchParams(v any) (text string, analyzerOverride string, err error) {
+	switch val := v.(type) {
+	case map[string]any:
+		q, ok := val["query"]
+		if !ok {
+			return "", "", fmt.Errorf("object-form value must contain 'query'")
+		}
+		text = fmt.Sprintf("%v", q)
+		if a, ok := val["analyzer"]; ok {
+			s, ok := a.(string)
+			if !ok {
+				return "", "", fmt.Errorf("'analyzer' must be a string")
+			}
+			analyzerOverride = s
+		}
+		return text, analyzerOverride, nil
+	case string, float64, bool, json.Number:
+		return fmt.Sprintf("%v", val), "", nil
+	default:
+		return "", "", fmt.Errorf("field value must be a string, number, bool, or object with 'query', got %T", v)
+	}
+}
+
 func (p *QueryParser) parseMatch(value any) (search.Query, error) {
 	obj, ok := value.(map[string]any)
 	if !ok {
@@ -69,10 +101,15 @@ func (p *QueryParser) parseMatch(value any) (search.Query, error) {
 	}
 
 	for field, v := range obj {
-		text := fmt.Sprintf("%v", v)
+		text, analyzerOverride, err := extractMatchParams(v)
+		if err != nil {
+			return nil, fmt.Errorf("match query field [%s]: %w", field, err)
+		}
 
 		analyzerName := "standard"
-		if fm, exists := p.mapping.Properties[field]; exists && fm.Analyzer != "" {
+		if analyzerOverride != "" {
+			analyzerName = analyzerOverride
+		} else if fm, exists := p.mapping.Properties[field]; exists && fm.Analyzer != "" {
 			analyzerName = fm.Analyzer
 		}
 
@@ -100,6 +137,126 @@ func (p *QueryParser) parseMatch(value any) (search.Query, error) {
 		return bq, nil
 	}
 	return nil, fmt.Errorf("match query must specify a field")
+}
+
+func (p *QueryParser) parseMultiMatch(value any) (search.Query, error) {
+	obj, ok := value.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("multi_match query must be an object")
+	}
+
+	queryText, ok := obj["query"]
+	if !ok {
+		return nil, fmt.Errorf("multi_match query must specify 'query'")
+	}
+
+	fieldsRaw, ok := obj["fields"]
+	if !ok {
+		return nil, fmt.Errorf("multi_match query must specify 'fields'")
+	}
+
+	fieldsArr, ok := fieldsRaw.([]any)
+	if !ok {
+		return nil, fmt.Errorf("multi_match 'fields' must be an array")
+	}
+
+	if len(fieldsArr) == 0 {
+		return nil, fmt.Errorf("multi_match 'fields' must not be empty")
+	}
+
+	bq := search.NewBooleanQuery()
+
+	for _, f := range fieldsArr {
+		fieldName, ok := f.(string)
+		if !ok {
+			return nil, fmt.Errorf("multi_match field name must be a string")
+		}
+
+		matchObj := map[string]any{
+			"match": map[string]any{
+				fieldName: queryText,
+			},
+		}
+		subQuery, err := p.ParseQuery(matchObj)
+		if err != nil {
+			return nil, fmt.Errorf("multi_match field [%s]: %w", fieldName, err)
+		}
+		bq.Add(subQuery, search.OccurShould)
+	}
+
+	return bq, nil
+}
+
+func (p *QueryParser) parseExists(value any) (search.Query, error) {
+	obj, ok := value.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("exists query must be an object")
+	}
+
+	field, ok := obj["field"]
+	if !ok {
+		return nil, fmt.Errorf("exists query must specify 'field'")
+	}
+
+	fieldName, ok := field.(string)
+	if !ok {
+		return nil, fmt.Errorf("exists query 'field' must be a string")
+	}
+
+	fm, exists := p.mapping.Properties[fieldName]
+	if !exists {
+		return search.NewMatchNoneQuery(), nil
+	}
+
+	switch fm.Type {
+	case mapping.FieldTypeText, mapping.FieldTypeKeyword, mapping.FieldTypeBoolean:
+		return search.NewFieldExistsQuery(fieldName), nil
+	default:
+		// Long, Double -- sorted doc values not yet available for these types.
+		return search.NewMatchNoneQuery(), nil
+	}
+}
+
+func (p *QueryParser) parseMatchPhrase(value any) (search.Query, error) {
+	obj, ok := value.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("match_phrase query must be an object")
+	}
+
+	for field, v := range obj {
+		text, analyzerOverride, err := extractMatchParams(v)
+		if err != nil {
+			return nil, fmt.Errorf("match_phrase query field [%s]: %w", field, err)
+		}
+
+		analyzerName := "standard"
+		if analyzerOverride != "" {
+			analyzerName = analyzerOverride
+		} else if fm, exists := p.mapping.Properties[field]; exists && fm.Analyzer != "" {
+			analyzerName = fm.Analyzer
+		}
+
+		analyzer := p.registry.Get(analyzerName)
+		if analyzer == nil {
+			return nil, fmt.Errorf("unknown analyzer [%s]", analyzerName)
+		}
+
+		tokens, err := analyzer.Analyze(text)
+		if err != nil {
+			return nil, fmt.Errorf("analyze field [%s]: %w", field, err)
+		}
+
+		if len(tokens) == 0 {
+			return search.NewMatchNoneQuery(), nil
+		}
+
+		terms := make([]string, len(tokens))
+		for i, token := range tokens {
+			terms[i] = token.Term
+		}
+		return search.NewPhraseQuery(field, terms...), nil
+	}
+	return nil, fmt.Errorf("match_phrase query must specify a field")
 }
 
 func (p *QueryParser) parseBool(value any) (search.Query, error) {
