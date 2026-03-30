@@ -33,6 +33,9 @@ type DiskSegment struct {
 	sortedDVOrd  map[string]*store.MMapIndexInput // field → .sdvo
 	sortedDVDict map[string]*store.MMapIndexInput // field → .sdvd
 	dvSkip       map[string]*store.MMapIndexInput // field → .ndvs or .sdvs
+
+	// Point fields
+	pointFields map[string]struct{}
 }
 
 // OpenDiskSegment opens a V2 segment from the given directory path.
@@ -60,6 +63,12 @@ func OpenDiskSegment(dirPath string, segName string) (*DiskSegment, error) {
 		sortedDVOrd:  make(map[string]*store.MMapIndexInput),
 		sortedDVDict: make(map[string]*store.MMapIndexInput),
 		dvSkip:       make(map[string]*store.MMapIndexInput),
+	}
+
+	// Populate pointFields from metadata
+	ds.pointFields = make(map[string]struct{}, len(meta.PointFields))
+	for _, f := range meta.PointFields {
+		ds.pointFields[f] = struct{}{}
 	}
 
 	// Mmap per-field files
@@ -413,6 +422,10 @@ func (ds *DiskSegment) SortedDocValues(field string) SortedDocValues {
 		return nil
 	}
 	return sdv
+}
+
+func (ds *DiskSegment) PointFields() map[string]struct{} {
+	return ds.pointFields
 }
 
 // Compile-time check: DiskSegment implements SegmentReader.
