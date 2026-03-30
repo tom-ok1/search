@@ -238,6 +238,12 @@ type ServerInterface interface {
 	// Bulk operations
 	// (POST /_bulk)
 	Bulk(w http.ResponseWriter, r *http.Request)
+	// Cluster health in plain text table format
+	// (GET /_cat/health)
+	CatHealth(w http.ResponseWriter, r *http.Request)
+	// List indices in plain text table format
+	// (GET /_cat/indices)
+	CatIndices(w http.ResponseWriter, r *http.Request)
 	// Delete an index
 	// (DELETE /{index})
 	DeleteIndex(w http.ResponseWriter, r *http.Request, index IndexName)
@@ -280,6 +286,18 @@ type Unimplemented struct{}
 // Bulk operations
 // (POST /_bulk)
 func (_ Unimplemented) Bulk(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Cluster health in plain text table format
+// (GET /_cat/health)
+func (_ Unimplemented) CatHealth(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// List indices in plain text table format
+// (GET /_cat/indices)
+func (_ Unimplemented) CatIndices(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -363,6 +381,34 @@ func (siw *ServerInterfaceWrapper) Bulk(w http.ResponseWriter, r *http.Request) 
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.Bulk(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CatHealth operation middleware
+func (siw *ServerInterfaceWrapper) CatHealth(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CatHealth(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CatIndices operation middleware
+func (siw *ServerInterfaceWrapper) CatIndices(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CatIndices(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -822,6 +868,12 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 		r.Post(options.BaseURL+"/_bulk", wrapper.Bulk)
 	})
 	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/_cat/health", wrapper.CatHealth)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/_cat/indices", wrapper.CatIndices)
+	})
+	r.Group(func(r chi.Router) {
 		r.Delete(options.BaseURL+"/{index}", wrapper.DeleteIndex)
 	})
 	r.Group(func(r chi.Router) {
@@ -882,6 +934,40 @@ func (response Bulk400JSONResponse) VisitBulkResponse(w http.ResponseWriter) err
 	w.WriteHeader(400)
 
 	return json.NewEncoder(w).Encode(response)
+}
+
+type CatHealthRequestObject struct {
+}
+
+type CatHealthResponseObject interface {
+	VisitCatHealthResponse(w http.ResponseWriter) error
+}
+
+type CatHealth200TextResponse string
+
+func (response CatHealth200TextResponse) VisitCatHealthResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "text/plain")
+	w.WriteHeader(200)
+
+	_, err := w.Write([]byte(response))
+	return err
+}
+
+type CatIndicesRequestObject struct {
+}
+
+type CatIndicesResponseObject interface {
+	VisitCatIndicesResponse(w http.ResponseWriter) error
+}
+
+type CatIndices200TextResponse string
+
+func (response CatIndices200TextResponse) VisitCatIndicesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "text/plain")
+	w.WriteHeader(200)
+
+	_, err := w.Write([]byte(response))
+	return err
 }
 
 type DeleteIndexRequestObject struct {
@@ -1223,6 +1309,12 @@ type StrictServerInterface interface {
 	// Bulk operations
 	// (POST /_bulk)
 	Bulk(ctx context.Context, request BulkRequestObject) (BulkResponseObject, error)
+	// Cluster health in plain text table format
+	// (GET /_cat/health)
+	CatHealth(ctx context.Context, request CatHealthRequestObject) (CatHealthResponseObject, error)
+	// List indices in plain text table format
+	// (GET /_cat/indices)
+	CatIndices(ctx context.Context, request CatIndicesRequestObject) (CatIndicesResponseObject, error)
 	// Delete an index
 	// (DELETE /{index})
 	DeleteIndex(ctx context.Context, request DeleteIndexRequestObject) (DeleteIndexResponseObject, error)
@@ -1306,6 +1398,54 @@ func (sh *strictHandler) Bulk(w http.ResponseWriter, r *http.Request) {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(BulkResponseObject); ok {
 		if err := validResponse.VisitBulkResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CatHealth operation middleware
+func (sh *strictHandler) CatHealth(w http.ResponseWriter, r *http.Request) {
+	var request CatHealthRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CatHealth(ctx, request.(CatHealthRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CatHealth")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CatHealthResponseObject); ok {
+		if err := validResponse.VisitCatHealthResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CatIndices operation middleware
+func (sh *strictHandler) CatIndices(w http.ResponseWriter, r *http.Request) {
+	var request CatIndicesRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CatIndices(ctx, request.(CatIndicesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CatIndices")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CatIndicesResponseObject); ok {
+		if err := validResponse.VisitCatIndicesResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -1654,31 +1794,33 @@ func (sh *strictHandler) SearchPost(w http.ResponseWriter, r *http.Request, inde
 // Base64 encoded, gzipped, json marshaled Swagger object
 var swaggerSpec = []string{
 
-	"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",
+	"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",
+	"HMWtKwAA",
 }
 
 // GetSwagger returns the content of the embedded swagger specification file

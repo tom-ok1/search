@@ -61,6 +61,10 @@ func NewNode(config NodeConfig) (*Node, error) {
 	searchAction := action.NewTransportSearchAction(cs, indexServices, registry)
 	bulkAction := action.NewTransportBulkAction(cs, indexServices)
 
+	// Create _cat actions
+	catIndicesAction := action.NewTransportCatIndicesAction(cs, indexServices)
+	catHealthAction := action.NewTransportCatHealthAction(cs, indexServices)
+
 	// Create handler and wire up Chi router
 	h := handler.NewHandler(
 		createAction,
@@ -72,6 +76,8 @@ func NewNode(config NodeConfig) (*Node, error) {
 		searchAction,
 		bulkAction,
 		refreshAction,
+		catIndicesAction,
+		catHealthAction,
 	)
 
 	strictHandler := api.NewStrictHandler(h, nil)
@@ -82,57 +88,27 @@ func NewNode(config NodeConfig) (*Node, error) {
 	}
 	spec.Servers = nil // Don't validate server URLs
 
-	// Create _cat actions
-	catIndicesAction := action.NewTransportCatIndicesAction(cs, indexServices)
-	catHealthAction := action.NewTransportCatHealthAction(cs, indexServices)
-
 	router := chi.NewRouter()
-
-	// Register _cat routes directly without OpenAPI validation middleware,
-	// since these endpoints are not part of the OpenAPI spec.
-	router.Get("/_cat/indices", func(w http.ResponseWriter, r *http.Request) {
-		resp, err := catIndicesAction.Execute()
-		if err != nil {
-			http.Error(w, err.Error(), 500)
-			return
-		}
-		w.Header().Set("Content-Type", "text/plain; charset=UTF-8")
-		w.Write([]byte(resp.FormatText()))
-	})
-	router.Get("/_cat/health", func(w http.ResponseWriter, r *http.Request) {
-		resp, err := catHealthAction.Execute()
-		if err != nil {
-			http.Error(w, err.Error(), 500)
-			return
-		}
-		w.Header().Set("Content-Type", "text/plain; charset=UTF-8")
-		w.Write([]byte(resp.FormatText()))
-	})
-
-	// Mount OpenAPI-validated routes in a group so the validator middleware
-	// only applies to the generated API routes, not the _cat routes above.
-	router.Group(func(r chi.Router) {
-		r.Use(nethttpmiddleware.OapiRequestValidatorWithOptions(spec, &nethttpmiddleware.Options{
-			Options: openapi3filter.Options{
-				// Skip request body validation to avoid issues with NDJSON bulk
-				// endpoints and custom content types. Path/query parameter
-				// validation and route matching are still enforced.
-				ExcludeRequestBody: true,
-			},
-			ErrorHandler: func(w http.ResponseWriter, message string, statusCode int) {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(statusCode)
-				json.NewEncoder(w).Encode(map[string]any{
-					"error": map[string]any{
-						"type":   "validation_exception",
-						"reason": message,
-					},
-					"status": statusCode,
-				})
-			},
-		}))
-		api.HandlerFromMux(strictHandler, r)
-	})
+	router.Use(nethttpmiddleware.OapiRequestValidatorWithOptions(spec, &nethttpmiddleware.Options{
+		Options: openapi3filter.Options{
+			// Skip request body validation to avoid issues with NDJSON bulk
+			// endpoints and custom content types. Path/query parameter
+			// validation and route matching are still enforced.
+			ExcludeRequestBody: true,
+		},
+		ErrorHandler: func(w http.ResponseWriter, message string, statusCode int) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(statusCode)
+			json.NewEncoder(w).Encode(map[string]any{
+				"error": map[string]any{
+					"type":   "validation_exception",
+					"reason": message,
+				},
+				"status": statusCode,
+			})
+		},
+	}))
+	api.HandlerFromMux(strictHandler, router)
 
 	n.router = router
 
