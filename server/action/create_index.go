@@ -68,6 +68,12 @@ func (a *TransportCreateIndexAction) Execute(req CreateIndexRequest) (CreateInde
 		numShards = 1
 	}
 
+	// Default refresh interval
+	refreshInterval := cluster.DefaultRefreshInterval
+	if req.Settings.RefreshInterval != 0 {
+		refreshInterval = req.Settings.RefreshInterval
+	}
+
 	// Default to empty mapping if not provided
 	m := req.Mappings
 	if m == nil {
@@ -82,6 +88,7 @@ func (a *TransportCreateIndexAction) Execute(req CreateIndexRequest) (CreateInde
 		Settings: cluster.IndexSettings{
 			NumberOfShards:   numShards,
 			NumberOfReplicas: req.Settings.NumberOfReplicas,
+			RefreshInterval:  refreshInterval,
 		},
 		Mapping: m,
 		State:   cluster.IndexStateOpen,

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"time"
 
 	"gosearch/api"
 	"gosearch/server/action"
@@ -63,6 +64,15 @@ func errorResponse(status int, errType, reason string) api.ErrorResponse {
 	}
 }
 
+// parseRefreshInterval parses an ES-style refresh interval string.
+// "-1" disables auto-refresh; otherwise delegates to time.ParseDuration.
+func parseRefreshInterval(s string) (time.Duration, error) {
+	if s == "-1" {
+		return -1, nil
+	}
+	return time.ParseDuration(s)
+}
+
 // mapErrorStatus returns (status, errType) for a given transport action error.
 func mapErrorStatus(err error) (int, string) {
 	var indexNotFound *action.IndexNotFoundError
@@ -100,6 +110,13 @@ func (h *Handler) CreateIndex(_ context.Context, request api.CreateIndexRequestO
 			}
 			if request.Body.Settings.NumberOfReplicas != nil {
 				actionReq.Settings.NumberOfReplicas = *request.Body.Settings.NumberOfReplicas
+			}
+			if request.Body.Settings.RefreshInterval != nil {
+				d, err := parseRefreshInterval(*request.Body.Settings.RefreshInterval)
+				if err != nil {
+					return api.CreateIndex400JSONResponse(errorResponse(400, "illegal_argument_exception", fmt.Sprintf("invalid refresh_interval: %v", err))), nil
+				}
+				actionReq.Settings.RefreshInterval = d
 			}
 		}
 		if request.Body.Mappings != nil && request.Body.Mappings.Properties != nil {
@@ -156,9 +173,14 @@ func (h *Handler) GetIndex(_ context.Context, request api.GetIndexRequestObject)
 	meta := api.IndexMetadata{}
 
 	// Convert settings
+	refreshStr := resp.Settings.RefreshInterval.String()
+	if resp.Settings.RefreshInterval == -1 {
+		refreshStr = "-1"
+	}
 	settings := &api.Settings{
 		NumberOfShards:   &resp.Settings.NumberOfShards,
 		NumberOfReplicas: &resp.Settings.NumberOfReplicas,
+		RefreshInterval:  &refreshStr,
 	}
 	meta.Settings = settings
 
