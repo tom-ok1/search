@@ -303,20 +303,68 @@ func TestQueryParser_Exists(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	tq, ok := q.(*search.TermQuery)
+	feq, ok := q.(*search.FieldExistsQuery)
 	if !ok {
-		t.Fatalf("expected *search.TermQuery, got %T", q)
+		t.Fatalf("expected *search.FieldExistsQuery, got %T", q)
+	}
+	if feq.Field != "title" {
+		t.Errorf("field = %q, want %q", feq.Field, "title")
+	}
+	if feq.Mode != search.FieldExistsNorms {
+		t.Errorf("mode = %v, want FieldExistsNorms", feq.Mode)
+	}
+}
+
+func TestQueryParser_ExistsKeyword(t *testing.T) {
+	m := &mapping.MappingDefinition{
+		Properties: map[string]mapping.FieldMapping{
+			"status": {Type: mapping.FieldTypeKeyword},
+		},
+	}
+	registry := analysis.DefaultRegistry()
+	parser := NewQueryParser(m, registry)
+
+	queryJSON := map[string]any{
+		"exists": map[string]any{
+			"field": "status",
+		},
 	}
 
-	terms := tq.ExtractTerms()
-	if len(terms) != 1 {
-		t.Fatalf("expected 1 term, got %d", len(terms))
+	q, err := parser.ParseQuery(queryJSON)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if terms[0].Field != "_field_names" {
-		t.Errorf("field = %q, want %q", terms[0].Field, "_field_names")
+
+	feq, ok := q.(*search.FieldExistsQuery)
+	if !ok {
+		t.Fatalf("expected *search.FieldExistsQuery, got %T", q)
 	}
-	if terms[0].Term != "title" {
-		t.Errorf("term = %q, want %q", terms[0].Term, "title")
+	if feq.Mode != search.FieldExistsDocValues {
+		t.Errorf("mode = %v, want FieldExistsDocValues", feq.Mode)
+	}
+}
+
+func TestQueryParser_ExistsUnmappedField(t *testing.T) {
+	m := &mapping.MappingDefinition{
+		Properties: map[string]mapping.FieldMapping{},
+	}
+	registry := analysis.DefaultRegistry()
+	parser := NewQueryParser(m, registry)
+
+	queryJSON := map[string]any{
+		"exists": map[string]any{
+			"field": "nonexistent",
+		},
+	}
+
+	q, err := parser.ParseQuery(queryJSON)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	_, ok := q.(*search.MatchNoneQuery)
+	if !ok {
+		t.Fatalf("expected *search.MatchNoneQuery for unmapped field, got %T", q)
 	}
 }
 

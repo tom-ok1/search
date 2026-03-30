@@ -203,7 +203,20 @@ func (p *QueryParser) parseExists(value any) (search.Query, error) {
 		return nil, fmt.Errorf("exists query 'field' must be a string")
 	}
 
-	return search.NewTermQuery("_field_names", fieldName), nil
+	fm, exists := p.mapping.Properties[fieldName]
+	if !exists {
+		return search.NewMatchNoneQuery(), nil
+	}
+
+	switch fm.Type {
+	case mapping.FieldTypeText:
+		return search.NewFieldExistsQuery(fieldName, search.FieldExistsNorms), nil
+	case mapping.FieldTypeKeyword, mapping.FieldTypeBoolean:
+		return search.NewFieldExistsQuery(fieldName, search.FieldExistsDocValues), nil
+	default:
+		// Long, Double -- sorted doc values not yet available for these types.
+		return search.NewMatchNoneQuery(), nil
+	}
 }
 
 func (p *QueryParser) parseMatchPhrase(value any) (search.Query, error) {

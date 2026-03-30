@@ -40,14 +40,6 @@ func ParseDocument(id string, source []byte, m *MappingDefinition) (*document.Do
 		}
 	}
 
-	// Add _field_names entries for each field that has a value in the source.
-	// This enables the "exists" query to check field presence via a simple term lookup.
-	for fieldName := range m.Properties {
-		if _, ok := fields[fieldName]; ok {
-			doc.AddField("_field_names", fieldName, document.FieldTypeKeyword)
-		}
-	}
-
 	return doc, nil
 }
 

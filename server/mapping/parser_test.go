@@ -554,44 +554,6 @@ func TestParseDocument_LargeIntegerDocValues(t *testing.T) {
 	t.Fatal("big_id numeric doc values field not found")
 }
 
-func TestParseDocument_FieldNames(t *testing.T) {
-	m := &MappingDefinition{
-		Properties: map[string]FieldMapping{
-			"title":  {Type: FieldTypeText},
-			"status": {Type: FieldTypeKeyword},
-			"count":  {Type: FieldTypeLong},
-		},
-	}
-
-	// Only "title" and "status" are present in the source; "count" is missing
-	source := []byte(`{"title": "hello", "status": "active"}`)
-	doc, err := ParseDocument("1", source, m)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	// Collect all _field_names values
-	fieldNames := make(map[string]bool)
-	for _, f := range doc.Fields {
-		if f.Name == "_field_names" {
-			fieldNames[f.Value] = true
-		}
-	}
-
-	// Should have entries for fields present in the document
-	if !fieldNames["title"] {
-		t.Error("missing _field_names entry for 'title'")
-	}
-	if !fieldNames["status"] {
-		t.Error("missing _field_names entry for 'status'")
-	}
-
-	// Should NOT have entry for missing field
-	if fieldNames["count"] {
-		t.Error("unexpected _field_names entry for 'count' (field not in source)")
-	}
-}
-
 func TestParseDocument_KeywordHasSortedDocValues(t *testing.T) {
 	m := &MappingDefinition{
 		Properties: map[string]FieldMapping{
