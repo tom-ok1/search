@@ -25,6 +25,7 @@ func TestValueCountAggregator(t *testing.T) {
 		doc := document.NewDocument()
 		doc.AddField("_id", fmt.Sprintf("%d", i+1), document.FieldTypeKeyword)
 		doc.AddField("status", status, document.FieldTypeKeyword)
+		doc.AddSortedDocValuesField("status", status)
 		writer.AddDocument(doc)
 	}
 

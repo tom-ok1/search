@@ -91,15 +91,6 @@ func (dwpt *DocumentsWriterPerThread) addDocument(doc *document.Document) (int64
 			})
 			bytesAdded += int64(len(field.Value) + 16 + 8)
 
-			// Keyword fields also produce sorted doc values for aggregation/sorting.
-			svals := seg.sortedDocValues[field.Name]
-			if len(svals) <= docID {
-				svals = append(svals, make([]string, docID+1-len(svals))...)
-			}
-			svals[docID] = field.Value
-			seg.sortedDocValues[field.Name] = svals
-			bytesAdded += int64(len(field.Value))
-
 		case document.FieldTypeNumericDocValues:
 			vals := seg.numericDocValues[field.Name]
 			if len(vals) <= docID {

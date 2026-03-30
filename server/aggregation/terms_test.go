@@ -24,6 +24,7 @@ func TestTermsAggregator(t *testing.T) {
 		doc := document.NewDocument()
 		doc.AddField("_id", fmt.Sprintf("%d", i+1), document.FieldTypeKeyword)
 		doc.AddField("status", status, document.FieldTypeKeyword)
+		doc.AddSortedDocValuesField("status", status)
 		writer.AddDocument(doc)
 	}
 
@@ -82,6 +83,7 @@ func TestTermsAggregator_SizeLimit(t *testing.T) {
 		doc := document.NewDocument()
 		doc.AddField("_id", fmt.Sprintf("%d", i+1), document.FieldTypeKeyword)
 		doc.AddField("tag", v, document.FieldTypeKeyword)
+		doc.AddSortedDocValuesField("tag", v)
 		writer.AddDocument(doc)
 	}
 

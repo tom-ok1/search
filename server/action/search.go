@@ -99,10 +99,11 @@ func (a *TransportSearchAction) Execute(req SearchRequest) (SearchResponse, erro
 		size = 10
 	}
 
-	// Query phase: collect top `size` from each shard, then merge
+	// Query phase: collect top-K and aggregations in a single pass per shard.
+	// When aggregations are present, a MultiCollector wraps both the top-K
+	// collector and the aggregation collector so all documents are visited once.
 	numShards := svc.NumShards()
 
-	// Collect top-K from each shard
 	shardResults := make([][]search.SearchResult, 0, numShards)
 	totalHits := 0
 	for i := range numShards {
@@ -112,45 +113,17 @@ func (a *TransportSearchAction) Execute(req SearchRequest) (SearchResponse, erro
 			continue
 		}
 
-		collector := search.NewTopKCollector(size)
+		topK := search.NewTopKCollector(size)
+		var collector search.Collector = topK
+		if len(aggs) > 0 {
+			aggCollector := aggregation.NewCollector(aggs)
+			collector = search.NewMultiCollector(topK, aggCollector)
+		}
+
 		results := searcher.Search(query, collector)
-		totalHits += collector.TotalHits()
+		totalHits += topK.TotalHits()
 		if len(results) > 0 {
 			shardResults = append(shardResults, results)
-		}
-	}
-
-	// Aggregation phase: run aggregators on matched docs
-	if len(aggs) > 0 {
-		for i := range numShards {
-			shard := svc.Shard(i)
-			searcher := shard.Searcher()
-			if searcher == nil {
-				continue
-			}
-			reader := searcher.Reader()
-			for _, leaf := range reader.Leaves() {
-				leafAggs := make([]aggregation.LeafAggregator, len(aggs))
-				for j, agg := range aggs {
-					leafAggs[j] = agg.GetLeafAggregator(leaf)
-				}
-				weight := query.CreateWeight(searcher, search.ScoreModeNone)
-				scorer := weight.Scorer(leaf)
-				if scorer == nil {
-					continue
-				}
-				liveDocs := leaf.Segment.LiveDocs()
-				iter := scorer.Iterator()
-				doc := iter.NextDoc()
-				for doc != search.NoMoreDocs {
-					if liveDocs == nil || !liveDocs.Get(doc) {
-						for _, la := range leafAggs {
-							la.Collect(doc)
-						}
-					}
-					doc = iter.NextDoc()
-				}
-			}
 		}
 	}
 
