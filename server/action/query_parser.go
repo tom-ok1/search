@@ -213,10 +213,10 @@ func (p *QueryParser) parseExists(value any) (search.Query, error) {
 	}
 
 	switch fm.Type {
-	case mapping.FieldTypeText, mapping.FieldTypeKeyword, mapping.FieldTypeBoolean:
+	case mapping.FieldTypeText, mapping.FieldTypeKeyword, mapping.FieldTypeBoolean,
+		mapping.FieldTypeLong, mapping.FieldTypeDouble:
 		return search.NewFieldExistsQuery(fieldName), nil
 	default:
-		// Long, Double -- sorted doc values not yet available for these types.
 		return search.NewMatchNoneQuery(), nil
 	}
 }
