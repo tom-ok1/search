@@ -38,12 +38,12 @@ func (a *TransportRefreshAction) Name() string {
 
 func (a *TransportRefreshAction) Execute(req RefreshRequest) (RefreshResponse, error) {
 	if a.clusterState.Metadata().Indices[req.Index] == nil {
-		return RefreshResponse{}, fmt.Errorf("no such index [%s]", req.Index)
+		return RefreshResponse{}, &IndexNotFoundError{Index: req.Index}
 	}
 
 	svc := a.indexServices[req.Index]
 	if svc == nil {
-		return RefreshResponse{}, fmt.Errorf("no such index [%s]", req.Index)
+		return RefreshResponse{}, &IndexNotFoundError{Index: req.Index}
 	}
 
 	var failures []string

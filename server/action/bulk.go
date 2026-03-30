@@ -100,12 +100,12 @@ func (a *TransportBulkAction) Execute(req BulkRequest) (BulkResponse, error) {
 
 func (a *TransportBulkAction) executeItem(item BulkItem) error {
 	if a.clusterState.Metadata().Indices[item.Index] == nil {
-		return fmt.Errorf("no such index [%s]", item.Index)
+		return &IndexNotFoundError{Index: item.Index}
 	}
 
 	svc := a.indexServices[item.Index]
 	if svc == nil {
-		return fmt.Errorf("no such index [%s]", item.Index)
+		return &IndexNotFoundError{Index: item.Index}
 	}
 
 	shardID := index.RouteShard(item.ID, svc.NumShards())

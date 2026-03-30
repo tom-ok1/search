@@ -2,7 +2,6 @@ package action
 
 import (
 	"encoding/json"
-	"fmt"
 
 	"gosearch/search"
 	"gosearch/server/cluster"
@@ -42,12 +41,12 @@ func (a *TransportGetAction) Name() string {
 
 func (a *TransportGetAction) Execute(req GetDocumentRequest) (GetDocumentResponse, error) {
 	if a.clusterState.Metadata().Indices[req.Index] == nil {
-		return GetDocumentResponse{}, fmt.Errorf("no such index [%s]", req.Index)
+		return GetDocumentResponse{}, &IndexNotFoundError{Index: req.Index}
 	}
 
 	svc := a.indexServices[req.Index]
 	if svc == nil {
-		return GetDocumentResponse{}, fmt.Errorf("no such index [%s]", req.Index)
+		return GetDocumentResponse{}, &IndexNotFoundError{Index: req.Index}
 	}
 
 	shardID := index.RouteShard(req.ID, svc.NumShards())

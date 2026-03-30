@@ -51,15 +51,15 @@ func (a *TransportCreateIndexAction) Name() string {
 
 func (a *TransportCreateIndexAction) Execute(req CreateIndexRequest) (CreateIndexResponse, error) {
 	if req.Name == "" {
-		return CreateIndexResponse{}, fmt.Errorf("index name must not be empty")
+		return CreateIndexResponse{}, &InvalidIndexNameError{Index: "", Reason: "must not be empty"}
 	}
 	if !validIndexName.MatchString(req.Name) {
-		return CreateIndexResponse{}, fmt.Errorf("invalid index name [%s]: must be lowercase, start with a letter or digit, and contain only [a-z0-9._-]", req.Name)
+		return CreateIndexResponse{}, &InvalidIndexNameError{Index: req.Name, Reason: "must be lowercase, start with a letter or digit, and contain only [a-z0-9._-]"}
 	}
 
 	// Check for duplicate
 	if a.clusterState.Metadata().Indices[req.Name] != nil {
-		return CreateIndexResponse{}, fmt.Errorf("index [%s] already exists", req.Name)
+		return CreateIndexResponse{}, &IndexAlreadyExistsError{Index: req.Name}
 	}
 
 	// Default to 1 shard if not specified

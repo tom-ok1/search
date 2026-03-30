@@ -41,12 +41,12 @@ func (a *TransportIndexAction) Name() string {
 
 func (a *TransportIndexAction) Execute(req IndexDocumentRequest) (IndexDocumentResponse, error) {
 	if a.clusterState.Metadata().Indices[req.Index] == nil {
-		return IndexDocumentResponse{}, fmt.Errorf("no such index [%s]", req.Index)
+		return IndexDocumentResponse{}, &IndexNotFoundError{Index: req.Index}
 	}
 
 	svc := a.indexServices[req.Index]
 	if svc == nil {
-		return IndexDocumentResponse{}, fmt.Errorf("no such index [%s]", req.Index)
+		return IndexDocumentResponse{}, &IndexNotFoundError{Index: req.Index}
 	}
 
 	shardID := index.RouteShard(req.ID, svc.NumShards())

@@ -42,7 +42,7 @@ func (a *TransportDeleteIndexAction) Name() string {
 func (a *TransportDeleteIndexAction) Execute(req DeleteIndexRequest) (DeleteIndexResponse, error) {
 	// Verify index exists
 	if a.clusterState.Metadata().Indices[req.Name] == nil {
-		return DeleteIndexResponse{}, fmt.Errorf("no such index [%s]", req.Name)
+		return DeleteIndexResponse{}, &IndexNotFoundError{Index: req.Name}
 	}
 
 	// Close IndexService

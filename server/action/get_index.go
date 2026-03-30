@@ -1,8 +1,6 @@
 package action
 
 import (
-	"fmt"
-
 	"gosearch/server/cluster"
 	"gosearch/server/mapping"
 )
@@ -32,7 +30,7 @@ func (a *TransportGetIndexAction) Name() string {
 func (a *TransportGetIndexAction) Execute(req GetIndexRequest) (GetIndexResponse, error) {
 	meta := a.clusterState.Metadata().Indices[req.Name]
 	if meta == nil {
-		return GetIndexResponse{}, fmt.Errorf("no such index [%s]", req.Name)
+		return GetIndexResponse{}, &IndexNotFoundError{Index: req.Name}
 	}
 
 	return GetIndexResponse{
