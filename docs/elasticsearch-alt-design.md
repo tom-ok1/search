@@ -766,6 +766,19 @@ This section documents deliberate simplifications in v1 and what needs to change
 
 **Resolution:** Phase 2 — add a `PointValues` data structure to the Lucene layer (similar to Lucene's `IntPoint`/`LongPoint`/`DoublePoint`). Numeric fields would then be indexed as point values instead of keyword terms. This is a prerequisite for `range` query support.
 
+#### Point Fields: BKD Tree Implementation
+
+gosearch implements a 1D BKD tree for point field range queries, matching Lucene's
+architecture with the visitor pattern (`IntersectVisitor`, `Relation` enum, `PointTree`
+interface). Key divergences from Lucene:
+
+- **1D only** — Lucene supports 1-16 dimensions for geo_point and other multi-dim types.
+  Multi-dimensional support tracked in #17.
+- **Sort-based partitioning** — Lucene uses BKDRadixSelector for multi-dim efficiency.
+  We sort once and split at medians, which is correct and simpler for 1D.
+- **Single .kd file** — Lucene uses three files (.poi, .idx, .kdd). We use one file.
+- **No prefix compression** — Lucene prefix-codes split values and leaf data.
+
 ### 2. No `_source` Byte-Level Storage
 
 **v1 behavior:** `_source` is stored as a Go `string` via `document.Field.Value`, since the document model uses `string` for all field values.
