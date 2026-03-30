@@ -3,7 +3,6 @@ package action
 import (
 	"encoding/json"
 
-	"gosearch/search"
 	"gosearch/server/cluster"
 	"gosearch/server/index"
 )
@@ -14,10 +13,11 @@ type GetDocumentRequest struct {
 }
 
 type GetDocumentResponse struct {
-	Index  string
-	ID     string
-	Found  bool
-	Source json.RawMessage
+	Index   string
+	ID      string
+	Version int64
+	Found   bool
+	Source  json.RawMessage
 }
 
 type TransportGetAction struct {
@@ -52,25 +52,13 @@ func (a *TransportGetAction) Execute(req GetDocumentRequest) (GetDocumentRespons
 	shardID := index.RouteShard(req.ID, svc.NumShards())
 	shard := svc.Shard(shardID)
 
-	searcher := shard.Searcher()
-	if searcher == nil {
-		return GetDocumentResponse{Index: req.Index, ID: req.ID, Found: false}, nil
-	}
-
-	query := search.NewTermQuery("_id", req.ID)
-	collector := search.NewTopKCollector(1)
-	results := searcher.Search(query, collector)
-
-	if len(results) == 0 {
-		return GetDocumentResponse{Index: req.Index, ID: req.ID, Found: false}, nil
-	}
-
-	source := results[0].Fields["_source"]
+	result := shard.Get(req.ID)
 
 	return GetDocumentResponse{
-		Index:  req.Index,
-		ID:     req.ID,
-		Found:  true,
-		Source: json.RawMessage(source),
+		Index:   req.Index,
+		ID:      req.ID,
+		Version: result.Version,
+		Found:   result.Found,
+		Source:  json.RawMessage(result.Source),
 	}, nil
 }
