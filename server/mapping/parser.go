@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"math"
 	"strconv"
 
 	"gosearch/document"
@@ -74,24 +73,18 @@ func addScalarField(doc *document.Document, name string, value any, fm FieldMapp
 		doc.AddSortedDocValuesField(name, s)
 
 	case FieldTypeLong:
-		// TODO: Elasticsearch uses LongPoint (BKD-tree) for indexing, not a keyword field.
-		// Storing as a string keyword breaks numeric range queries and ordering.
 		n, err := toInt64(value)
 		if err != nil {
 			return err
 		}
-		doc.AddField(name, strconv.FormatInt(n, 10), document.FieldTypeKeyword)
-		doc.AddNumericDocValuesField(name, n)
+		doc.AddLongPoint(name, n)
 
 	case FieldTypeDouble:
-		// TODO: Elasticsearch uses DoublePoint (BKD-tree) for indexing, not a keyword field.
-		// Storing as a string keyword breaks numeric range queries and ordering.
 		f, err := toFloat64(value)
 		if err != nil {
 			return err
 		}
-		doc.AddField(name, strconv.FormatFloat(f, 'f', -1, 64), document.FieldTypeKeyword)
-		doc.AddNumericDocValuesField(name, int64(math.Float64bits(f)))
+		doc.AddDoublePoint(name, f)
 
 	case FieldTypeBoolean:
 		b, err := toBool(value)
