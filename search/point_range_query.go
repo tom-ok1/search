@@ -1,8 +1,7 @@
 package search
 
 import (
-	"math"
-
+	"gosearch/document"
 	"gosearch/index"
 )
 
@@ -22,14 +21,9 @@ func NewPointRangeQuery(field string, min, max int64) *PointRangeQuery {
 func NewDoublePointRangeQuery(field string, min, max float64) *PointRangeQuery {
 	return &PointRangeQuery{
 		field: field,
-		min:   doubleToSortableLong(min),
-		max:   doubleToSortableLong(max),
+		min:   document.DoubleToSortableLong(min),
+		max:   document.DoubleToSortableLong(max),
 	}
-}
-
-func doubleToSortableLong(value float64) int64 {
-	bits := int64(math.Float64bits(value))
-	return bits ^ (bits>>63)&0x7fffffffffffffff
 }
 
 func (q *PointRangeQuery) ExtractTerms() []FieldTerm {

@@ -118,6 +118,16 @@ func (dwpt *DocumentsWriterPerThread) addDocument(doc *document.Document) (int64
 			seg.numericDocValues[field.Name] = vals
 			seg.pointFields[field.Name] = struct{}{}
 			bytesAdded += 8
+
+			// Track field length so FieldExistsQuery norms path works for point fields.
+			if seg.fieldLengths[field.Name] == nil {
+				seg.fieldLengths[field.Name] = make([]int, 0)
+			}
+			for len(seg.fieldLengths[field.Name]) <= docID {
+				seg.fieldLengths[field.Name] = append(seg.fieldLengths[field.Name], 0)
+			}
+			seg.fieldLengths[field.Name][docID] = 1
+			bytesAdded += 4
 		}
 
 		// Stored fields
