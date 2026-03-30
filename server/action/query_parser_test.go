@@ -187,6 +187,241 @@ func TestQueryParser_MatchZeroTokensMatchesNothing(t *testing.T) {
 	}
 }
 
+func TestQueryParser_MatchPhrase(t *testing.T) {
+	m := &mapping.MappingDefinition{
+		Properties: map[string]mapping.FieldMapping{
+			"title": {Type: mapping.FieldTypeText, Analyzer: "standard"},
+		},
+	}
+	registry := analysis.DefaultRegistry()
+	parser := NewQueryParser(m, registry)
+
+	queryJSON := map[string]any{
+		"match_phrase": map[string]any{
+			"title": "quick brown fox",
+		},
+	}
+
+	q, err := parser.ParseQuery(queryJSON)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	pq, ok := q.(*search.PhraseQuery)
+	if !ok {
+		t.Fatalf("expected *search.PhraseQuery, got %T", q)
+	}
+
+	if pq.Field != "title" {
+		t.Errorf("field = %q, want %q", pq.Field, "title")
+	}
+
+	wantTerms := []string{"quick", "brown", "fox"}
+	if len(pq.Terms) != len(wantTerms) {
+		t.Fatalf("terms = %v, want %v", pq.Terms, wantTerms)
+	}
+	for i, term := range pq.Terms {
+		if term != wantTerms[i] {
+			t.Errorf("term[%d] = %q, want %q", i, term, wantTerms[i])
+		}
+	}
+}
+
+func TestQueryParser_MatchPhrase_SingleToken(t *testing.T) {
+	m := &mapping.MappingDefinition{
+		Properties: map[string]mapping.FieldMapping{
+			"title": {Type: mapping.FieldTypeText, Analyzer: "standard"},
+		},
+	}
+	registry := analysis.DefaultRegistry()
+	parser := NewQueryParser(m, registry)
+
+	queryJSON := map[string]any{
+		"match_phrase": map[string]any{
+			"title": "hello",
+		},
+	}
+
+	q, err := parser.ParseQuery(queryJSON)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Single token still produces PhraseQuery (ES behavior)
+	pq, ok := q.(*search.PhraseQuery)
+	if !ok {
+		t.Fatalf("expected *search.PhraseQuery, got %T", q)
+	}
+	if len(pq.Terms) != 1 || pq.Terms[0] != "hello" {
+		t.Errorf("terms = %v, want [hello]", pq.Terms)
+	}
+}
+
+func TestQueryParser_MatchPhrase_EmptyTokens(t *testing.T) {
+	m := &mapping.MappingDefinition{
+		Properties: map[string]mapping.FieldMapping{
+			"title": {Type: mapping.FieldTypeText, Analyzer: "standard"},
+		},
+	}
+	registry := analysis.DefaultRegistry()
+	parser := NewQueryParser(m, registry)
+
+	queryJSON := map[string]any{
+		"match_phrase": map[string]any{
+			"title": "",
+		},
+	}
+
+	q, err := parser.ParseQuery(queryJSON)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	_, ok := q.(*search.MatchNoneQuery)
+	if !ok {
+		t.Fatalf("expected *search.MatchNoneQuery for empty input, got %T", q)
+	}
+}
+
+func TestQueryParser_Exists(t *testing.T) {
+	m := &mapping.MappingDefinition{
+		Properties: map[string]mapping.FieldMapping{
+			"title": {Type: mapping.FieldTypeText},
+		},
+	}
+	registry := analysis.DefaultRegistry()
+	parser := NewQueryParser(m, registry)
+
+	queryJSON := map[string]any{
+		"exists": map[string]any{
+			"field": "title",
+		},
+	}
+
+	q, err := parser.ParseQuery(queryJSON)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	tq, ok := q.(*search.TermQuery)
+	if !ok {
+		t.Fatalf("expected *search.TermQuery, got %T", q)
+	}
+
+	terms := tq.ExtractTerms()
+	if len(terms) != 1 {
+		t.Fatalf("expected 1 term, got %d", len(terms))
+	}
+	if terms[0].Field != "_field_names" {
+		t.Errorf("field = %q, want %q", terms[0].Field, "_field_names")
+	}
+	if terms[0].Term != "title" {
+		t.Errorf("term = %q, want %q", terms[0].Term, "title")
+	}
+}
+
+func TestQueryParser_Exists_MissingField(t *testing.T) {
+	m := &mapping.MappingDefinition{}
+	registry := analysis.DefaultRegistry()
+	parser := NewQueryParser(m, registry)
+
+	queryJSON := map[string]any{
+		"exists": map[string]any{},
+	}
+
+	_, err := parser.ParseQuery(queryJSON)
+	if err == nil {
+		t.Fatal("expected error for exists query without 'field'")
+	}
+}
+
+func TestQueryParser_MultiMatch(t *testing.T) {
+	m := &mapping.MappingDefinition{
+		Properties: map[string]mapping.FieldMapping{
+			"title": {Type: mapping.FieldTypeText, Analyzer: "standard"},
+			"body":  {Type: mapping.FieldTypeText, Analyzer: "standard"},
+		},
+	}
+	registry := analysis.DefaultRegistry()
+	parser := NewQueryParser(m, registry)
+
+	queryJSON := map[string]any{
+		"multi_match": map[string]any{
+			"query":  "hello world",
+			"fields": []any{"title", "body"},
+		},
+	}
+
+	q, err := parser.ParseQuery(queryJSON)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	bq, ok := q.(*search.BooleanQuery)
+	if !ok {
+		t.Fatalf("expected *search.BooleanQuery, got %T", q)
+	}
+
+	// Should have 2 SHOULD clauses (one match query per field)
+	if len(bq.Clauses) != 2 {
+		t.Fatalf("clauses = %d, want 2", len(bq.Clauses))
+	}
+
+	for _, clause := range bq.Clauses {
+		if clause.Occur != search.OccurShould {
+			t.Errorf("clause occur = %v, want SHOULD", clause.Occur)
+		}
+	}
+}
+
+func TestQueryParser_MultiMatch_SingleField(t *testing.T) {
+	m := &mapping.MappingDefinition{
+		Properties: map[string]mapping.FieldMapping{
+			"title": {Type: mapping.FieldTypeText, Analyzer: "standard"},
+		},
+	}
+	registry := analysis.DefaultRegistry()
+	parser := NewQueryParser(m, registry)
+
+	queryJSON := map[string]any{
+		"multi_match": map[string]any{
+			"query":  "hello",
+			"fields": []any{"title"},
+		},
+	}
+
+	q, err := parser.ParseQuery(queryJSON)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Single field still wrapped in BooleanQuery for consistency
+	bq, ok := q.(*search.BooleanQuery)
+	if !ok {
+		t.Fatalf("expected *search.BooleanQuery, got %T", q)
+	}
+	if len(bq.Clauses) != 1 {
+		t.Fatalf("clauses = %d, want 1", len(bq.Clauses))
+	}
+}
+
+func TestQueryParser_MultiMatch_MissingFields(t *testing.T) {
+	m := &mapping.MappingDefinition{}
+	registry := analysis.DefaultRegistry()
+	parser := NewQueryParser(m, registry)
+
+	queryJSON := map[string]any{
+		"multi_match": map[string]any{
+			"query": "hello",
+		},
+	}
+
+	_, err := parser.ParseQuery(queryJSON)
+	if err == nil {
+		t.Fatal("expected error for multi_match without 'fields'")
+	}
+}
+
 func TestQueryParser_BoolFilter(t *testing.T) {
 	p := newTestParser()
 
@@ -210,5 +445,86 @@ func TestQueryParser_BoolFilter(t *testing.T) {
 	}
 	if bq.Clauses[0].Occur != search.OccurFilter {
 		t.Errorf("expected OccurFilter for filter clause, got %v", bq.Clauses[0].Occur)
+	}
+}
+
+func TestQueryParser_MatchObjectForm(t *testing.T) {
+	m := &mapping.MappingDefinition{
+		Properties: map[string]mapping.FieldMapping{
+			"title": {Type: mapping.FieldTypeText, Analyzer: "standard"},
+		},
+	}
+	registry := analysis.DefaultRegistry()
+	parser := NewQueryParser(m, registry)
+
+	queryJSON := map[string]any{
+		"match": map[string]any{
+			"title": map[string]any{
+				"query": "hello world",
+			},
+		},
+	}
+
+	q, err := parser.ParseQuery(queryJSON)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	bq, ok := q.(*search.BooleanQuery)
+	if !ok {
+		t.Fatalf("expected *search.BooleanQuery, got %T", q)
+	}
+	if len(bq.Clauses) != 2 {
+		t.Fatalf("clauses = %d, want 2", len(bq.Clauses))
+	}
+
+	// Verify that the terms are "hello" and "world", not garbage like "map[query:hello"
+	terms := make([]string, 0)
+	for _, clause := range bq.Clauses {
+		if tq, ok := clause.Query.(*search.TermQuery); ok {
+			terms = append(terms, tq.Term)
+		}
+	}
+	if len(terms) != 2 {
+		t.Fatalf("extracted %d terms, want 2", len(terms))
+	}
+	wantTerms := []string{"hello", "world"}
+	for i, term := range terms {
+		if term != wantTerms[i] {
+			t.Errorf("term[%d] = %q, want %q", i, term, wantTerms[i])
+		}
+	}
+}
+
+func TestQueryParser_MatchObjectFormWithAnalyzer(t *testing.T) {
+	m := &mapping.MappingDefinition{
+		Properties: map[string]mapping.FieldMapping{
+			"title": {Type: mapping.FieldTypeText, Analyzer: "standard"},
+		},
+	}
+	registry := analysis.DefaultRegistry()
+	parser := NewQueryParser(m, registry)
+
+	queryJSON := map[string]any{
+		"match": map[string]any{
+			"title": map[string]any{
+				"query":    "hello",
+				"analyzer": "ngram",
+			},
+		},
+	}
+
+	q, err := parser.ParseQuery(queryJSON)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// NGram analyzer should produce multiple tokens from "hello"
+	bq, ok := q.(*search.BooleanQuery)
+	if !ok {
+		t.Fatalf("expected *search.BooleanQuery for ngram tokens, got %T", q)
+	}
+	if len(bq.Clauses) < 2 {
+		t.Errorf("expected multiple ngram clauses, got %d", len(bq.Clauses))
 	}
 }
