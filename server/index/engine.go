@@ -241,6 +241,27 @@ func (e *Engine) Searcher() *search.IndexSearcher {
 	return e.searcher
 }
 
+// EngineStats holds document count statistics for the engine.
+type EngineStats struct {
+	DocCount     int
+	DeletedCount int
+}
+
+// Stats returns document count statistics from the current reader.
+func (e *Engine) Stats() EngineStats {
+	e.mu.RLock()
+	reader := e.reader
+	e.mu.RUnlock()
+
+	if reader == nil {
+		return EngineStats{}
+	}
+
+	total := reader.TotalDocCount()
+	live := reader.LiveDocCount()
+	return EngineStats{DocCount: live, DeletedCount: total - live}
+}
+
 // Close shuts down the engine, closing the translog, reader, and writer.
 func (e *Engine) Close() error {
 	e.mu.Lock()

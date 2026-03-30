@@ -77,6 +77,25 @@ func (is *IndexService) NumShards() int {
 	return len(is.shards)
 }
 
+// IndexStats holds aggregate document count statistics for the index.
+type IndexStats struct {
+	DocCount     int
+	DeletedCount int
+	ShardCount   int
+}
+
+// Stats returns aggregate document count statistics across all shards.
+func (is *IndexService) Stats() IndexStats {
+	var total IndexStats
+	total.ShardCount = len(is.shards)
+	for _, shard := range is.shards {
+		ss := shard.Stats()
+		total.DocCount += ss.DocCount
+		total.DeletedCount += ss.DeletedCount
+	}
+	return total
+}
+
 // Close shuts down all shards in this index.
 func (is *IndexService) Close() error {
 	close(is.stopCh)
