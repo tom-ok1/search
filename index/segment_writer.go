@@ -43,6 +43,11 @@ func WriteSegmentV2(dir store.Directory, seg *InMemorySegment) ([]string, []stri
 	}
 	sort.Strings(meta.SortedDVFields)
 
+	for fieldName := range seg.pointFields {
+		meta.PointFields = append(meta.PointFields, fieldName)
+	}
+	sort.Strings(meta.PointFields)
+
 	metaFileName, err := writeSegmentMeta(dir, meta)
 	if err != nil {
 		return nil, nil, err

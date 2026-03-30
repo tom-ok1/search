@@ -108,6 +108,16 @@ func (dwpt *DocumentsWriterPerThread) addDocument(doc *document.Document) (int64
 			svals[docID] = field.Value
 			seg.sortedDocValues[field.Name] = svals
 			bytesAdded += int64(len(field.Value))
+
+		case document.FieldTypeLongPoint, document.FieldTypeDoublePoint:
+			vals := seg.numericDocValues[field.Name]
+			if len(vals) <= docID {
+				vals = append(vals, make([]int64, docID+1-len(vals))...)
+			}
+			vals[docID] = field.NumericValue
+			seg.numericDocValues[field.Name] = vals
+			seg.pointFields[field.Name] = struct{}{}
+			bytesAdded += 8
 		}
 
 		// Stored fields
