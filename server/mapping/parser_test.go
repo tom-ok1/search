@@ -2,7 +2,6 @@ package mapping
 
 import (
 	"bytes"
-	"math"
 	"testing"
 
 	"gosearch/document"
@@ -658,12 +657,7 @@ func assertHasLongPoint(t *testing.T, doc *document.Document, name string, value
 
 func assertHasDoublePoint(t *testing.T, doc *document.Document, name string, value float64) {
 	t.Helper()
-	// Need to convert the double to sortable long for comparison
-	bits := int64(math.Float64bits(value))
-	sortableLong := bits
-	if bits < 0 {
-		sortableLong = ^bits
-	}
+	sortableLong := document.DoubleToSortableLong(value)
 
 	for _, f := range doc.Fields {
 		if f.Name == name && f.Type == document.FieldTypeDoublePoint && f.NumericValue == sortableLong {

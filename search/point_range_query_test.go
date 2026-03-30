@@ -230,3 +230,45 @@ func TestPointRangeQuerySkipBlocks(t *testing.T) {
 		t.Errorf("got %d hits, want 11 (values 500-510)", len(results))
 	}
 }
+
+func TestFieldExistsQuery_PointFields(t *testing.T) {
+	dir, err := store.NewFSDirectory(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	analyzer := analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{})
+	fa := analysis.NewFieldAnalyzers(analyzer)
+	writer := index.NewIndexWriter(dir, fa, 1024*1024)
+
+	// Doc 0: has price field
+	doc0 := document.NewDocument()
+	doc0.AddLongPoint("price", 100)
+	writer.AddDocument(doc0)
+
+	// Doc 1: no price field
+	doc1 := document.NewDocument()
+	doc1.AddField("name", "test", document.FieldTypeKeyword)
+	writer.AddDocument(doc1)
+
+	// Doc 2: has price field
+	doc2 := document.NewDocument()
+	doc2.AddLongPoint("price", 200)
+	writer.AddDocument(doc2)
+
+	writer.Commit()
+
+	reader, err := index.OpenDirectoryReader(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+
+	searcher := NewIndexSearcher(reader)
+	q := NewFieldExistsQuery("price")
+	collector := NewTopKCollector(10)
+	results := searcher.Search(q, collector)
+
+	if len(results) != 2 {
+		t.Errorf("exists query: got %d hits, want 2 (docs 0 and 2 have price)", len(results))
+	}
+}

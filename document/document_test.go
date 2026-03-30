@@ -28,7 +28,7 @@ func TestDoubleToSortableLong(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := doubleToSortableLong(tt.value)
+			got := DoubleToSortableLong(tt.value)
 
 			// For NaN, we only verify it's a valid int64, not exact value
 			// since NaN representations can vary
@@ -40,7 +40,7 @@ func TestDoubleToSortableLong(t *testing.T) {
 			}
 
 			if got != tt.want {
-				t.Errorf("doubleToSortableLong(%v) = %d, want %d", tt.value, got, tt.want)
+				t.Errorf("DoubleToSortableLong(%v) = %d, want %d", tt.value, got, tt.want)
 			}
 		})
 	}
@@ -62,8 +62,8 @@ func TestDoubleEncodingRoundTrip(t *testing.T) {
 
 	for _, val := range tests {
 		t.Run("", func(t *testing.T) {
-			encoded := doubleToSortableLong(val)
-			decoded := sortableLongToDouble(encoded)
+			encoded := DoubleToSortableLong(val)
+			decoded := SortableLongToDouble(encoded)
 
 			if val != decoded {
 				t.Errorf("round trip failed: %v -> %d -> %v", val, encoded, decoded)
@@ -92,8 +92,8 @@ func TestDoubleEncodingOrdering(t *testing.T) {
 		a := values[i]
 		b := values[i+1]
 
-		encodedA := doubleToSortableLong(a)
-		encodedB := doubleToSortableLong(b)
+		encodedA := DoubleToSortableLong(a)
+		encodedB := DoubleToSortableLong(b)
 
 		if encodedA >= encodedB {
 			t.Errorf("ordering violated: %v (encoded: %d) should be < %v (encoded: %d)",
@@ -139,7 +139,7 @@ func TestAddDoublePoint(t *testing.T) {
 	}
 
 	// Verify the stored value can be decoded back to original
-	decoded := sortableLongToDouble(field.NumericValue)
+	decoded := SortableLongToDouble(field.NumericValue)
 	if decoded != 3.14 {
 		t.Errorf("decoded value = %v, want 3.14", decoded)
 	}

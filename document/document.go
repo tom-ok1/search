@@ -89,19 +89,19 @@ func (d *Document) AddDoublePoint(name string, value float64) {
 	d.Fields = append(d.Fields, Field{
 		Name:         name,
 		Type:         FieldTypeDoublePoint,
-		NumericValue: doubleToSortableLong(value),
+		NumericValue: DoubleToSortableLong(value),
 	})
 }
 
-// doubleToSortableLong converts a float64 to an int64 that sorts in the same order.
+// DoubleToSortableLong converts a float64 to an int64 that sorts in the same order.
 // This is equivalent to Lucene's NumericUtils.doubleToSortableLong.
-func doubleToSortableLong(value float64) int64 {
+func DoubleToSortableLong(value float64) int64 {
 	bits := int64(math.Float64bits(value))
 	return bits ^ (bits>>63)&0x7fffffffffffffff
 }
 
-// sortableLongToDouble reverses doubleToSortableLong.
-func sortableLongToDouble(encoded int64) float64 {
+// SortableLongToDouble reverses DoubleToSortableLong.
+func SortableLongToDouble(encoded int64) float64 {
 	bits := encoded ^ ((encoded >> 63) & 0x7fffffffffffffff)
 	return math.Float64frombits(uint64(bits))
 }
