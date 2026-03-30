@@ -1,6 +1,7 @@
 package mapping
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -13,7 +14,9 @@ import (
 // according to the given mapping definition.
 func ParseDocument(id string, source []byte, m *MappingDefinition) (*document.Document, error) {
 	var fields map[string]any
-	if err := json.Unmarshal(source, &fields); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(source))
+	decoder.UseNumber()
+	if err := decoder.Decode(&fields); err != nil {
 		return nil, fmt.Errorf("invalid JSON source: %w", err)
 	}
 
@@ -34,6 +37,14 @@ func ParseDocument(id string, source []byte, m *MappingDefinition) (*document.Do
 
 		if err := addField(doc, fieldName, value, fieldMapping); err != nil {
 			return nil, fmt.Errorf("field %q: %w", fieldName, err)
+		}
+	}
+
+	// Add _field_names entries for each field that has a value in the source.
+	// This enables the "exists" query to check field presence via a simple term lookup.
+	for fieldName := range m.Properties {
+		if _, ok := fields[fieldName]; ok {
+			doc.AddField("_field_names", fieldName, document.FieldTypeKeyword)
 		}
 	}
 
@@ -68,6 +79,7 @@ func addScalarField(doc *document.Document, name string, value any, fm FieldMapp
 			return err
 		}
 		doc.AddField(name, s, document.FieldTypeKeyword)
+		doc.AddSortedDocValuesField(name, s)
 
 	case FieldTypeLong:
 		n, err := toInt64(value)
@@ -90,7 +102,9 @@ func addScalarField(doc *document.Document, name string, value any, fm FieldMapp
 		if err != nil {
 			return err
 		}
-		doc.AddField(name, strconv.FormatBool(b), document.FieldTypeKeyword)
+		s := strconv.FormatBool(b)
+		doc.AddField(name, s, document.FieldTypeKeyword)
+		doc.AddSortedDocValuesField(name, s)
 
 	default:
 		return fmt.Errorf("unsupported field type: %s", fm.Type)
@@ -103,6 +117,8 @@ func toString(v any) (string, error) {
 	switch val := v.(type) {
 	case string:
 		return val, nil
+	case json.Number:
+		return string(val), nil
 	case float64:
 		return strconv.FormatFloat(val, 'f', -1, 64), nil
 	case bool:
@@ -116,6 +132,16 @@ func toString(v any) (string, error) {
 
 func toInt64(v any) (int64, error) {
 	switch val := v.(type) {
+	case json.Number:
+		// Try integer parse first; fall back to float for values like "42.0"
+		if n, err := strconv.ParseInt(string(val), 10, 64); err == nil {
+			return n, nil
+		}
+		f, err := strconv.ParseFloat(string(val), 64)
+		if err != nil {
+			return 0, err
+		}
+		return int64(f), nil
 	case float64:
 		return int64(val), nil
 	case string:
@@ -127,6 +153,8 @@ func toInt64(v any) (int64, error) {
 
 func toFloat64(v any) (float64, error) {
 	switch val := v.(type) {
+	case json.Number:
+		return strconv.ParseFloat(string(val), 64)
 	case float64:
 		return val, nil
 	case string:
