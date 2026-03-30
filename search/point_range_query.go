@@ -1,0 +1,119 @@
+package search
+
+import (
+	"math"
+
+	"gosearch/index"
+)
+
+// PointRangeQuery matches documents where a numeric point field's value falls
+// within an inclusive [min, max] range.
+type PointRangeQuery struct {
+	field string
+	min   int64
+	max   int64
+}
+
+func NewPointRangeQuery(field string, min, max int64) *PointRangeQuery {
+	return &PointRangeQuery{field: field, min: min, max: max}
+}
+
+// NewDoublePointRangeQuery creates a range query for double point fields.
+func NewDoublePointRangeQuery(field string, min, max float64) *PointRangeQuery {
+	return &PointRangeQuery{
+		field: field,
+		min:   doubleToSortableLong(min),
+		max:   doubleToSortableLong(max),
+	}
+}
+
+func doubleToSortableLong(value float64) int64 {
+	bits := int64(math.Float64bits(value))
+	return bits ^ (bits>>63)&0x7fffffffffffffff
+}
+
+func (q *PointRangeQuery) ExtractTerms() []FieldTerm {
+	return nil
+}
+
+func (q *PointRangeQuery) CreateWeight(searcher *IndexSearcher, scoreMode ScoreMode) Weight {
+	return &pointRangeWeight{query: q}
+}
+
+type pointRangeWeight struct {
+	query *PointRangeQuery
+}
+
+func (w *pointRangeWeight) Query() Query {
+	return w.query
+}
+
+func (w *pointRangeWeight) Scorer(ctx index.LeafReaderContext) Scorer {
+	seg := ctx.Segment
+
+	// Check that this field has point values
+	if _, ok := seg.PointFields()[w.query.field]; !ok {
+		return nil
+	}
+
+	dv := seg.NumericDocValues(w.query.field)
+	if dv == nil {
+		return nil
+	}
+
+	return &pointRangeScorer{
+		min:      w.query.min,
+		max:      w.query.max,
+		dv:       dv,
+		liveDocs: seg.LiveDocs(),
+		maxDoc:   seg.DocCount(),
+		doc:      -1,
+	}
+}
+
+// pointRangeScorer iterates documents whose point values fall within [min, max].
+type pointRangeScorer struct {
+	min, max int64
+	dv       index.NumericDocValues
+	liveDocs *index.Bitset
+	maxDoc   int
+	doc      int
+}
+
+func (s *pointRangeScorer) Score() float64 {
+	return 1.0 // constant score
+}
+
+func (s *pointRangeScorer) DocID() int {
+	return s.doc
+}
+
+func (s *pointRangeScorer) Iterator() DocIdSetIterator {
+	return s
+}
+
+func (s *pointRangeScorer) NextDoc() int {
+	return s.Advance(s.doc + 1)
+}
+
+func (s *pointRangeScorer) Advance(target int) int {
+	for docID := target; docID < s.maxDoc; docID++ {
+		if s.liveDocs != nil && s.liveDocs.Get(docID) {
+			continue
+		}
+		val, err := s.dv.Get(docID)
+		if err != nil {
+			continue
+		}
+		if val >= s.min && val <= s.max {
+			s.doc = docID
+			return docID
+		}
+	}
+	s.doc = NoMoreDocs
+	return NoMoreDocs
+}
+
+func (s *pointRangeScorer) Cost() int64 {
+	return int64(s.maxDoc)
+}
