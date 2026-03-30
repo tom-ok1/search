@@ -827,13 +827,10 @@ This design explicitly supports the following extensions:
 - **Translog**: Write-ahead log for crash recovery — append index/delete ops to file before ack, replay on startup. (Addresses [Limitation #6](#6-no-translog-write-ahead-log))
 - **Real-time get**: In-memory `LiveVersionMap` (`_id` → source + version) checked before Lucene reader, cleared on refresh. (Addresses [Limitation #4](#4-no-real-time-get))
 - **Document versioning**: `_version` counter per document for optimistic concurrency control. (Addresses [Limitation #3](#3-no-document-versioning--optimistic-concurrency))
-- **Byte-level `_source` storage**: Store `_source` as raw `[]byte` with compression (LZ4) instead of Go string. (Addresses [Limitation #2](#2-no-_source-byte-level-storage))
 - **JSON number precision**: Use `json.Decoder` with `UseNumber()` to avoid float64 truncation of large integers. (Addresses [Limitation #5](#5-json-number-precision-for-large-integers))
-- **Dynamic mapping**: Auto-detect field types from document values
 - **Auto-refresh**: Configurable `refresh_interval` setting with background timer
 - **More query types**: `match_phrase` (→ PhraseQuery), `range` (requires BKD trees), `multi_match`, `exists`
 - **Aggregations**: Leverage existing NumericDocValues/SortedDocValues for terms/range aggs
-- **`_cat` APIs**: Human-readable status endpoints
 
 ### Phase 3: Multi-Shard
 - **Multiple shards per index**: Actual shard routing, per-shard directories
