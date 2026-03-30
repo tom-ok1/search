@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"gosearch/server/cluster"
 	"gosearch/server/mapping"
@@ -118,6 +119,73 @@ func TestTransportCreateIndexAction_DuplicateName(t *testing.T) {
 	}
 
 	services["dup"].Close()
+}
+
+func TestTransportCreateIndexAction_DefaultRefreshInterval(t *testing.T) {
+	cs, services, dataPath, registry := newTestDeps(t)
+	a := NewTransportCreateIndexAction(cs, services, dataPath, registry)
+
+	req := CreateIndexRequest{Name: "defaultrefresh"}
+	_, err := a.Execute(req)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	meta := cs.Metadata()
+	if meta.Indices["defaultrefresh"].Settings.RefreshInterval != cluster.DefaultRefreshInterval {
+		t.Errorf("expected default refresh interval %v, got %v",
+			cluster.DefaultRefreshInterval, meta.Indices["defaultrefresh"].Settings.RefreshInterval)
+	}
+
+	services["defaultrefresh"].Close()
+}
+
+func TestTransportCreateIndexAction_CustomRefreshInterval(t *testing.T) {
+	cs, services, dataPath, registry := newTestDeps(t)
+	a := NewTransportCreateIndexAction(cs, services, dataPath, registry)
+
+	req := CreateIndexRequest{
+		Name: "customrefresh",
+		Settings: cluster.IndexSettings{
+			RefreshInterval: 5 * time.Second,
+		},
+	}
+	_, err := a.Execute(req)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	meta := cs.Metadata()
+	if meta.Indices["customrefresh"].Settings.RefreshInterval != 5*time.Second {
+		t.Errorf("expected 5s refresh interval, got %v",
+			meta.Indices["customrefresh"].Settings.RefreshInterval)
+	}
+
+	services["customrefresh"].Close()
+}
+
+func TestTransportCreateIndexAction_DisableRefreshInterval(t *testing.T) {
+	cs, services, dataPath, registry := newTestDeps(t)
+	a := NewTransportCreateIndexAction(cs, services, dataPath, registry)
+
+	req := CreateIndexRequest{
+		Name: "norefresh",
+		Settings: cluster.IndexSettings{
+			RefreshInterval: -1,
+		},
+	}
+	_, err := a.Execute(req)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	meta := cs.Metadata()
+	if meta.Indices["norefresh"].Settings.RefreshInterval != -1 {
+		t.Errorf("expected -1 refresh interval, got %v",
+			meta.Indices["norefresh"].Settings.RefreshInterval)
+	}
+
+	services["norefresh"].Close()
 }
 
 func TestTransportCreateIndexAction_InvalidName(t *testing.T) {
