@@ -367,6 +367,9 @@ components:
           type: integer
         number_of_replicas:
           type: integer
+        refresh_interval:
+          type: string
+          description: "Refresh interval (e.g., '1s', '5s', '-1' to disable)"
 
     # --- Index requests/responses ---
     CreateIndexRequest:
@@ -419,12 +422,16 @@ components:
       required:
         - _index
         - _id
+        - _version
         - result
       properties:
         _index:
           type: string
         _id:
           type: string
+        _version:
+          type: integer
+          format: int64
         result:
           type: string
 
@@ -433,12 +440,16 @@ components:
       required:
         - _index
         - _id
+        - _version
         - found
       properties:
         _index:
           type: string
         _id:
           type: string
+        _version:
+          type: integer
+          format: int64
         found:
           type: boolean
         _source:
@@ -450,12 +461,16 @@ components:
       required:
         - _index
         - _id
+        - _version
         - result
       properties:
         _index:
           type: string
         _id:
           type: string
+        _version:
+          type: integer
+          format: int64
         result:
           type: string
 
@@ -551,12 +566,16 @@ components:
       required:
         - _index
         - _id
+        - _version
         - status
       properties:
         _index:
           type: string
         _id:
           type: string
+        _version:
+          type: integer
+          format: int64
         status:
           type: integer
         error:
