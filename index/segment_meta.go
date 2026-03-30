@@ -7,4 +7,5 @@ type SegmentMeta struct {
 	Fields          []string `json:"fields"`
 	NumericDVFields []string `json:"numeric_dv_fields,omitempty"`
 	SortedDVFields  []string `json:"sorted_dv_fields,omitempty"`
+	PointFields     []string `json:"point_fields,omitempty"`
 }

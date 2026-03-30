@@ -33,6 +33,9 @@ type DiskSegment struct {
 	sortedDVOrd  map[string]*store.MMapIndexInput // field → .sdvo
 	sortedDVDict map[string]*store.MMapIndexInput // field → .sdvd
 	dvSkip       map[string]*store.MMapIndexInput // field → .ndvs or .sdvs
+
+	// Point fields
+	pointFields map[string]struct{}
 }
 
 // OpenDiskSegment opens a V2 segment from the given directory path.
@@ -60,6 +63,12 @@ func OpenDiskSegment(dirPath string, segName string) (*DiskSegment, error) {
 		sortedDVOrd:  make(map[string]*store.MMapIndexInput),
 		sortedDVDict: make(map[string]*store.MMapIndexInput),
 		dvSkip:       make(map[string]*store.MMapIndexInput),
+	}
+
+	// Populate pointFields from metadata
+	ds.pointFields = make(map[string]struct{}, len(meta.PointFields))
+	for _, f := range meta.PointFields {
+		ds.pointFields[f] = struct{}{}
 	}
 
 	// Mmap per-field files
@@ -150,6 +159,19 @@ func OpenDiskSegment(dirPath string, segName string) (*DiskSegment, error) {
 			return nil, fmt.Errorf("mmap sdvs for %s: %w", field, err)
 		}
 		ds.dvSkip[field] = sdvs
+	}
+
+	// Load field lengths for point fields (not in meta.Fields but written by segment writer)
+	for _, field := range meta.PointFields {
+		if _, exists := ds.fieldLens[field]; exists {
+			continue // already loaded as part of inverted index fields
+		}
+		flen, err := store.OpenMMap(fmt.Sprintf("%s/%s.%s.flen", dirPath, segName, field))
+		if err != nil {
+			ds.Close()
+			return nil, fmt.Errorf("mmap flen for point field %s: %w", field, err)
+		}
+		ds.fieldLens[field] = flen
 	}
 
 	ds.refCount.Store(1)
@@ -413,6 +435,10 @@ func (ds *DiskSegment) SortedDocValues(field string) SortedDocValues {
 		return nil
 	}
 	return sdv
+}
+
+func (ds *DiskSegment) PointFields() map[string]struct{} {
+	return ds.pointFields
 }
 
 // Compile-time check: DiskSegment implements SegmentReader.

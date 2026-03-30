@@ -43,6 +43,11 @@ func WriteSegmentV2(dir store.Directory, seg *InMemorySegment) ([]string, []stri
 	}
 	sort.Strings(meta.SortedDVFields)
 
+	for fieldName := range seg.pointFields {
+		meta.PointFields = append(meta.PointFields, fieldName)
+	}
+	sort.Strings(meta.PointFields)
+
 	metaFileName, err := writeSegmentMeta(dir, meta)
 	if err != nil {
 		return nil, nil, err
@@ -68,8 +73,15 @@ func WriteSegmentV2(dir store.Directory, seg *InMemorySegment) ([]string, []stri
 	}
 	files = append(files, seg.name+".stored")
 
-	// 4. Write field lengths (fixed-width)
-	for _, fieldName := range meta.Fields {
+	// 4. Write field lengths (fixed-width) for inverted index fields and point fields
+	flenFields := make(map[string]struct{})
+	for _, f := range meta.Fields {
+		flenFields[f] = struct{}{}
+	}
+	for _, f := range meta.PointFields {
+		flenFields[f] = struct{}{}
+	}
+	for fieldName := range flenFields {
 		lengths := seg.fieldLengths[fieldName]
 		if err := writeFieldLengthsV2(dir, seg.name, fieldName, lengths, seg.docCount); err != nil {
 			return nil, nil, err
