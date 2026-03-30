@@ -226,9 +226,10 @@ func (h *Handler) IndexDocumentPut(_ context.Context, request api.IndexDocumentP
 	}
 
 	return api.IndexDocumentPut201JSONResponse{
-		UnderscoreId:    resp.ID,
-		UnderscoreIndex: resp.Index,
-		Result:          resp.Result,
+		UnderscoreId:      resp.ID,
+		UnderscoreIndex:   resp.Index,
+		UnderscoreVersion: resp.Version,
+		Result:            resp.Result,
 	}, nil
 }
 
@@ -253,9 +254,10 @@ func (h *Handler) IndexDocumentPost(_ context.Context, request api.IndexDocument
 	}
 
 	return api.IndexDocumentPost201JSONResponse{
-		UnderscoreId:    resp.ID,
-		UnderscoreIndex: resp.Index,
-		Result:          resp.Result,
+		UnderscoreId:      resp.ID,
+		UnderscoreIndex:   resp.Index,
+		UnderscoreVersion: resp.Version,
+		Result:            resp.Result,
 	}, nil
 }
 
@@ -299,10 +301,11 @@ func (h *Handler) GetDocument(_ context.Context, request api.GetDocumentRequestO
 	}
 
 	return api.GetDocument200JSONResponse{
-		UnderscoreId:     resp.ID,
-		UnderscoreIndex:  resp.Index,
-		Found:            true,
-		UnderscoreSource: source,
+		UnderscoreId:      resp.ID,
+		UnderscoreIndex:   resp.Index,
+		UnderscoreVersion: resp.Version,
+		Found:             true,
+		UnderscoreSource:  source,
 	}, nil
 }
 
@@ -330,16 +333,18 @@ func (h *Handler) DeleteDocument(_ context.Context, request api.DeleteDocumentRe
 
 	if resp.Result == "not_found" {
 		return api.DeleteDocument404JSONResponse{
-			UnderscoreId:    resp.ID,
-			UnderscoreIndex: resp.Index,
-			Result:          resp.Result,
+			UnderscoreId:      resp.ID,
+			UnderscoreIndex:   resp.Index,
+			UnderscoreVersion: resp.Version,
+			Result:            resp.Result,
 		}, nil
 	}
 
 	return api.DeleteDocument200JSONResponse{
-		UnderscoreId:    resp.ID,
-		UnderscoreIndex: resp.Index,
-		Result:          resp.Result,
+		UnderscoreId:      resp.ID,
+		UnderscoreIndex:   resp.Index,
+		UnderscoreVersion: resp.Version,
+		Result:            resp.Result,
 	}, nil
 }
 
@@ -391,6 +396,11 @@ func buildSearchRequest(index string, body *api.SearchRequest, paramSize *int) a
 		if body.Size != nil {
 			req.Size = *body.Size
 		}
+		if body.Aggs != nil {
+			req.AggsJSON = *body.Aggs
+		} else if body.Aggregations != nil {
+			req.AggsJSON = *body.Aggregations
+		}
 	}
 
 	// Query param Size overrides body Size
@@ -421,7 +431,7 @@ func convertSearchResponse(resp action.SearchResponse) api.SearchResponse {
 
 	maxScore := float32(resp.Hits.MaxScore)
 
-	return api.SearchResponse{
+	result := api.SearchResponse{
 		Took: int(resp.Took),
 		Hits: api.SearchHits{
 			Total: api.SearchTotal{
@@ -432,6 +442,12 @@ func convertSearchResponse(resp action.SearchResponse) api.SearchResponse {
 			Hits:     hits,
 		},
 	}
+
+	if resp.Aggregations != nil {
+		result.Aggregations = &resp.Aggregations
+	}
+
+	return result
 }
 
 // Bulk handles bulk operations without an index scope.
@@ -479,9 +495,10 @@ func convertBulkResponse(resp action.BulkResponse) api.BulkResponse {
 	items := make([]api.BulkItemResponse, 0, len(resp.Items))
 	for _, item := range resp.Items {
 		result := api.BulkItemResult{
-			UnderscoreId:    item.ID,
-			UnderscoreIndex: item.Index,
-			Status:          item.Status,
+			UnderscoreId:      item.ID,
+			UnderscoreIndex:   item.Index,
+			UnderscoreVersion: item.Version,
+			Status:            item.Status,
 		}
 		if item.Error != nil {
 			result.Error = &api.ErrorDetail{

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	"gosearch/search"
 	"gosearch/server/cluster"
 	"gosearch/server/index"
 )
@@ -22,11 +21,12 @@ type BulkRequest struct {
 }
 
 type BulkItemResponse struct {
-	Action string       `json:"action"`
-	Index  string       `json:"_index"`
-	ID     string       `json:"_id"`
-	Status int          `json:"status"`
-	Error  *ErrorDetail `json:"error,omitempty"`
+	Action  string       `json:"action"`
+	Index   string       `json:"_index"`
+	ID      string       `json:"_id"`
+	Version int64        `json:"_version"`
+	Status  int          `json:"status"`
+	Error   *ErrorDetail `json:"error,omitempty"`
 }
 
 type ErrorDetail struct {
@@ -124,7 +124,7 @@ func (a *TransportBulkAction) Execute(req BulkRequest) (BulkResponse, error) {
 				ID:     bi.item.ID,
 			}
 
-			err := a.executeItemOnShard(shard, bi.item)
+			version, err := a.executeItemOnShard(shard, bi.item)
 			if err != nil {
 				hasErrors = true
 				resp.Status = errorStatusCode(err)
@@ -133,6 +133,7 @@ func (a *TransportBulkAction) Execute(req BulkRequest) (BulkResponse, error) {
 					Reason: err.Error(),
 				}
 			} else {
+				resp.Version = version
 				switch bi.item.Action {
 				case "index", "create":
 					resp.Status = 201
@@ -153,32 +154,34 @@ func (a *TransportBulkAction) Execute(req BulkRequest) (BulkResponse, error) {
 }
 
 // executeItemOnShard runs a single bulk item against the given shard.
-func (a *TransportBulkAction) executeItemOnShard(shard *index.IndexShard, item BulkItem) error {
+func (a *TransportBulkAction) executeItemOnShard(shard *index.IndexShard, item BulkItem) (int64, error) {
 	switch item.Action {
 	case "create":
-		if docExists(shard, item.ID) {
-			return &VersionConflictError{ID: item.ID, Index: item.Index}
+		// For create, check if doc already exists via the shard's Get (real-time).
+		result := shard.Get(item.ID)
+		if result.Found {
+			return 0, &VersionConflictError{ID: item.ID, Index: item.Index}
 		}
-		return shard.Index(item.ID, item.Source)
+		r, err := shard.Index(item.ID, item.Source)
+		if err != nil {
+			return 0, err
+		}
+		return r.Version, nil
 	case "index":
-		return shard.Index(item.ID, item.Source)
+		r, err := shard.Index(item.ID, item.Source)
+		if err != nil {
+			return 0, err
+		}
+		return r.Version, nil
 	case "delete":
-		return shard.Delete(item.ID)
+		r, err := shard.Delete(item.ID)
+		if err != nil {
+			return 0, err
+		}
+		return r.Version, nil
 	default:
-		return fmt.Errorf("unknown bulk action [%s]", item.Action)
+		return 0, fmt.Errorf("unknown bulk action [%s]", item.Action)
 	}
-}
-
-// docExists checks whether a document with the given ID exists in the shard.
-func docExists(shard *index.IndexShard, id string) bool {
-	searcher := shard.Searcher()
-	if searcher == nil {
-		return false
-	}
-	query := search.NewTermQuery("_id", id)
-	collector := search.NewTopKCollector(1)
-	results := searcher.Search(query, collector)
-	return len(results) > 0
 }
 
 // VersionConflictError is returned when a create operation targets an existing document.

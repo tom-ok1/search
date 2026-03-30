@@ -60,10 +60,11 @@ type BulkItemResponse map[string]BulkItemResult
 
 // BulkItemResult defines model for BulkItemResult.
 type BulkItemResult struct {
-	UnderscoreId    string       `json:"_id"`
-	UnderscoreIndex string       `json:"_index"`
-	Error           *ErrorDetail `json:"error,omitempty"`
-	Status          int          `json:"status"`
+	UnderscoreId      string       `json:"_id"`
+	UnderscoreIndex   string       `json:"_index"`
+	UnderscoreVersion int64        `json:"_version"`
+	Error             *ErrorDetail `json:"error,omitempty"`
+	Status            int          `json:"status"`
 }
 
 // BulkResponse defines model for BulkResponse.
@@ -87,9 +88,10 @@ type CreateIndexResponse struct {
 
 // DeleteDocumentResponse defines model for DeleteDocumentResponse.
 type DeleteDocumentResponse struct {
-	UnderscoreId    string `json:"_id"`
-	UnderscoreIndex string `json:"_index"`
-	Result          string `json:"result"`
+	UnderscoreId      string `json:"_id"`
+	UnderscoreIndex   string `json:"_index"`
+	UnderscoreVersion int64  `json:"_version"`
+	Result            string `json:"result"`
 }
 
 // DocumentBody defines model for DocumentBody.
@@ -112,10 +114,11 @@ type FieldType string
 
 // GetDocumentResponse defines model for GetDocumentResponse.
 type GetDocumentResponse struct {
-	UnderscoreId     string                  `json:"_id"`
-	UnderscoreIndex  string                  `json:"_index"`
-	UnderscoreSource *map[string]interface{} `json:"_source,omitempty"`
-	Found            bool                    `json:"found"`
+	UnderscoreId      string                  `json:"_id"`
+	UnderscoreIndex   string                  `json:"_index"`
+	UnderscoreSource  *map[string]interface{} `json:"_source,omitempty"`
+	UnderscoreVersion int64                   `json:"_version"`
+	Found             bool                    `json:"found"`
 }
 
 // GetIndexResponse defines model for GetIndexResponse.
@@ -123,9 +126,10 @@ type GetIndexResponse map[string]IndexMetadata
 
 // IndexDocumentResponse defines model for IndexDocumentResponse.
 type IndexDocumentResponse struct {
-	UnderscoreId    string `json:"_id"`
-	UnderscoreIndex string `json:"_index"`
-	Result          string `json:"result"`
+	UnderscoreId      string `json:"_id"`
+	UnderscoreIndex   string `json:"_index"`
+	UnderscoreVersion int64  `json:"_version"`
+	Result            string `json:"result"`
 }
 
 // IndexMetadata defines model for IndexMetadata.
@@ -170,14 +174,17 @@ type SearchHits struct {
 
 // SearchRequest defines model for SearchRequest.
 type SearchRequest struct {
-	Query *map[string]interface{} `json:"query,omitempty"`
-	Size  *int                    `json:"size,omitempty"`
+	Aggregations *map[string]interface{} `json:"aggregations,omitempty"`
+	Aggs         *map[string]interface{} `json:"aggs,omitempty"`
+	Query        *map[string]interface{} `json:"query,omitempty"`
+	Size         *int                    `json:"size,omitempty"`
 }
 
 // SearchResponse defines model for SearchResponse.
 type SearchResponse struct {
-	Hits SearchHits `json:"hits"`
-	Took int        `json:"took"`
+	Aggregations *map[string]interface{} `json:"aggregations,omitempty"`
+	Hits         SearchHits              `json:"hits"`
+	Took         int                     `json:"took"`
 }
 
 // SearchTotal defines model for SearchTotal.
@@ -1657,32 +1664,33 @@ func (sh *strictHandler) SearchPost(w http.ResponseWriter, r *http.Request, inde
 // Base64 encoded, gzipped, json marshaled Swagger object
 var swaggerSpec = []string{
 
-	"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",
-	"Lwx9YWgTQ+31LcuyfwIAAP//dV4S4nAqAAA=",
+	"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",
+	"/5u5HKYHLAAA",
 }
 
 // GetSwagger returns the content of the embedded swagger specification file

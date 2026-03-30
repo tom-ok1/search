@@ -15,9 +15,10 @@ type IndexDocumentRequest struct {
 }
 
 type IndexDocumentResponse struct {
-	Index  string
-	ID     string
-	Result string // "created"
+	Index   string
+	ID      string
+	Version int64
+	Result  string // "created" or "updated"
 }
 
 type TransportIndexAction struct {
@@ -52,13 +53,20 @@ func (a *TransportIndexAction) Execute(req IndexDocumentRequest) (IndexDocumentR
 	shardID := index.RouteShard(req.ID, svc.NumShards())
 	shard := svc.Shard(shardID)
 
-	if err := shard.Index(req.ID, req.Source); err != nil {
+	result, err := shard.Index(req.ID, req.Source)
+	if err != nil {
 		return IndexDocumentResponse{}, fmt.Errorf("index document: %w", err)
 	}
 
+	resultStr := "updated"
+	if result.Created {
+		resultStr = "created"
+	}
+
 	return IndexDocumentResponse{
-		Index:  req.Index,
-		ID:     req.ID,
-		Result: "created",
+		Index:   req.Index,
+		ID:      req.ID,
+		Version: result.Version,
+		Result:  resultStr,
 	}, nil
 }

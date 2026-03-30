@@ -7,6 +7,7 @@ import (
 
 	"gosearch/analysis"
 	"gosearch/search"
+	"gosearch/server/aggregation"
 	"gosearch/server/cluster"
 	"gosearch/server/index"
 )
@@ -14,12 +15,14 @@ import (
 type SearchRequest struct {
 	Index     string
 	QueryJSON map[string]any
+	AggsJSON  map[string]any
 	Size      int
 }
 
 type SearchResponse struct {
-	Took int64
-	Hits SearchHits
+	Took         int64
+	Hits         SearchHits
+	Aggregations map[string]any
 }
 
 type SearchHits struct {
@@ -82,6 +85,15 @@ func (a *TransportSearchAction) Execute(req SearchRequest) (SearchResponse, erro
 		return SearchResponse{}, &QueryParsingError{Reason: err.Error()}
 	}
 
+	// Parse aggregations
+	var aggs []aggregation.Aggregator
+	if req.AggsJSON != nil {
+		aggs, err = aggregation.ParseAggregations(req.AggsJSON, svc.Mapping())
+		if err != nil {
+			return SearchResponse{}, &QueryParsingError{Reason: err.Error()}
+		}
+	}
+
 	size := req.Size
 	if size <= 0 {
 		size = 10
@@ -105,6 +117,58 @@ func (a *TransportSearchAction) Execute(req SearchRequest) (SearchResponse, erro
 		totalHits += collector.TotalHits()
 		if len(results) > 0 {
 			shardResults = append(shardResults, results)
+		}
+	}
+
+	// Aggregation phase: run aggregators on matched docs
+	if len(aggs) > 0 {
+		for i := range numShards {
+			shard := svc.Shard(i)
+			searcher := shard.Searcher()
+			if searcher == nil {
+				continue
+			}
+			reader := searcher.Reader()
+			for _, leaf := range reader.Leaves() {
+				leafAggs := make([]aggregation.LeafAggregator, len(aggs))
+				for j, agg := range aggs {
+					leafAggs[j] = agg.GetLeafAggregator(leaf)
+				}
+				weight := query.CreateWeight(searcher, search.ScoreModeNone)
+				scorer := weight.Scorer(leaf)
+				if scorer == nil {
+					continue
+				}
+				liveDocs := leaf.Segment.LiveDocs()
+				iter := scorer.Iterator()
+				doc := iter.NextDoc()
+				for doc != search.NoMoreDocs {
+					if liveDocs == nil || !liveDocs.Get(doc) {
+						for _, la := range leafAggs {
+							la.Collect(doc)
+						}
+					}
+					doc = iter.NextDoc()
+				}
+			}
+		}
+	}
+
+	// Build aggregation results
+	var aggResults map[string]any
+	if len(aggs) > 0 {
+		aggResults = make(map[string]any, len(aggs))
+		for _, agg := range aggs {
+			result := agg.BuildResult()
+			if result.Buckets != nil {
+				buckets := make([]map[string]any, len(result.Buckets))
+				for i, b := range result.Buckets {
+					buckets[i] = map[string]any{"key": b.Key, "doc_count": b.DocCount}
+				}
+				aggResults[result.Name] = map[string]any{"buckets": buckets}
+			} else {
+				aggResults[result.Name] = map[string]any{"value": result.Value}
+			}
 		}
 	}
 
@@ -139,6 +203,7 @@ func (a *TransportSearchAction) Execute(req SearchRequest) (SearchResponse, erro
 			MaxScore: maxScore,
 			Hits:     hits,
 		},
+		Aggregations: aggResults,
 	}, nil
 }
 

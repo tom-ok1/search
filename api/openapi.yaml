@@ -422,12 +422,16 @@ components:
       required:
         - _index
         - _id
+        - _version
         - result
       properties:
         _index:
           type: string
         _id:
           type: string
+        _version:
+          type: integer
+          format: int64
         result:
           type: string
 
@@ -436,12 +440,16 @@ components:
       required:
         - _index
         - _id
+        - _version
         - found
       properties:
         _index:
           type: string
         _id:
           type: string
+        _version:
+          type: integer
+          format: int64
         found:
           type: boolean
         _source:
@@ -453,12 +461,16 @@ components:
       required:
         - _index
         - _id
+        - _version
         - result
       properties:
         _index:
           type: string
         _id:
           type: string
+        _version:
+          type: integer
+          format: int64
         result:
           type: string
 
@@ -471,6 +483,12 @@ components:
           additionalProperties: true
         size:
           type: integer
+        aggs:
+          type: object
+          additionalProperties: true
+        aggregations:
+          type: object
+          additionalProperties: true
 
     SearchResponse:
       type: object
@@ -482,6 +500,9 @@ components:
           type: integer
         hits:
           $ref: "#/components/schemas/SearchHits"
+        aggregations:
+          type: object
+          additionalProperties: true
 
     SearchHits:
       type: object
@@ -554,12 +575,16 @@ components:
       required:
         - _index
         - _id
+        - _version
         - status
       properties:
         _index:
           type: string
         _id:
           type: string
+        _version:
+          type: integer
+          format: int64
         status:
           type: integer
         error:
