@@ -1,0 +1,610 @@
+openapi: "3.0.3"
+info:
+  title: GoSearch API
+  description: Elasticsearch-compatible search engine API
+  version: "0.1.0"
+
+paths:
+  /{index}:
+    put:
+      operationId: createIndex
+      summary: Create an index
+      parameters:
+        - $ref: "#/components/parameters/IndexName"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateIndexRequest"
+      responses:
+        "200":
+          description: Index created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateIndexResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    get:
+      operationId: getIndex
+      summary: Get index metadata
+      parameters:
+        - $ref: "#/components/parameters/IndexName"
+      responses:
+        "200":
+          description: Index metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GetIndexResponse"
+        "404":
+          description: Index not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    delete:
+      operationId: deleteIndex
+      summary: Delete an index
+      parameters:
+        - $ref: "#/components/parameters/IndexName"
+      responses:
+        "200":
+          description: Index deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AcknowledgedResponse"
+        "404":
+          description: Index not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /{index}/_doc/{id}:
+    put:
+      operationId: indexDocumentPut
+      summary: Index a document (PUT)
+      parameters:
+        - $ref: "#/components/parameters/IndexName"
+        - $ref: "#/components/parameters/DocId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DocumentBody"
+      responses:
+        "201":
+          description: Document created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IndexDocumentResponse"
+        "400":
+          description: Mapper parsing error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Index not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    post:
+      operationId: indexDocumentPost
+      summary: Index a document (POST)
+      parameters:
+        - $ref: "#/components/parameters/IndexName"
+        - $ref: "#/components/parameters/DocId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DocumentBody"
+      responses:
+        "201":
+          description: Document created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IndexDocumentResponse"
+        "400":
+          description: Mapper parsing error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Index not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    get:
+      operationId: getDocument
+      summary: Get a document
+      parameters:
+        - $ref: "#/components/parameters/IndexName"
+        - $ref: "#/components/parameters/DocId"
+      responses:
+        "200":
+          description: Document found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GetDocumentResponse"
+        "404":
+          description: Document not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GetDocumentResponse"
+    delete:
+      operationId: deleteDocument
+      summary: Delete a document
+      parameters:
+        - $ref: "#/components/parameters/IndexName"
+        - $ref: "#/components/parameters/DocId"
+      responses:
+        "200":
+          description: Document deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeleteDocumentResponse"
+        "404":
+          description: Document not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeleteDocumentResponse"
+
+  /{index}/_search:
+    get:
+      operationId: searchGet
+      summary: Search documents (GET)
+      parameters:
+        - $ref: "#/components/parameters/IndexName"
+        - $ref: "#/components/parameters/SizeParam"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SearchRequest"
+      responses:
+        "200":
+          description: Search results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Index not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    post:
+      operationId: searchPost
+      summary: Search documents (POST)
+      parameters:
+        - $ref: "#/components/parameters/IndexName"
+        - $ref: "#/components/parameters/SizeParam"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SearchRequest"
+      responses:
+        "200":
+          description: Search results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Index not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /_bulk:
+    post:
+      operationId: bulk
+      summary: Bulk operations
+      requestBody:
+        required: true
+        content:
+          application/x-ndjson:
+            schema:
+              type: string
+      responses:
+        "200":
+          description: Bulk response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BulkResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /{index}/_bulk:
+    post:
+      operationId: bulkWithIndex
+      summary: Bulk operations with index scope
+      parameters:
+        - $ref: "#/components/parameters/IndexName"
+      requestBody:
+        required: true
+        content:
+          application/x-ndjson:
+            schema:
+              type: string
+      responses:
+        "200":
+          description: Bulk response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BulkResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /{index}/_refresh:
+    post:
+      operationId: refresh
+      summary: Refresh an index
+      parameters:
+        - $ref: "#/components/parameters/IndexName"
+      responses:
+        "200":
+          description: Refresh successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RefreshResponse"
+        "404":
+          description: Index not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+components:
+  parameters:
+    IndexName:
+      name: index
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: ^[a-z0-9][a-z0-9._-]*$
+    DocId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+    SizeParam:
+      name: size
+      in: query
+      required: false
+      schema:
+        type: integer
+        default: 10
+
+  schemas:
+    # --- Field type enum ---
+    FieldType:
+      type: string
+      enum:
+        - text
+        - keyword
+        - long
+        - double
+        - boolean
+
+    # --- Mappings ---
+    PropertyDefinition:
+      type: object
+      required:
+        - type
+      properties:
+        type:
+          $ref: "#/components/schemas/FieldType"
+        analyzer:
+          type: string
+
+    Properties:
+      type: object
+      additionalProperties:
+        $ref: "#/components/schemas/PropertyDefinition"
+
+    Mappings:
+      type: object
+      properties:
+        properties:
+          $ref: "#/components/schemas/Properties"
+
+    # --- Settings ---
+    Settings:
+      type: object
+      properties:
+        number_of_shards:
+          type: integer
+        number_of_replicas:
+          type: integer
+
+    # --- Index requests/responses ---
+    CreateIndexRequest:
+      type: object
+      properties:
+        settings:
+          $ref: "#/components/schemas/Settings"
+        mappings:
+          $ref: "#/components/schemas/Mappings"
+
+    CreateIndexResponse:
+      type: object
+      required:
+        - acknowledged
+        - index
+      properties:
+        acknowledged:
+          type: boolean
+        index:
+          type: string
+
+    GetIndexResponse:
+      type: object
+      additionalProperties:
+        $ref: "#/components/schemas/IndexMetadata"
+
+    IndexMetadata:
+      type: object
+      properties:
+        settings:
+          $ref: "#/components/schemas/Settings"
+        mappings:
+          $ref: "#/components/schemas/Mappings"
+
+    AcknowledgedResponse:
+      type: object
+      required:
+        - acknowledged
+      properties:
+        acknowledged:
+          type: boolean
+
+    # --- Document ---
+    DocumentBody:
+      type: object
+      additionalProperties: true
+
+    IndexDocumentResponse:
+      type: object
+      required:
+        - _index
+        - _id
+        - result
+      properties:
+        _index:
+          type: string
+        _id:
+          type: string
+        result:
+          type: string
+
+    GetDocumentResponse:
+      type: object
+      required:
+        - _index
+        - _id
+        - found
+      properties:
+        _index:
+          type: string
+        _id:
+          type: string
+        found:
+          type: boolean
+        _source:
+          type: object
+          additionalProperties: true
+
+    DeleteDocumentResponse:
+      type: object
+      required:
+        - _index
+        - _id
+        - result
+      properties:
+        _index:
+          type: string
+        _id:
+          type: string
+        result:
+          type: string
+
+    # --- Search ---
+    SearchRequest:
+      type: object
+      properties:
+        query:
+          type: object
+          additionalProperties: true
+        size:
+          type: integer
+
+    SearchResponse:
+      type: object
+      required:
+        - took
+        - hits
+      properties:
+        took:
+          type: integer
+        hits:
+          $ref: "#/components/schemas/SearchHits"
+
+    SearchHits:
+      type: object
+      required:
+        - total
+        - hits
+      properties:
+        total:
+          $ref: "#/components/schemas/SearchTotal"
+        max_score:
+          type: number
+          nullable: true
+        hits:
+          type: array
+          items:
+            $ref: "#/components/schemas/SearchHit"
+
+    SearchTotal:
+      type: object
+      required:
+        - value
+        - relation
+      properties:
+        value:
+          type: integer
+        relation:
+          type: string
+
+    SearchHit:
+      type: object
+      required:
+        - _index
+        - _id
+        - _score
+      properties:
+        _index:
+          type: string
+        _id:
+          type: string
+        _score:
+          type: number
+        _source:
+          type: object
+          additionalProperties: true
+
+    # --- Bulk ---
+    BulkResponse:
+      type: object
+      required:
+        - took
+        - errors
+        - items
+      properties:
+        took:
+          type: integer
+        errors:
+          type: boolean
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/BulkItemResponse"
+
+    BulkItemResponse:
+      type: object
+      additionalProperties:
+        $ref: "#/components/schemas/BulkItemResult"
+
+    BulkItemResult:
+      type: object
+      required:
+        - _index
+        - _id
+        - status
+      properties:
+        _index:
+          type: string
+        _id:
+          type: string
+        status:
+          type: integer
+        error:
+          $ref: "#/components/schemas/ErrorDetail"
+
+    # --- Refresh ---
+    RefreshResponse:
+      type: object
+      required:
+        - _shards
+      properties:
+        _shards:
+          $ref: "#/components/schemas/ShardStats"
+
+    ShardStats:
+      type: object
+      required:
+        - total
+        - successful
+        - failed
+      properties:
+        total:
+          type: integer
+        successful:
+          type: integer
+        failed:
+          type: integer
+
+    # --- Error ---
+    ErrorResponse:
+      type: object
+      required:
+        - error
+        - status
+      properties:
+        error:
+          $ref: "#/components/schemas/ErrorDetail"
+        status:
+          type: integer
+
+    ErrorDetail:
+      type: object
+      required:
+        - type
+        - reason
+      properties:
+        type:
+          type: string
+        reason:
+          type: string
