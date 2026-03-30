@@ -29,7 +29,7 @@ func TestEngine_IndexAndRefreshAndSearch(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	eng, err := index.NewEngine(dir, newTestFieldAnalyzers())
+	eng, err := index.NewEngine(dir, newTestFieldAnalyzers(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +40,7 @@ func TestEngine_IndexAndRefreshAndSearch(t *testing.T) {
 	doc.AddField("_id", "1", document.FieldTypeKeyword)
 	doc.AddField("title", "hello world", document.FieldTypeText)
 
-	if err := eng.Index(doc); err != nil {
+	if _, err := eng.Index("1", doc, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -71,7 +71,7 @@ func TestEngine_Delete(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	eng, err := index.NewEngine(dir, newTestFieldAnalyzers())
+	eng, err := index.NewEngine(dir, newTestFieldAnalyzers(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +80,7 @@ func TestEngine_Delete(t *testing.T) {
 	doc := document.NewDocument()
 	doc.AddField("_id", "1", document.FieldTypeKeyword)
 	doc.AddField("title", "hello world", document.FieldTypeText)
-	if err := eng.Index(doc); err != nil {
+	if _, err := eng.Index("1", doc, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -92,7 +92,7 @@ func TestEngine_Delete(t *testing.T) {
 	}
 
 	// Delete and refresh
-	if err := eng.Delete("_id", "1"); err != nil {
+	if _, err := eng.Delete("1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := eng.Refresh(); err != nil {
@@ -115,14 +115,14 @@ func TestIndexShard_IndexAndSearch(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	shard, err := index.NewIndexShard(0, "test-index", dir, m, newTestRegistry())
+	shard, err := index.NewIndexShard(0, "test-index", dir, m, newTestRegistry(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer shard.Close()
 
 	source := []byte(`{"title": "hello world"}`)
-	if err := shard.Index("doc1", source); err != nil {
+	if _, err := shard.Index("doc1", source); err != nil {
 		t.Fatal(err)
 	}
 
@@ -158,21 +158,21 @@ func TestIndexShard_Delete(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	shard, err := index.NewIndexShard(0, "test-index", dir, m, newTestRegistry())
+	shard, err := index.NewIndexShard(0, "test-index", dir, m, newTestRegistry(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer shard.Close()
 
 	source := []byte(`{"title": "hello world"}`)
-	if err := shard.Index("doc1", source); err != nil {
+	if _, err := shard.Index("doc1", source); err != nil {
 		t.Fatal(err)
 	}
 	if err := shard.Refresh(); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := shard.Delete("doc1"); err != nil {
+	if _, err := shard.Delete("doc1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := shard.Refresh(); err != nil {
@@ -216,7 +216,7 @@ func TestIndexService_CreateAndAccess(t *testing.T) {
 	}
 
 	// Index a doc through the shard
-	if err := shard.Index("1", []byte(`{"title": "hello"}`)); err != nil {
+	if _, err := shard.Index("1", []byte(`{"title": "hello"}`)); err != nil {
 		t.Fatal(err)
 	}
 	if err := shard.Refresh(); err != nil {
@@ -243,7 +243,7 @@ func TestEngine_IndexAndSearchJapanese(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	eng, err := index.NewEngine(dir, newTestFieldAnalyzers())
+	eng, err := index.NewEngine(dir, newTestFieldAnalyzers(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,12 +252,12 @@ func TestEngine_IndexAndSearchJapanese(t *testing.T) {
 	doc0 := document.NewDocument()
 	doc0.AddField("_id", "1", document.FieldTypeKeyword)
 	doc0.AddField("title", "東京タワー スカイツリー", document.FieldTypeText)
-	eng.Index(doc0)
+	eng.Index("1", doc0, nil)
 
 	doc1 := document.NewDocument()
 	doc1.AddField("_id", "2", document.FieldTypeKeyword)
 	doc1.AddField("title", "大阪城 通天閣", document.FieldTypeText)
-	eng.Index(doc1)
+	eng.Index("2", doc1, nil)
 
 	if err := eng.Refresh(); err != nil {
 		t.Fatal(err)
@@ -281,7 +281,7 @@ func TestEngine_DeleteJapanese(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	eng, err := index.NewEngine(dir, newTestFieldAnalyzers())
+	eng, err := index.NewEngine(dir, newTestFieldAnalyzers(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -290,10 +290,10 @@ func TestEngine_DeleteJapanese(t *testing.T) {
 	doc := document.NewDocument()
 	doc.AddField("_id", "東京", document.FieldTypeKeyword)
 	doc.AddField("title", "東京タワー", document.FieldTypeText)
-	eng.Index(doc)
+	eng.Index("東京", doc, nil)
 	eng.Refresh()
 
-	if err := eng.Delete("_id", "東京"); err != nil {
+	if _, err := eng.Delete("東京"); err != nil {
 		t.Fatal(err)
 	}
 	eng.Refresh()
@@ -316,7 +316,7 @@ func TestIndexShard_IndexAndSearchJapanese(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	shard, err := index.NewIndexShard(0, "test-index", dir, m, newTestRegistry())
+	shard, err := index.NewIndexShard(0, "test-index", dir, m, newTestRegistry(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -367,7 +367,7 @@ func TestEngine_IndexAndSearchSpecialChars(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	eng, err := index.NewEngine(dir, newTestFieldAnalyzers())
+	eng, err := index.NewEngine(dir, newTestFieldAnalyzers(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -376,17 +376,17 @@ func TestEngine_IndexAndSearchSpecialChars(t *testing.T) {
 	doc0 := document.NewDocument()
 	doc0.AddField("_id", "1", document.FieldTypeKeyword)
 	doc0.AddField("title", "café résumé", document.FieldTypeText)
-	eng.Index(doc0)
+	eng.Index("1", doc0, nil)
 
 	doc1 := document.NewDocument()
 	doc1.AddField("_id", "2", document.FieldTypeKeyword)
 	doc1.AddField("title", "hello 🔍 world", document.FieldTypeText)
-	eng.Index(doc1)
+	eng.Index("2", doc1, nil)
 
 	doc2 := document.NewDocument()
 	doc2.AddField("_id", "3", document.FieldTypeKeyword)
 	doc2.AddField("title", "𠮷野家 テスト", document.FieldTypeText)
-	eng.Index(doc2)
+	eng.Index("3", doc2, nil)
 
 	if err := eng.Refresh(); err != nil {
 		t.Fatal(err)
@@ -418,7 +418,7 @@ func TestEngine_DeleteSpecialCharID(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	eng, err := index.NewEngine(dir, newTestFieldAnalyzers())
+	eng, err := index.NewEngine(dir, newTestFieldAnalyzers(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -427,14 +427,14 @@ func TestEngine_DeleteSpecialCharID(t *testing.T) {
 	doc := document.NewDocument()
 	doc.AddField("_id", "user@example.com", document.FieldTypeKeyword)
 	doc.AddField("title", "test doc", document.FieldTypeText)
-	eng.Index(doc)
+	eng.Index("user@example.com", doc, nil)
 	eng.Refresh()
 
 	if eng.Searcher().Reader().LiveDocCount() != 1 {
 		t.Fatal("expected 1 doc")
 	}
 
-	eng.Delete("_id", "user@example.com")
+	eng.Delete("user@example.com")
 	eng.Refresh()
 
 	if eng.Searcher().Reader().LiveDocCount() != 0 {
@@ -455,7 +455,7 @@ func TestIndexShard_SpecialCharsRoundtrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	shard, err := index.NewIndexShard(0, "test-index", dir, m, newTestRegistry())
+	shard, err := index.NewIndexShard(0, "test-index", dir, m, newTestRegistry(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -528,7 +528,7 @@ func TestIntegration_IndexLifecycle(t *testing.T) {
 		{"3", `{"name": "Blue T-Shirt", "category": "clothing"}`},
 	}
 	for _, d := range docs {
-		if err := shard.Index(d.id, []byte(d.source)); err != nil {
+		if _, err := shard.Index(d.id, []byte(d.source)); err != nil {
 			t.Fatalf("index doc %s: %v", d.id, err)
 		}
 	}
@@ -561,7 +561,7 @@ func TestIntegration_IndexLifecycle(t *testing.T) {
 	}
 
 	// Delete one doc and verify
-	if err := shard.Delete("2"); err != nil {
+	if _, err := shard.Delete("2"); err != nil {
 		t.Fatal(err)
 	}
 	if err := shard.Refresh(); err != nil {
@@ -574,7 +574,7 @@ func TestIntegration_IndexLifecycle(t *testing.T) {
 	}
 
 	// Re-index (update) existing doc
-	if err := shard.Index("1", []byte(`{"name": "Advanced Go", "category": "books"}`)); err != nil {
+	if _, err := shard.Index("1", []byte(`{"name": "Advanced Go", "category": "books"}`)); err != nil {
 		t.Fatal(err)
 	}
 	if err := shard.Refresh(); err != nil {

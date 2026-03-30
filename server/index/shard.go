@@ -2,6 +2,7 @@ package index
 
 import (
 	"fmt"
+	"path/filepath"
 
 	"gosearch/analysis"
 	"gosearch/search"
@@ -20,7 +21,8 @@ type IndexShard struct {
 
 // NewIndexShard creates a new IndexShard backed by the given directory.
 // It builds per-field analyzers from the mapping and registry.
-func NewIndexShard(shardID int, indexName string, dir store.Directory, m *mapping.MappingDefinition, registry *analysis.AnalyzerRegistry) (*IndexShard, error) {
+// dataPath is the shard's data directory used for the translog; if empty, no translog is used.
+func NewIndexShard(shardID int, indexName string, dir store.Directory, m *mapping.MappingDefinition, registry *analysis.AnalyzerRegistry, dataPath string) (*IndexShard, error) {
 	fa := analysis.NewFieldAnalyzers(registry.Get("standard"))
 	for fieldName, fm := range m.Properties {
 		if fm.Analyzer != "" {
@@ -32,39 +34,63 @@ func NewIndexShard(shardID int, indexName string, dir store.Directory, m *mappin
 		}
 	}
 
-	engine, err := NewEngine(dir, fa)
+	var translogPath string
+	if dataPath != "" {
+		translogPath = filepath.Join(dataPath, "translog")
+	}
+
+	engine, err := NewEngine(dir, fa, translogPath)
 	if err != nil {
 		return nil, err
 	}
 
-	return &IndexShard{
+	shard := &IndexShard{
 		shardID:   shardID,
 		indexName: indexName,
 		engine:    engine,
 		mapping:   m,
-	}, nil
+	}
+
+	// Recover uncommitted operations from the translog.
+	if err := engine.RecoverFromTranslog(
+		func(id string, source []byte) error {
+			doc, err := mapping.ParseDocument(id, source, m)
+			if err != nil {
+				return err
+			}
+			_, err = engine.Index(id, doc, source)
+			return err
+		},
+		func(id string) error {
+			_, err := engine.Delete(id)
+			return err
+		},
+	); err != nil {
+		engine.Close()
+		return nil, fmt.Errorf("recover from translog: %w", err)
+	}
+
+	return shard, nil
 }
 
 // Index parses the JSON source according to the mapping and indexes the document.
-func (s *IndexShard) Index(id string, source []byte) error {
+func (s *IndexShard) Index(id string, source []byte) (IndexResult, error) {
 	doc, err := mapping.ParseDocument(id, source, s.mapping)
 	if err != nil {
-		return err
+		return IndexResult{}, err
 	}
 
-	// Delete existing document with same ID first (update = delete + re-add).
-	// SeqNo ordering in the IndexWriter ensures the delete only affects
-	// documents added before it, not the newly added document.
-	if err := s.engine.Delete("_id", id); err != nil {
-		return err
-	}
-
-	return s.engine.Index(doc)
+	return s.engine.Index(id, doc, source)
 }
 
 // Delete removes a document by its _id.
-func (s *IndexShard) Delete(id string) error {
-	return s.engine.Delete("_id", id)
+func (s *IndexShard) Delete(id string) (DeleteResult, error) {
+	return s.engine.Delete(id)
+}
+
+// Get performs a real-time get for a document by its _id.
+func (s *IndexShard) Get(id string) GetResult {
+	return s.engine.Get(id)
 }
 
 // Refresh makes recently indexed documents visible to search.
