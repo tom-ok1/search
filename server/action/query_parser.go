@@ -90,7 +90,7 @@ func extractMatchParams(v any) (text string, analyzerOverride string, err error)
 	case string, float64, bool, json.Number:
 		return fmt.Sprintf("%v", val), "", nil
 	default:
-		return "", "", fmt.Errorf("field value must be a string, number, bool, or object with 'query'")
+		return "", "", fmt.Errorf("field value must be a string, number, bool, or object with 'query', got %T", v)
 	}
 }
 
@@ -213,10 +213,15 @@ func (p *QueryParser) parseMatchPhrase(value any) (search.Query, error) {
 	}
 
 	for field, v := range obj {
-		text := fmt.Sprintf("%v", v)
+		text, analyzerOverride, err := extractMatchParams(v)
+		if err != nil {
+			return nil, fmt.Errorf("match_phrase query field [%s]: %w", field, err)
+		}
 
 		analyzerName := "standard"
-		if fm, exists := p.mapping.Properties[field]; exists && fm.Analyzer != "" {
+		if analyzerOverride != "" {
+			analyzerName = analyzerOverride
+		} else if fm, exists := p.mapping.Properties[field]; exists && fm.Analyzer != "" {
 			analyzerName = fm.Analyzer
 		}
 

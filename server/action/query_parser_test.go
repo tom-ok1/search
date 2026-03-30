@@ -528,3 +528,41 @@ func TestQueryParser_MatchObjectFormWithAnalyzer(t *testing.T) {
 		t.Errorf("expected multiple ngram clauses, got %d", len(bq.Clauses))
 	}
 }
+
+func TestQueryParser_MatchPhraseObjectForm(t *testing.T) {
+	m := &mapping.MappingDefinition{
+		Properties: map[string]mapping.FieldMapping{
+			"title": {Type: mapping.FieldTypeText, Analyzer: "standard"},
+		},
+	}
+	registry := analysis.DefaultRegistry()
+	parser := NewQueryParser(m, registry)
+
+	queryJSON := map[string]any{
+		"match_phrase": map[string]any{
+			"title": map[string]any{
+				"query": "quick brown fox",
+			},
+		},
+	}
+
+	q, err := parser.ParseQuery(queryJSON)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	pq, ok := q.(*search.PhraseQuery)
+	if !ok {
+		t.Fatalf("expected *search.PhraseQuery, got %T", q)
+	}
+
+	wantTerms := []string{"quick", "brown", "fox"}
+	if len(pq.Terms) != len(wantTerms) {
+		t.Fatalf("terms = %v, want %v", pq.Terms, wantTerms)
+	}
+	for i, term := range pq.Terms {
+		if term != wantTerms[i] {
+			t.Errorf("term[%d] = %q, want %q", i, term, wantTerms[i])
+		}
+	}
+}
