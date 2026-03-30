@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"path/filepath"
+	"time"
 
 	"gosearch/analysis"
 	"gosearch/server/cluster"
@@ -17,6 +18,7 @@ type IndexService struct {
 	metadata *cluster.IndexMetadata
 	mapping  *mapping.MappingDefinition
 	shards   map[int]*IndexShard
+	stopCh   chan struct{}
 }
 
 // NewIndexService creates a new IndexService, initializing all shards.
@@ -45,11 +47,18 @@ func NewIndexService(meta *cluster.IndexMetadata, m *mapping.MappingDefinition, 
 		shards[i] = shard
 	}
 
-	return &IndexService{
+	svc := &IndexService{
 		metadata: meta,
 		mapping:  m,
 		shards:   shards,
-	}, nil
+		stopCh:   make(chan struct{}),
+	}
+
+	if meta.Settings.RefreshInterval > 0 {
+		go svc.scheduleRefresh(meta.Settings.RefreshInterval)
+	}
+
+	return svc, nil
 }
 
 // Shard returns the IndexShard with the given ID, or nil if not found.
@@ -69,6 +78,8 @@ func (is *IndexService) NumShards() int {
 
 // Close shuts down all shards in this index.
 func (is *IndexService) Close() error {
+	close(is.stopCh)
+
 	var firstErr error
 	for _, shard := range is.shards {
 		if err := shard.Close(); err != nil && firstErr == nil {
@@ -76,6 +87,24 @@ func (is *IndexService) Close() error {
 		}
 	}
 	return firstErr
+}
+
+// scheduleRefresh periodically refreshes all shards at the given interval.
+// It stops when stopCh is closed.
+func (is *IndexService) scheduleRefresh(interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-is.stopCh:
+			return
+		case <-ticker.C:
+			for _, shard := range is.shards {
+				shard.Refresh()
+			}
+		}
+	}
 }
 
 // RouteShard returns the shard ID for a given document ID using consistent hashing.
