@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"gosearch/fst"
+	"gosearch/index/bkd"
 	"gosearch/store"
 	"os"
 	"sync/atomic"
@@ -36,6 +37,7 @@ type DiskSegment struct {
 
 	// Point fields
 	pointFields map[string]struct{}
+	bkdReaders  map[string]*bkd.BKDReader
 }
 
 // OpenDiskSegment opens a V2 segment from the given directory path.
@@ -129,12 +131,15 @@ func OpenDiskSegment(dirPath string, segName string) (*DiskSegment, error) {
 		}
 		ds.numericDV[field] = ndv
 
-		ndvs, err := store.OpenMMap(fmt.Sprintf("%s/%s.%s.ndvs", dirPath, segName, field))
-		if err != nil {
-			ds.Close()
-			return nil, fmt.Errorf("mmap ndvs for %s: %w", field, err)
+		// Point fields use BKD tree instead of skip index
+		if _, isPoint := ds.pointFields[field]; !isPoint {
+			ndvs, err := store.OpenMMap(fmt.Sprintf("%s/%s.%s.ndvs", dirPath, segName, field))
+			if err != nil {
+				ds.Close()
+				return nil, fmt.Errorf("mmap ndvs for %s: %w", field, err)
+			}
+			ds.dvSkip[field] = ndvs
 		}
-		ds.dvSkip[field] = ndvs
 	}
 
 	// Mmap sorted doc values files
@@ -172,6 +177,17 @@ func OpenDiskSegment(dirPath string, segName string) (*DiskSegment, error) {
 			return nil, fmt.Errorf("mmap flen for point field %s: %w", field, err)
 		}
 		ds.fieldLens[field] = flen
+	}
+
+	// Open BKD readers for point fields
+	ds.bkdReaders = make(map[string]*bkd.BKDReader, len(meta.PointFields))
+	for _, field := range meta.PointFields {
+		reader, err := bkd.OpenBKDReaderFromPath(dirPath, segName, field)
+		if err != nil {
+			ds.Close()
+			return nil, fmt.Errorf("open bkd reader for %s: %w", field, err)
+		}
+		ds.bkdReaders[field] = reader
 	}
 
 	ds.refCount.Store(1)
@@ -216,6 +232,9 @@ func (ds *DiskSegment) Close() error {
 	}
 	for _, m := range ds.sortedDVDict {
 		m.Close()
+	}
+	for _, r := range ds.bkdReaders {
+		r.Close()
 	}
 	return nil
 }
@@ -435,6 +454,14 @@ func (ds *DiskSegment) SortedDocValues(field string) SortedDocValues {
 		return nil
 	}
 	return sdv
+}
+
+func (ds *DiskSegment) PointValues(field string) PointValues {
+	reader := ds.bkdReaders[field]
+	if reader == nil {
+		return nil
+	}
+	return &bkdPointValues{reader: reader}
 }
 
 func (ds *DiskSegment) PointFields() map[string]struct{} {

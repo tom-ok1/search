@@ -8,6 +8,7 @@ import (
 	"sort"
 
 	"gosearch/fst"
+	"gosearch/index/bkd"
 	"gosearch/store"
 )
 
@@ -97,10 +98,21 @@ func WriteSegmentV2(dir store.Directory, seg *InMemorySegment) ([]string, []stri
 		}
 		files = append(files, fmt.Sprintf("%s.%s.ndv", seg.name, fieldName))
 
-		if err := writeNumericDocValuesSkipIndexFromNDV(dir, seg.name, fieldName, len(values)); err != nil {
-			return nil, nil, err
+		if _, isPoint := seg.pointFields[fieldName]; isPoint {
+			w := bkd.NewBKDWriter()
+			for docID, val := range values {
+				w.Add(docID, val)
+			}
+			if err := w.Finish(dir, seg.name, fieldName); err != nil {
+				return nil, nil, err
+			}
+			files = append(files, fmt.Sprintf("%s.%s.kd", seg.name, fieldName))
+		} else {
+			if err := writeNumericDocValuesSkipIndexFromNDV(dir, seg.name, fieldName, len(values)); err != nil {
+				return nil, nil, err
+			}
+			files = append(files, fmt.Sprintf("%s.%s.ndvs", seg.name, fieldName))
 		}
-		files = append(files, fmt.Sprintf("%s.%s.ndvs", seg.name, fieldName))
 	}
 
 	// 6. Write sorted doc values

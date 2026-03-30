@@ -60,6 +60,10 @@ func (r *LiveDocsSegmentReader) SortedDocValues(field string) SortedDocValues {
 	return r.inner.SortedDocValues(field)
 }
 
+func (r *LiveDocsSegmentReader) PointValues(field string) PointValues {
+	return r.inner.PointValues(field)
+}
+
 func (r *LiveDocsSegmentReader) PointFields() map[string]struct{} {
 	return r.inner.PointFields()
 }

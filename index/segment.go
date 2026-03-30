@@ -17,6 +17,7 @@ type SegmentReader interface {
 	NumericDocValues(field string) NumericDocValues
 	DocValuesSkipper(field string) *DocValuesSkipper
 	SortedDocValues(field string) SortedDocValues
+	PointValues(field string) PointValues
 	PointFields() map[string]struct{}
 	Close() error
 }

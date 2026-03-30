@@ -29,14 +29,23 @@ type BKDReader struct {
 	leafDataStart int            // byte offset where leaf data begins in the file
 }
 
+// OpenBKDReaderFromPath opens a .kd file directly from a directory path string.
+func OpenBKDReaderFromPath(dirPath, segName, field string) (*BKDReader, error) {
+	path := fmt.Sprintf("%s/%s.%s.kd", dirPath, segName, field)
+	return openBKDReaderFromFile(path, segName, field)
+}
+
 // OpenBKDReader opens a .kd file and reads its metadata into memory.
 func OpenBKDReader(dir store.Directory, segName, field string) (*BKDReader, error) {
 	fileName := fmt.Sprintf("%s.%s.kd", segName, field)
 	path := dir.FilePath(fileName)
+	return openBKDReaderFromFile(path, segName, field)
+}
 
+func openBKDReaderFromFile(path, segName, field string) (*BKDReader, error) {
 	data, err := store.OpenMMap(path)
 	if err != nil {
-		return nil, fmt.Errorf("bkd: open %s: %w", fileName, err)
+		return nil, fmt.Errorf("bkd: open %s.%s.kd: %w", segName, field, err)
 	}
 
 	r := &BKDReader{data: data}

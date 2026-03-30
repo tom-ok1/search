@@ -3,26 +3,28 @@ package search
 import (
 	"gosearch/document"
 	"gosearch/index"
+	"gosearch/index/bkd"
+	"sort"
 )
 
 // PointRangeQuery matches documents where a numeric point field's value falls
 // within an inclusive [min, max] range.
 type PointRangeQuery struct {
 	field string
-	min   int64
-	max   int64
+	Min   int64
+	Max   int64
 }
 
 func NewPointRangeQuery(field string, min, max int64) *PointRangeQuery {
-	return &PointRangeQuery{field: field, min: min, max: max}
+	return &PointRangeQuery{field: field, Min: min, Max: max}
 }
 
 // NewDoublePointRangeQuery creates a range query for double point fields.
 func NewDoublePointRangeQuery(field string, min, max float64) *PointRangeQuery {
 	return &PointRangeQuery{
 		field: field,
-		min:   document.DoubleToSortableLong(min),
-		max:   document.DoubleToSortableLong(max),
+		Min:   document.DoubleToSortableLong(min),
+		Max:   document.DoubleToSortableLong(max),
 	}
 }
 
@@ -50,31 +52,58 @@ func (w *pointRangeWeight) Scorer(ctx index.LeafReaderContext) Scorer {
 		return nil
 	}
 
-	dv := seg.NumericDocValues(w.query.field)
-	if dv == nil {
+	pv := seg.PointValues(w.query.field)
+	if pv == nil {
 		return nil
 	}
 
-	skipper := seg.DocValuesSkipper(w.query.field)
+	visitor := &pointRangeVisitor{min: w.query.Min, max: w.query.Max}
+	bkd.Intersect(pv.PointTree(), visitor)
+
+	if len(visitor.docs) == 0 {
+		return nil
+	}
+	sort.Ints(visitor.docs)
 
 	return &pointRangeScorer{
-		min:      w.query.min,
-		max:      w.query.max,
-		dv:       dv,
-		skipper:  skipper,
+		docs:     visitor.docs,
 		liveDocs: seg.LiveDocs(),
-		maxDoc:   seg.DocCount(),
+		pos:      -1,
 		doc:      -1,
 	}
 }
 
+// pointRangeVisitor collects matching document IDs during BKD tree intersection.
+type pointRangeVisitor struct {
+	min, max int64
+	docs     []int
+}
+
+func (v *pointRangeVisitor) Visit(docID int) {
+	v.docs = append(v.docs, docID)
+}
+
+func (v *pointRangeVisitor) VisitValue(docID int, value int64) {
+	if value >= v.min && value <= v.max {
+		v.docs = append(v.docs, docID)
+	}
+}
+
+func (v *pointRangeVisitor) Compare(minValue, maxValue int64) bkd.Relation {
+	if maxValue < v.min || minValue > v.max {
+		return bkd.CellOutsideQuery
+	}
+	if minValue >= v.min && maxValue <= v.max {
+		return bkd.CellInsideQuery
+	}
+	return bkd.CellCrossesQuery
+}
+
 // pointRangeScorer iterates documents whose point values fall within [min, max].
 type pointRangeScorer struct {
-	min, max int64
-	dv       index.NumericDocValues
-	skipper  *index.DocValuesSkipper
+	docs     []int
 	liveDocs *index.Bitset
-	maxDoc   int
+	pos      int
 	doc      int
 }
 
@@ -95,57 +124,22 @@ func (s *pointRangeScorer) NextDoc() int {
 }
 
 func (s *pointRangeScorer) Advance(target int) int {
-	docID := target
-
-	for docID < s.maxDoc {
-		// Use skip index to jump over non-competitive blocks
-		if s.skipper != nil {
-			s.skipper.Advance(docID)
-			if s.skipper.DocCount() == 0 {
-				s.doc = NoMoreDocs
-				return NoMoreDocs
-			}
-
-			blockMin := s.skipper.MinValue()
-			blockMax := s.skipper.MaxValue()
-
-			// If the entire block is outside our range, skip to next block
-			if blockMin > s.max || blockMax < s.min {
-				docID = s.skipper.MaxDocID() + 1
-				continue
-			}
+	for s.pos+1 < len(s.docs) {
+		s.pos++
+		docID := s.docs[s.pos]
+		if docID < target {
+			continue
 		}
-
-		// Check individual documents within this block
-		blockEnd := s.maxDoc
-		if s.skipper != nil {
-			blockEnd = min(s.skipper.MaxDocID()+1, s.maxDoc)
+		if s.liveDocs != nil && s.liveDocs.Get(docID) {
+			continue
 		}
-
-		for ; docID < blockEnd; docID++ {
-			if s.liveDocs != nil && s.liveDocs.Get(docID) {
-				continue
-			}
-			val, err := s.dv.Get(docID)
-			if err != nil {
-				continue
-			}
-			if val >= s.min && val <= s.max {
-				s.doc = docID
-				return docID
-			}
-		}
-
-		// Move to next block
-		if s.skipper == nil {
-			break
-		}
+		s.doc = docID
+		return docID
 	}
-
 	s.doc = NoMoreDocs
 	return NoMoreDocs
 }
 
 func (s *pointRangeScorer) Cost() int64 {
-	return int64(s.maxDoc)
+	return int64(len(s.docs))
 }

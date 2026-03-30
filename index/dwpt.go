@@ -123,8 +123,8 @@ func (dwpt *DocumentsWriterPerThread) addDocument(doc *document.Document) (int64
 			if seg.fieldLengths[field.Name] == nil {
 				seg.fieldLengths[field.Name] = make([]int, 0)
 			}
-			for len(seg.fieldLengths[field.Name]) <= docID {
-				seg.fieldLengths[field.Name] = append(seg.fieldLengths[field.Name], 0)
+			if len(seg.fieldLengths[field.Name]) <= docID {
+				seg.fieldLengths[field.Name] = append(seg.fieldLengths[field.Name], make([]int, docID+1-len(seg.fieldLengths[field.Name]))...)
 			}
 			seg.fieldLengths[field.Name][docID] = 1
 			bytesAdded += 4
