@@ -61,10 +61,13 @@ func (w *pointRangeWeight) Scorer(ctx index.LeafReaderContext) Scorer {
 		return nil
 	}
 
+	skipper := seg.DocValuesSkipper(w.query.field)
+
 	return &pointRangeScorer{
 		min:      w.query.min,
 		max:      w.query.max,
 		dv:       dv,
+		skipper:  skipper,
 		liveDocs: seg.LiveDocs(),
 		maxDoc:   seg.DocCount(),
 		doc:      -1,
@@ -75,6 +78,7 @@ func (w *pointRangeWeight) Scorer(ctx index.LeafReaderContext) Scorer {
 type pointRangeScorer struct {
 	min, max int64
 	dv       index.NumericDocValues
+	skipper  *index.DocValuesSkipper
 	liveDocs *index.Bitset
 	maxDoc   int
 	doc      int
@@ -97,19 +101,53 @@ func (s *pointRangeScorer) NextDoc() int {
 }
 
 func (s *pointRangeScorer) Advance(target int) int {
-	for docID := target; docID < s.maxDoc; docID++ {
-		if s.liveDocs != nil && s.liveDocs.Get(docID) {
-			continue
+	docID := target
+
+	for docID < s.maxDoc {
+		// Use skip index to jump over non-competitive blocks
+		if s.skipper != nil {
+			s.skipper.Advance(docID)
+			if s.skipper.DocCount() == 0 {
+				s.doc = NoMoreDocs
+				return NoMoreDocs
+			}
+
+			blockMin := s.skipper.MinValue()
+			blockMax := s.skipper.MaxValue()
+
+			// If the entire block is outside our range, skip to next block
+			if blockMin > s.max || blockMax < s.min {
+				docID = s.skipper.MaxDocID() + 1
+				continue
+			}
 		}
-		val, err := s.dv.Get(docID)
-		if err != nil {
-			continue
+
+		// Check individual documents within this block
+		blockEnd := s.maxDoc
+		if s.skipper != nil {
+			blockEnd = min(s.skipper.MaxDocID()+1, s.maxDoc)
 		}
-		if val >= s.min && val <= s.max {
-			s.doc = docID
-			return docID
+
+		for ; docID < blockEnd; docID++ {
+			if s.liveDocs != nil && s.liveDocs.Get(docID) {
+				continue
+			}
+			val, err := s.dv.Get(docID)
+			if err != nil {
+				continue
+			}
+			if val >= s.min && val <= s.max {
+				s.doc = docID
+				return docID
+			}
+		}
+
+		// Move to next block
+		if s.skipper == nil {
+			break
 		}
 	}
+
 	s.doc = NoMoreDocs
 	return NoMoreDocs
 }

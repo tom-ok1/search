@@ -195,3 +195,38 @@ func TestPointRangeQueryFieldDoesNotExist(t *testing.T) {
 		t.Fatalf("expected 0 results for nonexistent field, got %d", len(results))
 	}
 }
+
+func TestPointRangeQuerySkipBlocks(t *testing.T) {
+	dir, err := store.NewFSDirectory(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	analyzer := analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{})
+	fa := analysis.NewFieldAnalyzers(analyzer)
+	writer := index.NewIndexWriter(dir, fa, 1024*1024*10)
+
+	// Create 1000 docs to span multiple skip blocks (blockSize=128)
+	for i := range 1000 {
+		doc := document.NewDocument()
+		doc.AddLongPoint("val", int64(i))
+		writer.AddDocument(doc)
+	}
+	writer.Commit()
+
+	reader, err := index.OpenDirectoryReader(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+
+	searcher := NewIndexSearcher(reader)
+
+	// Narrow range in the middle — should skip many blocks
+	q := NewPointRangeQuery("val", 500, 510)
+	collector := NewTopKCollector(100)
+	results := searcher.Search(q, collector)
+
+	if len(results) != 11 {
+		t.Errorf("got %d hits, want 11 (values 500-510)", len(results))
+	}
+}
