@@ -4,3 +4,4 @@ generate:
   chi-server: true
   models: true
   strict-server: true
+  embedded-spec: true

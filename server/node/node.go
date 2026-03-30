@@ -2,12 +2,15 @@ package node
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
 	"time"
 
+	"github.com/getkin/kin-openapi/openapi3filter"
 	"github.com/go-chi/chi/v5"
+	nethttpmiddleware "github.com/oapi-codegen/nethttp-middleware"
 
 	"gosearch/analysis"
 	"gosearch/api"
@@ -72,7 +75,33 @@ func NewNode(config NodeConfig) (*Node, error) {
 	)
 
 	strictHandler := api.NewStrictHandler(h, nil)
+
+	spec, err := api.GetSwagger()
+	if err != nil {
+		return nil, fmt.Errorf("load openapi spec: %w", err)
+	}
+	spec.Servers = nil // Don't validate server URLs
+
 	router := chi.NewRouter()
+	router.Use(nethttpmiddleware.OapiRequestValidatorWithOptions(spec, &nethttpmiddleware.Options{
+		Options: openapi3filter.Options{
+			// Skip request body validation to avoid issues with NDJSON bulk
+			// endpoints and custom content types. Path/query parameter
+			// validation and route matching are still enforced.
+			ExcludeRequestBody: true,
+		},
+		ErrorHandler: func(w http.ResponseWriter, message string, statusCode int) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(statusCode)
+			json.NewEncoder(w).Encode(map[string]any{
+				"error": map[string]any{
+					"type":   "validation_exception",
+					"reason": message,
+				},
+				"status": statusCode,
+			})
+		},
+	}))
 	api.HandlerFromMux(strictHandler, router)
 
 	n.router = router
