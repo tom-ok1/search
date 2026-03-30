@@ -74,6 +74,8 @@ func addScalarField(doc *document.Document, name string, value any, fm FieldMapp
 		doc.AddSortedDocValuesField(name, s)
 
 	case FieldTypeLong:
+		// TODO: Elasticsearch uses LongPoint (BKD-tree) for indexing, not a keyword field.
+		// Storing as a string keyword breaks numeric range queries and ordering.
 		n, err := toInt64(value)
 		if err != nil {
 			return err
@@ -82,6 +84,8 @@ func addScalarField(doc *document.Document, name string, value any, fm FieldMapp
 		doc.AddNumericDocValuesField(name, n)
 
 	case FieldTypeDouble:
+		// TODO: Elasticsearch uses DoublePoint (BKD-tree) for indexing, not a keyword field.
+		// Storing as a string keyword breaks numeric range queries and ordering.
 		f, err := toFloat64(value)
 		if err != nil {
 			return err

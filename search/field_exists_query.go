@@ -4,25 +4,15 @@ import (
 	"gosearch/index"
 )
 
-// FieldExistsMode determines how field presence is checked.
-type FieldExistsMode int
-
-const (
-	// FieldExistsNorms checks field length > 0 (for text fields).
-	FieldExistsNorms FieldExistsMode = iota
-	// FieldExistsDocValues checks sorted doc values ordinal >= 0 (for keyword/boolean fields).
-	FieldExistsDocValues
-)
-
 // FieldExistsQuery matches documents that have a value for the given field.
-// Equivalent to Lucene's NormsFieldExistsQuery / DocValuesFieldExistsQuery.
+// It auto-detects whether to use doc values or norms, mirroring Lucene's
+// FieldExistsQuery which inspects FieldInfo at scorer creation time.
 type FieldExistsQuery struct {
 	Field string
-	Mode  FieldExistsMode
 }
 
-func NewFieldExistsQuery(field string, mode FieldExistsMode) *FieldExistsQuery {
-	return &FieldExistsQuery{Field: field, Mode: mode}
+func NewFieldExistsQuery(field string) *FieldExistsQuery {
+	return &FieldExistsQuery{Field: field}
 }
 
 func (q *FieldExistsQuery) ExtractTerms() []FieldTerm {
@@ -42,20 +32,11 @@ func (w *fieldExistsWeight) Query() Query { return w.query }
 func (w *fieldExistsWeight) Scorer(ctx index.LeafReaderContext) Scorer {
 	seg := ctx.Segment
 	liveDocs := seg.LiveDocs()
-	switch w.query.Mode {
-	case FieldExistsNorms:
-		return &normsExistsScorer{
-			seg:      seg,
-			field:    w.query.Field,
-			liveDocs: liveDocs,
-			doc:      -1,
-			max:      seg.DocCount(),
-		}
-	case FieldExistsDocValues:
-		sdv := seg.SortedDocValues(w.query.Field)
-		if sdv == nil {
-			return nil
-		}
+
+	// Auto-detect: try sorted doc values first, then fall back to norms.
+	// This mirrors Lucene's FieldExistsQuery which checks FieldInfo to
+	// determine whether to use doc values or norms.
+	if sdv := seg.SortedDocValues(w.query.Field); sdv != nil {
 		return &docValuesExistsScorer{
 			sdv:      sdv,
 			liveDocs: liveDocs,
@@ -63,7 +44,14 @@ func (w *fieldExistsWeight) Scorer(ctx index.LeafReaderContext) Scorer {
 			max:      seg.DocCount(),
 		}
 	}
-	return nil
+
+	return &normsExistsScorer{
+		seg:      seg,
+		field:    w.query.Field,
+		liveDocs: liveDocs,
+		doc:      -1,
+		max:      seg.DocCount(),
+	}
 }
 
 // normsExistsScorer yields docs where FieldLength > 0.

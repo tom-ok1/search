@@ -310,9 +310,6 @@ func TestQueryParser_Exists(t *testing.T) {
 	if feq.Field != "title" {
 		t.Errorf("field = %q, want %q", feq.Field, "title")
 	}
-	if feq.Mode != search.FieldExistsNorms {
-		t.Errorf("mode = %v, want FieldExistsNorms", feq.Mode)
-	}
 }
 
 func TestQueryParser_ExistsKeyword(t *testing.T) {
@@ -339,8 +336,8 @@ func TestQueryParser_ExistsKeyword(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected *search.FieldExistsQuery, got %T", q)
 	}
-	if feq.Mode != search.FieldExistsDocValues {
-		t.Errorf("mode = %v, want FieldExistsDocValues", feq.Mode)
+	if feq.Field != "status" {
+		t.Errorf("field = %q, want %q", feq.Field, "status")
 	}
 }
 

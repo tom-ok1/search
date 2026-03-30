@@ -40,7 +40,7 @@ func TestFieldExistsQuery_Norms(t *testing.T) {
 	defer reader.Close()
 
 	searcher := NewIndexSearcher(reader)
-	q := NewFieldExistsQuery("title", FieldExistsNorms)
+	q := NewFieldExistsQuery("title")
 	collector := NewTopKCollector(10)
 	results := searcher.Search(q, collector)
 
@@ -87,7 +87,7 @@ func TestFieldExistsQuery_DocValues(t *testing.T) {
 	defer reader.Close()
 
 	searcher := NewIndexSearcher(reader)
-	q := NewFieldExistsQuery("status", FieldExistsDocValues)
+	q := NewFieldExistsQuery("status")
 	collector := NewTopKCollector(10)
 	results := searcher.Search(q, collector)
 
