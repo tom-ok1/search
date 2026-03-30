@@ -369,6 +369,11 @@ func buildSearchRequest(index string, body *api.SearchRequest, paramSize *int) a
 		if body.Size != nil {
 			req.Size = *body.Size
 		}
+		if body.Aggs != nil {
+			req.AggsJSON = *body.Aggs
+		} else if body.Aggregations != nil {
+			req.AggsJSON = *body.Aggregations
+		}
 	}
 
 	// Query param Size overrides body Size
@@ -399,7 +404,7 @@ func convertSearchResponse(resp action.SearchResponse) api.SearchResponse {
 
 	maxScore := float32(resp.Hits.MaxScore)
 
-	return api.SearchResponse{
+	result := api.SearchResponse{
 		Took: int(resp.Took),
 		Hits: api.SearchHits{
 			Total: api.SearchTotal{
@@ -410,6 +415,12 @@ func convertSearchResponse(resp action.SearchResponse) api.SearchResponse {
 			Hits:     hits,
 		},
 	}
+
+	if resp.Aggregations != nil {
+		result.Aggregations = &resp.Aggregations
+	}
+
+	return result
 }
 
 // Bulk handles bulk operations without an index scope.
