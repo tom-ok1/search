@@ -3,7 +3,6 @@ package action
 import (
 	"container/heap"
 	"encoding/json"
-	"fmt"
 	"time"
 
 	"gosearch/analysis"
@@ -68,19 +67,19 @@ func (a *TransportSearchAction) Execute(req SearchRequest) (SearchResponse, erro
 
 	meta := a.clusterState.Metadata().Indices[req.Index]
 	if meta == nil {
-		return SearchResponse{}, fmt.Errorf("no such index [%s]", req.Index)
+		return SearchResponse{}, &IndexNotFoundError{Index: req.Index}
 	}
 
 	svc := a.indexServices[req.Index]
 	if svc == nil {
-		return SearchResponse{}, fmt.Errorf("no such index [%s]", req.Index)
+		return SearchResponse{}, &IndexNotFoundError{Index: req.Index}
 	}
 
 	// Parse query
 	parser := NewQueryParser(svc.Mapping(), a.registry)
 	query, err := parser.ParseQuery(req.QueryJSON)
 	if err != nil {
-		return SearchResponse{}, fmt.Errorf("parse query: %w", err)
+		return SearchResponse{}, &QueryParsingError{Reason: err.Error()}
 	}
 
 	size := req.Size

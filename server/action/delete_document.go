@@ -40,12 +40,12 @@ func (a *TransportDeleteDocumentAction) Name() string {
 
 func (a *TransportDeleteDocumentAction) Execute(req DeleteDocumentRequest) (DeleteDocumentResponse, error) {
 	if a.clusterState.Metadata().Indices[req.Index] == nil {
-		return DeleteDocumentResponse{}, fmt.Errorf("no such index [%s]", req.Index)
+		return DeleteDocumentResponse{}, &IndexNotFoundError{Index: req.Index}
 	}
 
 	svc := a.indexServices[req.Index]
 	if svc == nil {
-		return DeleteDocumentResponse{}, fmt.Errorf("no such index [%s]", req.Index)
+		return DeleteDocumentResponse{}, &IndexNotFoundError{Index: req.Index}
 	}
 
 	shardID := index.RouteShard(req.ID, svc.NumShards())
