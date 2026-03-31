@@ -170,14 +170,17 @@ type SearchHits struct {
 
 // SearchRequest defines model for SearchRequest.
 type SearchRequest struct {
-	Query *map[string]interface{} `json:"query,omitempty"`
-	Size  *int                    `json:"size,omitempty"`
+	Aggregations *map[string]interface{} `json:"aggregations,omitempty"`
+	Aggs         *map[string]interface{} `json:"aggs,omitempty"`
+	Query        *map[string]interface{} `json:"query,omitempty"`
+	Size         *int                    `json:"size,omitempty"`
 }
 
 // SearchResponse defines model for SearchResponse.
 type SearchResponse struct {
-	Hits SearchHits `json:"hits"`
-	Took int        `json:"took"`
+	Aggregations *map[string]interface{} `json:"aggregations,omitempty"`
+	Hits         SearchHits              `json:"hits"`
+	Took         int                     `json:"took"`
 }
 
 // SearchTotal defines model for SearchTotal.

@@ -492,6 +492,12 @@ components:
           additionalProperties: true
         size:
           type: integer
+        aggs:
+          type: object
+          additionalProperties: true
+        aggregations:
+          type: object
+          additionalProperties: true
 
     SearchResponse:
       type: object
@@ -503,6 +509,9 @@ components:
           type: integer
         hits:
           $ref: "#/components/schemas/SearchHits"
+        aggregations:
+          type: object
+          additionalProperties: true
 
     SearchHits:
       type: object
