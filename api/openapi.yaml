@@ -283,6 +283,30 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
+  /_cat/indices:
+    get:
+      operationId: catIndices
+      summary: List indices in plain text table format
+      responses:
+        "200":
+          description: Index listing
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  /_cat/health:
+    get:
+      operationId: catHealth
+      summary: Cluster health in plain text table format
+      responses:
+        "200":
+          description: Cluster health
+          content:
+            text/plain:
+              schema:
+                type: string
+
   /{index}/_refresh:
     post:
       operationId: refresh

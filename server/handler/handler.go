@@ -25,6 +25,8 @@ type Handler struct {
 	search         *action.TransportSearchAction
 	bulk           *action.TransportBulkAction
 	refresh        *action.TransportRefreshAction
+	catIndices     *action.TransportCatIndicesAction
+	catHealth      *action.TransportCatHealthAction
 }
 
 // Ensure Handler implements StrictServerInterface at compile time.
@@ -41,6 +43,8 @@ func NewHandler(
 	search *action.TransportSearchAction,
 	bulk *action.TransportBulkAction,
 	refresh *action.TransportRefreshAction,
+	catIndices *action.TransportCatIndicesAction,
+	catHealth *action.TransportCatHealthAction,
 ) *Handler {
 	return &Handler{
 		createIndex:    createIndex,
@@ -52,6 +56,8 @@ func NewHandler(
 		search:         search,
 		bulk:           bulk,
 		refresh:        refresh,
+		catIndices:     catIndices,
+		catHealth:      catHealth,
 	}
 }
 
@@ -545,4 +551,22 @@ func parseBulkNDJSON(body []byte, defaultIndex string) ([]action.BulkItem, error
 		}
 	}
 	return items, scanner.Err()
+}
+
+// CatIndices returns index listing as plain text.
+func (h *Handler) CatIndices(_ context.Context, _ api.CatIndicesRequestObject) (api.CatIndicesResponseObject, error) {
+	resp, err := h.catIndices.Execute()
+	if err != nil {
+		return nil, err
+	}
+	return api.CatIndices200TextResponse(resp.FormatText()), nil
+}
+
+// CatHealth returns cluster health as plain text.
+func (h *Handler) CatHealth(_ context.Context, _ api.CatHealthRequestObject) (api.CatHealthResponseObject, error) {
+	resp, err := h.catHealth.Execute()
+	if err != nil {
+		return nil, err
+	}
+	return api.CatHealth200TextResponse(resp.FormatText()), nil
 }
