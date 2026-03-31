@@ -2,21 +2,23 @@ package search
 
 import "gosearch/index"
 
-// MultiCollector wraps multiple Collectors so they all receive documents
-// in a single pass over the posting lists. This mirrors Lucene's
-// MultiCollector which is used when both top-K and aggregation collectors
-// need to run together.
+// MultiCollector wraps a primary (top-K) collector and additional collectors
+// (e.g. aggregations) so they all receive documents in a single pass over the
+// posting lists. Results() always delegates to the primary collector.
+// This mirrors Lucene's MultiCollector.
 type MultiCollector struct {
-	collectors []Collector
+	primary    Collector
+	collectors []Collector // primary + others
 }
 
-// NewMultiCollector creates a collector that delegates to all given collectors.
-// If only one collector is provided, it is returned directly.
-func NewMultiCollector(collectors ...Collector) Collector {
-	if len(collectors) == 1 {
-		return collectors[0]
-	}
-	return &MultiCollector{collectors: collectors}
+// NewMultiCollector creates a collector that feeds documents to the primary
+// collector and all additional collectors. Results() returns the primary
+// collector's results.
+func NewMultiCollector(primary Collector, others ...Collector) *MultiCollector {
+	all := make([]Collector, 0, 1+len(others))
+	all = append(all, primary)
+	all = append(all, others...)
+	return &MultiCollector{primary: primary, collectors: all}
 }
 
 func (mc *MultiCollector) GetLeafCollector(ctx index.LeafReaderContext) LeafCollector {
@@ -36,14 +38,9 @@ func (mc *MultiCollector) ScoreMode() ScoreMode {
 	return ScoreModeNone
 }
 
-// Results returns results from the first collector that has them.
+// Results returns results from the primary (top-K) collector.
 func (mc *MultiCollector) Results() []SearchResult {
-	for _, c := range mc.collectors {
-		if r := c.Results(); len(r) > 0 {
-			return r
-		}
-	}
-	return nil
+	return mc.primary.Results()
 }
 
 type multiLeafCollector struct {
