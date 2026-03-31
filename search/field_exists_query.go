@@ -2,6 +2,8 @@ package search
 
 import (
 	"gosearch/index"
+	"gosearch/index/bkd"
+	"sort"
 )
 
 // FieldExistsQuery matches documents that have a value for the given field.
@@ -33,12 +35,21 @@ func (w *fieldExistsWeight) Scorer(ctx index.LeafReaderContext) Scorer {
 	seg := ctx.Segment
 	liveDocs := seg.LiveDocs()
 
-	// Auto-detect: try sorted doc values first, then fall back to norms.
+	// Auto-detect: try sorted doc values, then point values, then norms.
 	// This mirrors Lucene's FieldExistsQuery which checks FieldInfo to
-	// determine whether to use doc values or norms.
+	// determine whether to use doc values, point values, or norms.
 	if sdv := seg.SortedDocValues(w.query.Field); sdv != nil {
 		return &docValuesExistsScorer{
 			sdv:      sdv,
+			liveDocs: liveDocs,
+			doc:      -1,
+			max:      seg.DocCount(),
+		}
+	}
+
+	if pv := seg.PointValues(w.query.Field); pv != nil {
+		return &pointValuesExistsScorer{
+			pv:       pv,
 			liveDocs: liveDocs,
 			doc:      -1,
 			max:      seg.DocCount(),
@@ -122,4 +133,78 @@ func (s *docValuesExistsScorer) NextDoc() int {
 func (s *docValuesExistsScorer) Advance(target int) int {
 	s.doc = target - 1
 	return s.NextDoc()
+}
+
+// pointValuesExistsScorer yields docs that have a point value, using PointValues.
+type pointValuesExistsScorer struct {
+	pv       index.PointValues
+	liveDocs *index.Bitset
+	doc      int
+	max      int
+	docIDs   []int // sorted docIDs from BKD tree
+	pos      int   // current position in docIDs
+	inited   bool
+}
+
+func (s *pointValuesExistsScorer) init() {
+	tree := s.pv.PointTree()
+	collector := &docIDCollector{}
+	// Use math.MinInt64/MaxInt64 range to match all points.
+	allVisitor := &allPointsVisitor{collector: collector}
+	bkd.Intersect(tree, allVisitor)
+	sort.Ints(collector.docIDs)
+	s.docIDs = collector.docIDs
+	s.inited = true
+}
+
+func (s *pointValuesExistsScorer) Score() float64             { return 1.0 }
+func (s *pointValuesExistsScorer) DocID() int                 { return s.doc }
+func (s *pointValuesExistsScorer) Iterator() DocIdSetIterator { return s }
+func (s *pointValuesExistsScorer) Cost() int64                { return int64(s.pv.DocCount()) }
+
+func (s *pointValuesExistsScorer) NextDoc() int {
+	if !s.inited {
+		s.init()
+	}
+	for s.pos < len(s.docIDs) {
+		d := s.docIDs[s.pos]
+		s.pos++
+		if s.liveDocs != nil && s.liveDocs.Get(d) {
+			continue // deleted
+		}
+		s.doc = d
+		return d
+	}
+	s.doc = NoMoreDocs
+	return NoMoreDocs
+}
+
+func (s *pointValuesExistsScorer) Advance(target int) int {
+	if !s.inited {
+		s.init()
+	}
+	// Binary search for target in sorted docIDs.
+	s.pos = sort.SearchInts(s.docIDs, target)
+	return s.NextDoc()
+}
+
+// allPointsVisitor is an IntersectVisitor that matches all points.
+type allPointsVisitor struct {
+	collector *docIDCollector
+}
+
+func (v *allPointsVisitor) Compare(minValue, maxValue int64) bkd.Relation {
+	return bkd.CellInsideQuery
+}
+
+func (v *allPointsVisitor) Visit(docID int) {
+	v.collector.docIDs = append(v.collector.docIDs, docID)
+}
+
+func (v *allPointsVisitor) VisitValue(docID int, value int64) {
+	v.collector.docIDs = append(v.collector.docIDs, docID)
+}
+
+type docIDCollector struct {
+	docIDs []int
 }

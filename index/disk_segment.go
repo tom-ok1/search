@@ -166,19 +166,6 @@ func OpenDiskSegment(dirPath string, segName string) (*DiskSegment, error) {
 		ds.dvSkip[field] = sdvs
 	}
 
-	// Load field lengths for point fields (not in meta.Fields but written by segment writer)
-	for _, field := range meta.PointFields {
-		if _, exists := ds.fieldLens[field]; exists {
-			continue // already loaded as part of inverted index fields
-		}
-		flen, err := store.OpenMMap(fmt.Sprintf("%s/%s.%s.flen", dirPath, segName, field))
-		if err != nil {
-			ds.Close()
-			return nil, fmt.Errorf("mmap flen for point field %s: %w", field, err)
-		}
-		ds.fieldLens[field] = flen
-	}
-
 	// Open BKD readers for point fields
 	ds.bkdReaders = make(map[string]*bkd.BKDReader, len(meta.PointFields))
 	for _, field := range meta.PointFields {

@@ -1,11 +1,19 @@
 package bkd
 
 import (
+	"fmt"
 	"sort"
 	"testing"
 
 	"gosearch/store"
 )
+
+// openBKDReaderForTest opens a .kd file via store.Directory for testing.
+func openBKDReaderForTest(dir store.Directory, segName, field string) (*BKDReader, error) {
+	fileName := fmt.Sprintf("%s.%s.kd", segName, field)
+	path := dir.FilePath(fileName)
+	return openBKDReaderFromFile(path, segName, field)
+}
 
 // collectVisitor collects document IDs that match a range query.
 type collectVisitor struct {
@@ -118,9 +126,9 @@ func TestBKDWriter_Roundtrip_SingleLeaf(t *testing.T) {
 		t.Fatalf("Finish: %v", err)
 	}
 
-	r, err := OpenBKDReader(dir, "seg0", "rt")
+	r, err := openBKDReaderForTest(dir, "seg0", "rt")
 	if err != nil {
-		t.Fatalf("OpenBKDReader: %v", err)
+		t.Fatalf("openBKDReaderForTest: %v", err)
 	}
 	defer r.Close()
 
@@ -154,9 +162,9 @@ func TestBKDWriter_Roundtrip_MultiLeaf(t *testing.T) {
 		t.Fatalf("Finish: %v", err)
 	}
 
-	r, err := OpenBKDReader(dir, "seg1", "rt")
+	r, err := openBKDReaderForTest(dir, "seg1", "rt")
 	if err != nil {
-		t.Fatalf("OpenBKDReader: %v", err)
+		t.Fatalf("openBKDReaderForTest: %v", err)
 	}
 	defer r.Close()
 
@@ -200,9 +208,9 @@ func TestBKDWriter_Roundtrip_Duplicates(t *testing.T) {
 		t.Fatalf("Finish: %v", err)
 	}
 
-	r, err := OpenBKDReader(dir, "seg3", "rt")
+	r, err := openBKDReaderForTest(dir, "seg3", "rt")
 	if err != nil {
-		t.Fatalf("OpenBKDReader: %v", err)
+		t.Fatalf("openBKDReaderForTest: %v", err)
 	}
 	defer r.Close()
 
@@ -229,9 +237,9 @@ func TestBKDWriter_Roundtrip_Empty(t *testing.T) {
 		t.Fatalf("Finish: %v", err)
 	}
 
-	r, err := OpenBKDReader(dir, "seg2", "rt")
+	r, err := openBKDReaderForTest(dir, "seg2", "rt")
 	if err != nil {
-		t.Fatalf("OpenBKDReader: %v", err)
+		t.Fatalf("openBKDReaderForTest: %v", err)
 	}
 	defer r.Close()
 

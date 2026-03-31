@@ -74,15 +74,8 @@ func WriteSegmentV2(dir store.Directory, seg *InMemorySegment) ([]string, []stri
 	}
 	files = append(files, seg.name+".stored")
 
-	// 4. Write field lengths (fixed-width) for inverted index fields and point fields
-	flenFields := make(map[string]struct{})
-	for _, f := range meta.Fields {
-		flenFields[f] = struct{}{}
-	}
-	for _, f := range meta.PointFields {
-		flenFields[f] = struct{}{}
-	}
-	for fieldName := range flenFields {
+	// 4. Write field lengths (fixed-width) for inverted index fields
+	for _, fieldName := range meta.Fields {
 		lengths := seg.fieldLengths[fieldName]
 		if err := writeFieldLengthsV2(dir, seg.name, fieldName, lengths, seg.docCount); err != nil {
 			return nil, nil, err
@@ -100,7 +93,11 @@ func WriteSegmentV2(dir store.Directory, seg *InMemorySegment) ([]string, []stri
 
 		if _, isPoint := seg.pointFields[fieldName]; isPoint {
 			w := bkd.NewBKDWriter()
+			docSet := seg.pointDocIDs[fieldName]
 			for docID, val := range values {
+				if _, ok := docSet[docID]; !ok {
+					continue // skip docs that don't have this point field
+				}
 				w.Add(docID, val)
 			}
 			if err := w.Finish(dir, seg.name, fieldName); err != nil {

@@ -35,13 +35,6 @@ func OpenBKDReaderFromPath(dirPath, segName, field string) (*BKDReader, error) {
 	return openBKDReaderFromFile(path, segName, field)
 }
 
-// OpenBKDReader opens a .kd file and reads its metadata into memory.
-func OpenBKDReader(dir store.Directory, segName, field string) (*BKDReader, error) {
-	fileName := fmt.Sprintf("%s.%s.kd", segName, field)
-	path := dir.FilePath(fileName)
-	return openBKDReaderFromFile(path, segName, field)
-}
-
 func openBKDReaderFromFile(path, segName, field string) (*BKDReader, error) {
 	data, err := store.OpenMMap(path)
 	if err != nil {
@@ -167,10 +160,11 @@ func (r *BKDReader) PointTree() PointTree {
 		return &emptyPointTree{}
 	}
 	return &bkdPointTree{
-		reader:    r,
-		nodeID:    1,
-		level:     0,
-		nodeStack: nil,
+		reader:   r,
+		nodeID:   1,
+		level:    0,
+		minValue: r.globalMin,
+		maxValue: r.globalMax,
 	}
 }
 
@@ -181,10 +175,18 @@ func (r *BKDReader) Close() error {
 
 // bkdPointTree implements PointTree for navigating a BKD tree.
 type bkdPointTree struct {
-	reader    *BKDReader
-	nodeID    int // 1-based heap index
-	level     int
-	nodeStack []int // parent nodeIDs for MoveToParent
+	reader      *BKDReader
+	nodeID      int // 1-based heap index
+	level       int
+	nodeStack   []int // parent nodeIDs for MoveToParent
+	minValue    int64
+	maxValue    int64
+	boundsStack []boundsEntry // saved min/max for MoveToParent / MoveToSibling
+}
+
+type boundsEntry struct {
+	minValue int64
+	maxValue int64
 }
 
 func (t *bkdPointTree) isLeaf() bool {
@@ -201,6 +203,9 @@ func (t *bkdPointTree) MoveToChild() bool {
 		return false
 	}
 	t.nodeStack = append(t.nodeStack, t.nodeID)
+	t.boundsStack = append(t.boundsStack, boundsEntry{minValue: t.minValue, maxValue: t.maxValue})
+	// Left child: max narrows to parent's splitValue.
+	t.maxValue = t.reader.innerNodes[t.nodeID].splitValue
 	t.nodeID = t.nodeID * 2
 	t.level++
 	return true
@@ -212,6 +217,11 @@ func (t *bkdPointTree) MoveToSibling() bool {
 		// Already a right child (odd nodeID).
 		return false
 	}
+	parentNodeID := t.nodeStack[len(t.nodeStack)-1]
+	saved := t.boundsStack[len(t.boundsStack)-1]
+	// Right child: min narrows to parent's splitValue, max restores to parent's original.
+	t.minValue = t.reader.innerNodes[parentNodeID].splitValue
+	t.maxValue = saved.maxValue
 	t.nodeID++
 	return true
 }
@@ -221,40 +231,24 @@ func (t *bkdPointTree) MoveToParent() bool {
 	if len(t.nodeStack) == 0 {
 		return false
 	}
+	saved := t.boundsStack[len(t.boundsStack)-1]
+	t.boundsStack = t.boundsStack[:len(t.boundsStack)-1]
+	t.minValue = saved.minValue
+	t.maxValue = saved.maxValue
 	t.nodeID = t.nodeStack[len(t.nodeStack)-1]
 	t.nodeStack = t.nodeStack[:len(t.nodeStack)-1]
 	t.level--
 	return true
 }
 
-// MinValue returns the minimum value in the current cell.
-// For inner nodes, walks left children until reaching a leaf.
+// MinValue returns the minimum value in the current cell (O(1)).
 func (t *bkdPointTree) MinValue() int64 {
-	if t.isLeaf() {
-		return t.reader.leafDir[t.leafIndex()].minValue
-	}
-	// Walk left children to find leftmost leaf.
-	n := t.nodeID
-	for n <= t.reader.numInnerNodes {
-		n = n * 2
-	}
-	leafIdx := n - t.reader.numInnerNodes - 1
-	return t.reader.leafDir[leafIdx].minValue
+	return t.minValue
 }
 
-// MaxValue returns the maximum value in the current cell.
-// For inner nodes, walks right children until reaching a leaf.
+// MaxValue returns the maximum value in the current cell (O(1)).
 func (t *bkdPointTree) MaxValue() int64 {
-	if t.isLeaf() {
-		return t.reader.leafDir[t.leafIndex()].maxValue
-	}
-	// Walk right children to find rightmost leaf.
-	n := t.nodeID
-	for n <= t.reader.numInnerNodes {
-		n = n*2 + 1
-	}
-	leafIdx := n - t.reader.numInnerNodes - 1
-	return t.reader.leafDir[leafIdx].maxValue
+	return t.maxValue
 }
 
 // Size returns the number of points in the current cell.
