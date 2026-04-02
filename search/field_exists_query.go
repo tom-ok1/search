@@ -2,8 +2,6 @@ package search
 
 import (
 	"gosearch/index"
-	"gosearch/index/bkd"
-	"sort"
 )
 
 // FieldExistsQuery matches documents that have a value for the given field.
@@ -35,9 +33,10 @@ func (w *fieldExistsWeight) Scorer(ctx index.LeafReaderContext) Scorer {
 	seg := ctx.Segment
 	liveDocs := seg.LiveDocs()
 
-	// Auto-detect: try sorted doc values, then point values, then norms.
+	// Auto-detect: try sorted doc values, then numeric doc values, then norms.
 	// This mirrors Lucene's FieldExistsQuery which checks FieldInfo to
-	// determine whether to use doc values, point values, or norms.
+	// determine whether to use doc values or norms. Point fields always
+	// have numeric doc values with presence tracking (HasValue).
 	if sdv := seg.SortedDocValues(w.query.Field); sdv != nil {
 		return &docValuesExistsScorer{
 			sdv:      sdv,
@@ -47,9 +46,9 @@ func (w *fieldExistsWeight) Scorer(ctx index.LeafReaderContext) Scorer {
 		}
 	}
 
-	if pv := seg.PointValues(w.query.Field); pv != nil {
-		return &pointValuesExistsScorer{
-			pv:       pv,
+	if ndv := seg.NumericDocValues(w.query.Field); ndv != nil {
+		return &numericDocValuesExistsScorer{
+			ndv:      ndv,
 			liveDocs: liveDocs,
 			doc:      -1,
 			max:      seg.DocCount(),
@@ -135,76 +134,39 @@ func (s *docValuesExistsScorer) Advance(target int) int {
 	return s.NextDoc()
 }
 
-// pointValuesExistsScorer yields docs that have a point value, using PointValues.
-type pointValuesExistsScorer struct {
-	pv       index.PointValues
+// numericDocValuesExistsScorer yields docs where numeric doc values has a value.
+// For point fields, NumericDocValues.HasValue uses a presence bitset to
+// distinguish "has value" from "value is 0". This mirrors Lucene's
+// FieldExistsQuery which uses doc values (not point values) for scoring.
+type numericDocValuesExistsScorer struct {
+	ndv      index.NumericDocValues
 	liveDocs *index.Bitset
 	doc      int
 	max      int
-	docIDs   []int // sorted docIDs from BKD tree
-	pos      int   // current position in docIDs
-	inited   bool
 }
 
-func (s *pointValuesExistsScorer) init() {
-	tree := s.pv.PointTree()
-	collector := &docIDCollector{}
-	// Use math.MinInt64/MaxInt64 range to match all points.
-	allVisitor := &allPointsVisitor{collector: collector}
-	bkd.Intersect(tree, allVisitor)
-	sort.Ints(collector.docIDs)
-	s.docIDs = collector.docIDs
-	s.inited = true
-}
+func (s *numericDocValuesExistsScorer) Score() float64             { return 1.0 }
+func (s *numericDocValuesExistsScorer) DocID() int                 { return s.doc }
+func (s *numericDocValuesExistsScorer) Iterator() DocIdSetIterator { return s }
+func (s *numericDocValuesExistsScorer) Cost() int64                { return int64(s.max) }
 
-func (s *pointValuesExistsScorer) Score() float64             { return 1.0 }
-func (s *pointValuesExistsScorer) DocID() int                 { return s.doc }
-func (s *pointValuesExistsScorer) Iterator() DocIdSetIterator { return s }
-func (s *pointValuesExistsScorer) Cost() int64                { return int64(s.pv.DocCount()) }
-
-func (s *pointValuesExistsScorer) NextDoc() int {
-	if !s.inited {
-		s.init()
-	}
-	for s.pos < len(s.docIDs) {
-		d := s.docIDs[s.pos]
-		s.pos++
-		if s.liveDocs != nil && s.liveDocs.Get(d) {
+func (s *numericDocValuesExistsScorer) NextDoc() int {
+	for {
+		s.doc++
+		if s.doc >= s.max {
+			s.doc = NoMoreDocs
+			return NoMoreDocs
+		}
+		if s.liveDocs != nil && s.liveDocs.Get(s.doc) {
 			continue // deleted
 		}
-		s.doc = d
-		return d
+		if s.ndv.HasValue(s.doc) {
+			return s.doc
+		}
 	}
-	s.doc = NoMoreDocs
-	return NoMoreDocs
 }
 
-func (s *pointValuesExistsScorer) Advance(target int) int {
-	if !s.inited {
-		s.init()
-	}
-	// Binary search for target in sorted docIDs.
-	s.pos = sort.SearchInts(s.docIDs, target)
+func (s *numericDocValuesExistsScorer) Advance(target int) int {
+	s.doc = target - 1
 	return s.NextDoc()
-}
-
-// allPointsVisitor is an IntersectVisitor that matches all points.
-type allPointsVisitor struct {
-	collector *docIDCollector
-}
-
-func (v *allPointsVisitor) Compare(minValue, maxValue int64) bkd.Relation {
-	return bkd.CellInsideQuery
-}
-
-func (v *allPointsVisitor) Visit(docID int) {
-	v.collector.docIDs = append(v.collector.docIDs, docID)
-}
-
-func (v *allPointsVisitor) VisitValue(docID int, value int64) {
-	v.collector.docIDs = append(v.collector.docIDs, docID)
-}
-
-type docIDCollector struct {
-	docIDs []int
 }

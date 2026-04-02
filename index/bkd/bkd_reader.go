@@ -270,6 +270,7 @@ func (t *bkdPointTree) VisitDocIDs(v IntersectVisitor) {
 }
 
 func (t *bkdPointTree) visitSubtreeDocIDs(nodeID int, v IntersectVisitor) {
+	// if it's a leaf
 	if nodeID > t.reader.numInnerNodes {
 		leafIdx := nodeID - t.reader.numInnerNodes - 1
 		t.visitLeafDocIDs(leafIdx, v)
