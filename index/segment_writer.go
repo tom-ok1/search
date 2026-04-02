@@ -86,14 +86,20 @@ func WriteSegmentV2(dir store.Directory, seg *InMemorySegment) ([]string, []stri
 	// 5. Write numeric doc values
 	for _, fieldName := range meta.NumericDVFields {
 		values := seg.numericDocValues[fieldName]
-		if err := writeNumericDocValues(dir, seg.name, fieldName, values, seg.docCount); err != nil {
+		var presence map[int]struct{}
+		if _, isPoint := seg.pointFields[fieldName]; isPoint {
+			presence = seg.pointDocIDs[fieldName]
+		}
+		if err := writeNumericDocValues(dir, seg.name, fieldName, values, seg.docCount, presence); err != nil {
 			return nil, nil, err
 		}
 		files = append(files, fmt.Sprintf("%s.%s.ndv", seg.name, fieldName))
 
 		if _, isPoint := seg.pointFields[fieldName]; isPoint {
-			w := bkd.NewBKDWriter()
 			docSet := seg.pointDocIDs[fieldName]
+			_ = docSet
+
+			w := bkd.NewBKDWriter()
 			for docID, val := range values {
 				if _, ok := docSet[docID]; !ok {
 					continue // skip docs that don't have this point field

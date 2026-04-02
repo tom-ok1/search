@@ -30,10 +30,11 @@ type DiskSegment struct {
 	stored *store.MMapIndexInput // .stored
 
 	// Doc values mmap'd files
-	numericDV    map[string]*store.MMapIndexInput // field → .ndv
-	sortedDVOrd  map[string]*store.MMapIndexInput // field → .sdvo
-	sortedDVDict map[string]*store.MMapIndexInput // field → .sdvd
-	dvSkip       map[string]*store.MMapIndexInput // field → .ndvs or .sdvs
+	numericDV         map[string]*store.MMapIndexInput // field → .ndv
+	numericDVPresence map[string]*Bitset               // field → presence bitset (point fields only)
+	sortedDVOrd       map[string]*store.MMapIndexInput // field → .sdvo
+	sortedDVDict      map[string]*store.MMapIndexInput // field → .sdvd
+	dvSkip            map[string]*store.MMapIndexInput // field → .ndvs or .sdvs
 
 	// Point fields
 	pointFields map[string]struct{}
@@ -53,18 +54,19 @@ func OpenDiskSegment(dirPath string, segName string) (*DiskSegment, error) {
 	}
 
 	ds := &DiskSegment{
-		name:         meta.Name,
-		docCount:     meta.DocCount,
-		fieldList:    meta.Fields,
-		termIndex:    make(map[string]*store.MMapIndexInput),
-		termFSTFiles: make(map[string]*store.MMapIndexInput),
-		termData:     make(map[string]*store.MMapIndexInput),
-		fieldLens:    make(map[string]*store.MMapIndexInput),
-		termFSTs:     make(map[string]*fst.FST),
-		numericDV:    make(map[string]*store.MMapIndexInput),
-		sortedDVOrd:  make(map[string]*store.MMapIndexInput),
-		sortedDVDict: make(map[string]*store.MMapIndexInput),
-		dvSkip:       make(map[string]*store.MMapIndexInput),
+		name:              meta.Name,
+		docCount:          meta.DocCount,
+		fieldList:         meta.Fields,
+		termIndex:         make(map[string]*store.MMapIndexInput),
+		termFSTFiles:      make(map[string]*store.MMapIndexInput),
+		termData:          make(map[string]*store.MMapIndexInput),
+		fieldLens:         make(map[string]*store.MMapIndexInput),
+		termFSTs:          make(map[string]*fst.FST),
+		numericDV:         make(map[string]*store.MMapIndexInput),
+		numericDVPresence: make(map[string]*Bitset),
+		sortedDVOrd:       make(map[string]*store.MMapIndexInput),
+		sortedDVDict:      make(map[string]*store.MMapIndexInput),
+		dvSkip:            make(map[string]*store.MMapIndexInput),
 	}
 
 	// Populate pointFields from metadata
@@ -131,8 +133,11 @@ func OpenDiskSegment(dirPath string, segName string) (*DiskSegment, error) {
 		}
 		ds.numericDV[field] = ndv
 
-		// Point fields use BKD tree instead of skip index
-		if _, isPoint := ds.pointFields[field]; !isPoint {
+		// Point fields use BKD tree instead of skip index.
+		// Presence info is now embedded in the .ndv file itself.
+		if _, isPoint := ds.pointFields[field]; isPoint {
+			// TODO(task3): use readNumericDocValues to parse mode+presence from .ndv
+		} else {
 			ndvs, err := store.OpenMMap(fmt.Sprintf("%s/%s.%s.ndvs", dirPath, segName, field))
 			if err != nil {
 				ds.Close()
@@ -427,7 +432,7 @@ func (ds *DiskSegment) NumericDocValues(field string) NumericDocValues {
 	if data == nil {
 		return nil
 	}
-	return &diskNumericDocValues{data: data, docCount: ds.docCount}
+	return &diskNumericDocValues{data: data, docCount: ds.docCount, presence: ds.numericDVPresence[field]}
 }
 
 func (ds *DiskSegment) SortedDocValues(field string) SortedDocValues {

@@ -688,6 +688,144 @@ func TestSortedDocValuesMergeSpecialChars(t *testing.T) {
 	writer.Close()
 }
 
+func TestNumericDocValuesSparseRoundTrip(t *testing.T) {
+	tmpDir := t.TempDir()
+	dir, err := store.NewFSDirectory(tmpDir)
+	if err != nil {
+		t.Fatalf("NewFSDirectory: %v", err)
+	}
+
+	// 5 docs, only docs 0 and 2 have values
+	values := []int64{100, 0, 300, 0, 0}
+	presence := map[int]struct{}{0: {}, 2: {}}
+	docCount := 5
+
+	if err := writeNumericDocValues(dir, "seg0", "price", values, docCount, presence); err != nil {
+		t.Fatalf("writeNumericDocValues: %v", err)
+	}
+
+	data, err := store.OpenMMap(tmpDir + "/seg0.price.ndv")
+	if err != nil {
+		t.Fatalf("OpenMMap: %v", err)
+	}
+	defer data.Close()
+
+	dv, err := readNumericDocValues(data)
+	if err != nil {
+		t.Fatalf("readNumericDocValues: %v", err)
+	}
+
+	// Doc 0 has value 100
+	if !dv.HasValue(0) {
+		t.Error("expected HasValue(0) = true")
+	}
+	v, err := dv.Get(0)
+	if err != nil {
+		t.Fatalf("Get(0): %v", err)
+	}
+	if v != 100 {
+		t.Errorf("Get(0) = %d, want 100", v)
+	}
+
+	// Doc 1 has no value
+	if dv.HasValue(1) {
+		t.Error("expected HasValue(1) = false")
+	}
+
+	// Doc 2 has value 300
+	if !dv.HasValue(2) {
+		t.Error("expected HasValue(2) = true")
+	}
+	v, err = dv.Get(2)
+	if err != nil {
+		t.Fatalf("Get(2): %v", err)
+	}
+	if v != 300 {
+		t.Errorf("Get(2) = %d, want 300", v)
+	}
+
+	// Docs 3 and 4 have no value
+	if dv.HasValue(3) {
+		t.Error("expected HasValue(3) = false")
+	}
+	if dv.HasValue(4) {
+		t.Error("expected HasValue(4) = false")
+	}
+}
+
+func TestNumericDocValuesDenseRoundTrip(t *testing.T) {
+	tmpDir := t.TempDir()
+	dir, err := store.NewFSDirectory(tmpDir)
+	if err != nil {
+		t.Fatalf("NewFSDirectory: %v", err)
+	}
+
+	values := []int64{10, 20, 30}
+	docCount := 3
+
+	// presence=nil means dense
+	if err := writeNumericDocValues(dir, "seg0", "price", values, docCount, nil); err != nil {
+		t.Fatalf("writeNumericDocValues: %v", err)
+	}
+
+	data, err := store.OpenMMap(tmpDir + "/seg0.price.ndv")
+	if err != nil {
+		t.Fatalf("OpenMMap: %v", err)
+	}
+	defer data.Close()
+
+	dv, err := readNumericDocValues(data)
+	if err != nil {
+		t.Fatalf("readNumericDocValues: %v", err)
+	}
+
+	for i, want := range values {
+		if !dv.HasValue(i) {
+			t.Errorf("expected HasValue(%d) = true", i)
+		}
+		got, err := dv.Get(i)
+		if err != nil {
+			t.Fatalf("Get(%d): %v", i, err)
+		}
+		if got != want {
+			t.Errorf("Get(%d) = %d, want %d", i, got, want)
+		}
+	}
+}
+
+func TestNumericDocValuesEmptyRoundTrip(t *testing.T) {
+	tmpDir := t.TempDir()
+	dir, err := store.NewFSDirectory(tmpDir)
+	if err != nil {
+		t.Fatalf("NewFSDirectory: %v", err)
+	}
+
+	values := []int64{0, 0, 0}
+	presence := map[int]struct{}{} // empty presence = no docs have values
+	docCount := 3
+
+	if err := writeNumericDocValues(dir, "seg0", "price", values, docCount, presence); err != nil {
+		t.Fatalf("writeNumericDocValues: %v", err)
+	}
+
+	data, err := store.OpenMMap(tmpDir + "/seg0.price.ndv")
+	if err != nil {
+		t.Fatalf("OpenMMap: %v", err)
+	}
+	defer data.Close()
+
+	dv, err := readNumericDocValues(data)
+	if err != nil {
+		t.Fatalf("readNumericDocValues: %v", err)
+	}
+
+	for i := range docCount {
+		if dv.HasValue(i) {
+			t.Errorf("expected HasValue(%d) = false", i)
+		}
+	}
+}
+
 func createTempDir(t *testing.T) store.Directory {
 	t.Helper()
 	tmpDir := t.TempDir()
