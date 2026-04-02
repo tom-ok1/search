@@ -688,6 +688,388 @@ func TestSortedDocValuesMergeSpecialChars(t *testing.T) {
 	writer.Close()
 }
 
+func TestNumericDocValuesSparseRoundTrip(t *testing.T) {
+	tmpDir := t.TempDir()
+	dir, err := store.NewFSDirectory(tmpDir)
+	if err != nil {
+		t.Fatalf("NewFSDirectory: %v", err)
+	}
+
+	// 5 docs, only docs 0 and 2 have values
+	values := []int64{100, 0, 300, 0, 0}
+	presence := map[int]struct{}{0: {}, 2: {}}
+	docCount := 5
+
+	if err := writeNumericDocValues(dir, "seg0", "price", values, docCount, presence); err != nil {
+		t.Fatalf("writeNumericDocValues: %v", err)
+	}
+
+	data, err := store.OpenMMap(tmpDir + "/seg0.price.ndv")
+	if err != nil {
+		t.Fatalf("OpenMMap: %v", err)
+	}
+	defer data.Close()
+
+	dv, err := readNumericDocValues(data)
+	if err != nil {
+		t.Fatalf("readNumericDocValues: %v", err)
+	}
+
+	// Doc 0 has value 100
+	if !dv.HasValue(0) {
+		t.Error("expected HasValue(0) = true")
+	}
+	v, err := dv.Get(0)
+	if err != nil {
+		t.Fatalf("Get(0): %v", err)
+	}
+	if v != 100 {
+		t.Errorf("Get(0) = %d, want 100", v)
+	}
+
+	// Doc 1 has no value
+	if dv.HasValue(1) {
+		t.Error("expected HasValue(1) = false")
+	}
+
+	// Doc 2 has value 300
+	if !dv.HasValue(2) {
+		t.Error("expected HasValue(2) = true")
+	}
+	v, err = dv.Get(2)
+	if err != nil {
+		t.Fatalf("Get(2): %v", err)
+	}
+	if v != 300 {
+		t.Errorf("Get(2) = %d, want 300", v)
+	}
+
+	// Docs 3 and 4 have no value
+	if dv.HasValue(3) {
+		t.Error("expected HasValue(3) = false")
+	}
+	if dv.HasValue(4) {
+		t.Error("expected HasValue(4) = false")
+	}
+}
+
+func TestNumericDocValuesDenseRoundTrip(t *testing.T) {
+	tmpDir := t.TempDir()
+	dir, err := store.NewFSDirectory(tmpDir)
+	if err != nil {
+		t.Fatalf("NewFSDirectory: %v", err)
+	}
+
+	values := []int64{10, 20, 30}
+	docCount := 3
+
+	// presence=nil means dense
+	if err := writeNumericDocValues(dir, "seg0", "price", values, docCount, nil); err != nil {
+		t.Fatalf("writeNumericDocValues: %v", err)
+	}
+
+	data, err := store.OpenMMap(tmpDir + "/seg0.price.ndv")
+	if err != nil {
+		t.Fatalf("OpenMMap: %v", err)
+	}
+	defer data.Close()
+
+	dv, err := readNumericDocValues(data)
+	if err != nil {
+		t.Fatalf("readNumericDocValues: %v", err)
+	}
+
+	for i, want := range values {
+		if !dv.HasValue(i) {
+			t.Errorf("expected HasValue(%d) = true", i)
+		}
+		got, err := dv.Get(i)
+		if err != nil {
+			t.Fatalf("Get(%d): %v", i, err)
+		}
+		if got != want {
+			t.Errorf("Get(%d) = %d, want %d", i, got, want)
+		}
+	}
+}
+
+func TestNumericDocValuesEmptyRoundTrip(t *testing.T) {
+	tmpDir := t.TempDir()
+	dir, err := store.NewFSDirectory(tmpDir)
+	if err != nil {
+		t.Fatalf("NewFSDirectory: %v", err)
+	}
+
+	values := []int64{0, 0, 0}
+	presence := map[int]struct{}{} // empty presence = no docs have values
+	docCount := 3
+
+	if err := writeNumericDocValues(dir, "seg0", "price", values, docCount, presence); err != nil {
+		t.Fatalf("writeNumericDocValues: %v", err)
+	}
+
+	data, err := store.OpenMMap(tmpDir + "/seg0.price.ndv")
+	if err != nil {
+		t.Fatalf("OpenMMap: %v", err)
+	}
+	defer data.Close()
+
+	dv, err := readNumericDocValues(data)
+	if err != nil {
+		t.Fatalf("readNumericDocValues: %v", err)
+	}
+
+	for i := range docCount {
+		if dv.HasValue(i) {
+			t.Errorf("expected HasValue(%d) = false", i)
+		}
+	}
+}
+
+func TestNumericDocValuesPointFieldSparse(t *testing.T) {
+	dir := createTempDir(t)
+
+	writer := NewIndexWriter(dir, analysis.NewFieldAnalyzers(analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{})), 100)
+
+	// Doc 0: has price (point field)
+	doc0 := document.NewDocument()
+	doc0.AddLongPoint("price", 100)
+	writer.AddDocument(doc0)
+
+	// Doc 1: no price
+	doc1 := document.NewDocument()
+	doc1.AddField("name", "test", document.FieldTypeKeyword)
+	writer.AddDocument(doc1)
+
+	// Doc 2: has price
+	doc2 := document.NewDocument()
+	doc2.AddLongPoint("price", 200)
+	writer.AddDocument(doc2)
+
+	if err := writer.Commit(); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+
+	reader, err := OpenDirectoryReader(dir)
+	if err != nil {
+		t.Fatalf("OpenDirectoryReader: %v", err)
+	}
+	defer reader.Close()
+
+	seg := reader.Leaves()[0].Segment
+	ndv := seg.NumericDocValues("price")
+	if ndv == nil {
+		t.Fatal("expected non-nil NumericDocValues for price")
+	}
+
+	// Doc 0 has value 100
+	v0, err := ndv.Get(0)
+	if err != nil {
+		t.Fatalf("Get(0): %v", err)
+	}
+	if v0 != 100 {
+		t.Errorf("Get(0) = %d, want 100", v0)
+	}
+	if !ndv.HasValue(0) {
+		t.Error("expected HasValue(0) = true")
+	}
+
+	// Doc 1 has no value
+	if ndv.HasValue(1) {
+		t.Error("expected HasValue(1) = false")
+	}
+
+	// Doc 2 has value 200
+	v2, err := ndv.Get(2)
+	if err != nil {
+		t.Fatalf("Get(2): %v", err)
+	}
+	if v2 != 200 {
+		t.Errorf("Get(2) = %d, want 200", v2)
+	}
+	if !ndv.HasValue(2) {
+		t.Error("expected HasValue(2) = true")
+	}
+
+	writer.Close()
+}
+
+func TestNumericDocValuesPointFieldMerge(t *testing.T) {
+	dir := createTempDir(t)
+
+	// Buffer size 2 to force multiple segments.
+	writer := NewIndexWriter(dir, analysis.NewFieldAnalyzers(analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{})), 2)
+
+	// Seg1: doc0 has price, doc1 does not
+	doc0 := document.NewDocument()
+	doc0.AddLongPoint("price", 100)
+	writer.AddDocument(doc0)
+
+	doc1 := document.NewDocument()
+	doc1.AddField("name", "noprice", document.FieldTypeKeyword)
+	writer.AddDocument(doc1)
+
+	// Seg2: doc2 has price, doc3 has price
+	doc2 := document.NewDocument()
+	doc2.AddLongPoint("price", 200)
+	writer.AddDocument(doc2)
+
+	doc3 := document.NewDocument()
+	doc3.AddLongPoint("price", 300)
+	writer.AddDocument(doc3)
+
+	if err := writer.Commit(); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+
+	// Force merge.
+	if err := writer.ForceMerge(1); err != nil {
+		t.Fatalf("ForceMerge: %v", err)
+	}
+	if err := writer.Commit(); err != nil {
+		t.Fatalf("Commit after merge: %v", err)
+	}
+
+	reader, err := OpenDirectoryReader(dir)
+	if err != nil {
+		t.Fatalf("OpenDirectoryReader: %v", err)
+	}
+	defer reader.Close()
+
+	if len(reader.Leaves()) != 1 {
+		t.Fatalf("expected 1 leaf, got %d", len(reader.Leaves()))
+	}
+
+	seg := reader.Leaves()[0].Segment
+	ndv := seg.NumericDocValues("price")
+	if ndv == nil {
+		t.Fatal("expected non-nil NumericDocValues after merge")
+	}
+
+	// After merge: doc0=100, doc1=no value, doc2=200, doc3=300
+	if !ndv.HasValue(0) {
+		t.Error("expected HasValue(0) = true")
+	}
+	v0, _ := ndv.Get(0)
+	if v0 != 100 {
+		t.Errorf("Get(0) = %d, want 100", v0)
+	}
+
+	if ndv.HasValue(1) {
+		t.Error("expected HasValue(1) = false")
+	}
+
+	if !ndv.HasValue(2) {
+		t.Error("expected HasValue(2) = true")
+	}
+	v2, _ := ndv.Get(2)
+	if v2 != 200 {
+		t.Errorf("Get(2) = %d, want 200", v2)
+	}
+
+	if !ndv.HasValue(3) {
+		t.Error("expected HasValue(3) = true")
+	}
+	v3, _ := ndv.Get(3)
+	if v3 != 300 {
+		t.Errorf("Get(3) = %d, want 300", v3)
+	}
+
+	writer.Close()
+}
+
+// TestNumericDocValuesSparseNonPointFieldMerge verifies that a non-point numeric
+// doc values field that only some documents have is written as sparse after merge.
+// Currently the merger uses isPoint to decide dense vs sparse, which means
+// non-point fields are always written as dense — causing HasValue to return true
+// for documents that never had a value.
+func TestNumericDocValuesSparseNonPointFieldMerge(t *testing.T) {
+	dir := createTempDir(t)
+
+	// Buffer size 2 to force multiple segments.
+	writer := NewIndexWriter(dir, analysis.NewFieldAnalyzers(analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{})), 2)
+
+	// Seg1: doc0 has "score", doc1 does not.
+	doc0 := document.NewDocument()
+	doc0.AddField("title", "first", document.FieldTypeText)
+	doc0.AddNumericDocValuesField("score", 10)
+	writer.AddDocument(doc0)
+
+	doc1 := document.NewDocument()
+	doc1.AddField("title", "second", document.FieldTypeText)
+	// no "score" field
+	writer.AddDocument(doc1)
+
+	// Seg2: doc2 does not have "score", doc3 has "score".
+	doc2 := document.NewDocument()
+	doc2.AddField("title", "third", document.FieldTypeText)
+	// no "score" field
+	writer.AddDocument(doc2)
+
+	doc3 := document.NewDocument()
+	doc3.AddField("title", "fourth", document.FieldTypeText)
+	doc3.AddNumericDocValuesField("score", 40)
+	writer.AddDocument(doc3)
+
+	if err := writer.Commit(); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+
+	// Force merge into 1 segment.
+	if err := writer.ForceMerge(1); err != nil {
+		t.Fatalf("ForceMerge: %v", err)
+	}
+	if err := writer.Commit(); err != nil {
+		t.Fatalf("Commit after merge: %v", err)
+	}
+
+	reader, err := OpenDirectoryReader(dir)
+	if err != nil {
+		t.Fatalf("OpenDirectoryReader: %v", err)
+	}
+	defer reader.Close()
+
+	if len(reader.Leaves()) != 1 {
+		t.Fatalf("expected 1 leaf, got %d", len(reader.Leaves()))
+	}
+
+	seg := reader.Leaves()[0].Segment
+	ndv := seg.NumericDocValues("score")
+	if ndv == nil {
+		t.Fatal("expected non-nil NumericDocValues after merge")
+	}
+
+	// doc0 has score=10
+	if !ndv.HasValue(0) {
+		t.Error("expected HasValue(0) = true")
+	}
+	v0, _ := ndv.Get(0)
+	if v0 != 10 {
+		t.Errorf("Get(0) = %d, want 10", v0)
+	}
+
+	// doc1 does NOT have score
+	if ndv.HasValue(1) {
+		t.Error("expected HasValue(1) = false (doc1 has no score field)")
+	}
+
+	// doc2 does NOT have score
+	if ndv.HasValue(2) {
+		t.Error("expected HasValue(2) = false (doc2 has no score field)")
+	}
+
+	// doc3 has score=40
+	if !ndv.HasValue(3) {
+		t.Error("expected HasValue(3) = true")
+	}
+	v3, _ := ndv.Get(3)
+	if v3 != 40 {
+		t.Errorf("Get(3) = %d, want 40", v3)
+	}
+
+	writer.Close()
+}
+
 func createTempDir(t *testing.T) store.Directory {
 	t.Helper()
 	tmpDir := t.TempDir()

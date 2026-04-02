@@ -7,6 +7,7 @@ import (
 
 	"gosearch/analysis"
 	"gosearch/search"
+	"gosearch/server/aggregation"
 	"gosearch/server/cluster"
 	"gosearch/server/index"
 )
@@ -14,12 +15,14 @@ import (
 type SearchRequest struct {
 	Index     string
 	QueryJSON map[string]any
+	AggsJSON  map[string]any
 	Size      int
 }
 
 type SearchResponse struct {
-	Took int64
-	Hits SearchHits
+	Took         int64
+	Hits         SearchHits
+	Aggregations map[string]any
 }
 
 type SearchHits struct {
@@ -82,15 +85,25 @@ func (a *TransportSearchAction) Execute(req SearchRequest) (SearchResponse, erro
 		return SearchResponse{}, &QueryParsingError{Reason: err.Error()}
 	}
 
+	// Parse aggregations
+	var aggs []aggregation.Aggregator
+	if req.AggsJSON != nil {
+		aggs, err = aggregation.ParseAggregations(req.AggsJSON, svc.Mapping())
+		if err != nil {
+			return SearchResponse{}, &QueryParsingError{Reason: err.Error()}
+		}
+	}
+
 	size := req.Size
 	if size <= 0 {
 		size = 10
 	}
 
-	// Query phase: collect top `size` from each shard, then merge
+	// Query phase: collect top-K and aggregations in a single pass per shard.
+	// When aggregations are present, a MultiCollector wraps both the top-K
+	// collector and the aggregation collector so all documents are visited once.
 	numShards := svc.NumShards()
 
-	// Collect top-K from each shard
 	shardResults := make([][]search.SearchResult, 0, numShards)
 	totalHits := 0
 	for i := range numShards {
@@ -100,11 +113,35 @@ func (a *TransportSearchAction) Execute(req SearchRequest) (SearchResponse, erro
 			continue
 		}
 
-		collector := search.NewTopKCollector(size)
+		topK := search.NewTopKCollector(size)
+		var collector search.Collector = topK
+		if len(aggs) > 0 {
+			aggCollector := aggregation.NewCollector(aggs)
+			collector = search.NewMultiCollector(topK, aggCollector)
+		}
+
 		results := searcher.Search(query, collector)
-		totalHits += collector.TotalHits()
+		totalHits += topK.TotalHits()
 		if len(results) > 0 {
 			shardResults = append(shardResults, results)
+		}
+	}
+
+	// Build aggregation results
+	var aggResults map[string]any
+	if len(aggs) > 0 {
+		aggResults = make(map[string]any, len(aggs))
+		for _, agg := range aggs {
+			result := agg.BuildResult()
+			if result.Buckets != nil {
+				buckets := make([]map[string]any, len(result.Buckets))
+				for i, b := range result.Buckets {
+					buckets[i] = map[string]any{"key": b.Key, "doc_count": b.DocCount}
+				}
+				aggResults[result.Name] = map[string]any{"buckets": buckets}
+			} else {
+				aggResults[result.Name] = map[string]any{"value": result.Value}
+			}
 		}
 	}
 
@@ -139,6 +176,7 @@ func (a *TransportSearchAction) Execute(req SearchRequest) (SearchResponse, erro
 			MaxScore: maxScore,
 			Hits:     hits,
 		},
+		Aggregations: aggResults,
 	}, nil
 }
 

@@ -3,6 +3,8 @@ package action
 import (
 	"encoding/json"
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 
 	"gosearch/analysis"
@@ -43,6 +45,8 @@ func (p *QueryParser) ParseQuery(queryJSON map[string]any) (search.Query, error)
 			return p.parseMultiMatch(value)
 		case "bool":
 			return p.parseBool(value)
+		case "range":
+			return p.parseRange(value)
 		default:
 			return nil, fmt.Errorf("unknown query type [%s]", key)
 		}
@@ -209,10 +213,10 @@ func (p *QueryParser) parseExists(value any) (search.Query, error) {
 	}
 
 	switch fm.Type {
-	case mapping.FieldTypeText, mapping.FieldTypeKeyword, mapping.FieldTypeBoolean:
+	case mapping.FieldTypeText, mapping.FieldTypeKeyword, mapping.FieldTypeBoolean,
+		mapping.FieldTypeLong, mapping.FieldTypeDouble:
 		return search.NewFieldExistsQuery(fieldName), nil
 	default:
-		// Long, Double -- sorted doc values not yet available for these types.
 		return search.NewMatchNoneQuery(), nil
 	}
 }
@@ -305,4 +309,144 @@ func (p *QueryParser) parseBool(value any) (search.Query, error) {
 	}
 
 	return bq, nil
+}
+
+func (p *QueryParser) parseRange(value any) (search.Query, error) {
+	obj, ok := value.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("range query must be an object")
+	}
+
+	for field, v := range obj {
+		rangeObj, ok := v.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("range query value for [%s] must be an object", field)
+		}
+
+		fm, exists := p.mapping.Properties[field]
+		if !exists {
+			return nil, fmt.Errorf("unknown field [%s] in range query", field)
+		}
+
+		switch fm.Type {
+		case mapping.FieldTypeLong:
+			return p.parseLongRange(field, rangeObj)
+		case mapping.FieldTypeDouble:
+			return p.parseDoubleRange(field, rangeObj)
+		default:
+			return nil, fmt.Errorf("range query not supported for field type [%s]", fm.Type)
+		}
+	}
+	return nil, fmt.Errorf("range query must specify a field")
+}
+
+func (p *QueryParser) parseLongRange(field string, params map[string]any) (search.Query, error) {
+	minVal := int64(math.MinInt64)
+	maxVal := int64(math.MaxInt64)
+
+	if v, ok := params["gte"]; ok {
+		n, err := rangeToInt64(v)
+		if err != nil {
+			return nil, fmt.Errorf("range gte: %w", err)
+		}
+		minVal = n
+	}
+	if v, ok := params["gt"]; ok {
+		n, err := rangeToInt64(v)
+		if err != nil {
+			return nil, fmt.Errorf("range gt: %w", err)
+		}
+		if n == math.MaxInt64 {
+			return search.NewMatchNoneQuery(), nil
+		}
+		minVal = n + 1
+	}
+	if v, ok := params["lte"]; ok {
+		n, err := rangeToInt64(v)
+		if err != nil {
+			return nil, fmt.Errorf("range lte: %w", err)
+		}
+		maxVal = n
+	}
+	if v, ok := params["lt"]; ok {
+		n, err := rangeToInt64(v)
+		if err != nil {
+			return nil, fmt.Errorf("range lt: %w", err)
+		}
+		if n == math.MinInt64 {
+			return search.NewMatchNoneQuery(), nil
+		}
+		maxVal = n - 1
+	}
+
+	return search.NewPointRangeQuery(field, minVal, maxVal), nil
+}
+
+func (p *QueryParser) parseDoubleRange(field string, params map[string]any) (search.Query, error) {
+	minVal := -math.MaxFloat64
+	maxVal := math.MaxFloat64
+
+	if v, ok := params["gte"]; ok {
+		f, err := rangeToFloat64(v)
+		if err != nil {
+			return nil, fmt.Errorf("range gte: %w", err)
+		}
+		minVal = f
+	}
+	if v, ok := params["gt"]; ok {
+		f, err := rangeToFloat64(v)
+		if err != nil {
+			return nil, fmt.Errorf("range gt: %w", err)
+		}
+		minVal = math.Nextafter(f, math.Inf(1))
+	}
+	if v, ok := params["lte"]; ok {
+		f, err := rangeToFloat64(v)
+		if err != nil {
+			return nil, fmt.Errorf("range lte: %w", err)
+		}
+		maxVal = f
+	}
+	if v, ok := params["lt"]; ok {
+		f, err := rangeToFloat64(v)
+		if err != nil {
+			return nil, fmt.Errorf("range lt: %w", err)
+		}
+		maxVal = math.Nextafter(f, math.Inf(-1))
+	}
+
+	return search.NewDoublePointRangeQuery(field, minVal, maxVal), nil
+}
+
+func rangeToInt64(v any) (int64, error) {
+	switch val := v.(type) {
+	case json.Number:
+		if n, err := strconv.ParseInt(string(val), 10, 64); err == nil {
+			return n, nil
+		}
+		f, err := strconv.ParseFloat(string(val), 64)
+		if err != nil {
+			return 0, err
+		}
+		return int64(f), nil
+	case float64:
+		return int64(val), nil
+	case string:
+		return strconv.ParseInt(val, 10, 64)
+	default:
+		return 0, fmt.Errorf("cannot convert %T to int64", v)
+	}
+}
+
+func rangeToFloat64(v any) (float64, error) {
+	switch val := v.(type) {
+	case json.Number:
+		return strconv.ParseFloat(string(val), 64)
+	case float64:
+		return val, nil
+	case string:
+		return strconv.ParseFloat(val, 64)
+	default:
+		return 0, fmt.Errorf("cannot convert %T to float64", v)
+	}
 }

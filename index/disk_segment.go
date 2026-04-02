@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"gosearch/fst"
+	"gosearch/index/bkd"
 	"gosearch/store"
 	"os"
 	"sync/atomic"
@@ -29,10 +30,15 @@ type DiskSegment struct {
 	stored *store.MMapIndexInput // .stored
 
 	// Doc values mmap'd files
-	numericDV    map[string]*store.MMapIndexInput // field → .ndv
-	sortedDVOrd  map[string]*store.MMapIndexInput // field → .sdvo
-	sortedDVDict map[string]*store.MMapIndexInput // field → .sdvd
-	dvSkip       map[string]*store.MMapIndexInput // field → .ndvs or .sdvs
+	numericDV       map[string]*store.MMapIndexInput // field → .ndv
+	numericDVParsed map[string]*diskNumericDocValues // field → parsed NDV (cached)
+	sortedDVOrd     map[string]*store.MMapIndexInput // field → .sdvo
+	sortedDVDict    map[string]*store.MMapIndexInput // field → .sdvd
+	dvSkip          map[string]*store.MMapIndexInput // field → .ndvs or .sdvs
+
+	// Point fields
+	pointFields map[string]struct{}
+	bkdReaders  map[string]*bkd.BKDReader
 }
 
 // OpenDiskSegment opens a V2 segment from the given directory path.
@@ -48,18 +54,25 @@ func OpenDiskSegment(dirPath string, segName string) (*DiskSegment, error) {
 	}
 
 	ds := &DiskSegment{
-		name:         meta.Name,
-		docCount:     meta.DocCount,
-		fieldList:    meta.Fields,
-		termIndex:    make(map[string]*store.MMapIndexInput),
-		termFSTFiles: make(map[string]*store.MMapIndexInput),
-		termData:     make(map[string]*store.MMapIndexInput),
-		fieldLens:    make(map[string]*store.MMapIndexInput),
-		termFSTs:     make(map[string]*fst.FST),
-		numericDV:    make(map[string]*store.MMapIndexInput),
-		sortedDVOrd:  make(map[string]*store.MMapIndexInput),
-		sortedDVDict: make(map[string]*store.MMapIndexInput),
-		dvSkip:       make(map[string]*store.MMapIndexInput),
+		name:            meta.Name,
+		docCount:        meta.DocCount,
+		fieldList:       meta.Fields,
+		termIndex:       make(map[string]*store.MMapIndexInput),
+		termFSTFiles:    make(map[string]*store.MMapIndexInput),
+		termData:        make(map[string]*store.MMapIndexInput),
+		fieldLens:       make(map[string]*store.MMapIndexInput),
+		termFSTs:        make(map[string]*fst.FST),
+		numericDV:       make(map[string]*store.MMapIndexInput),
+		numericDVParsed: make(map[string]*diskNumericDocValues),
+		sortedDVOrd:     make(map[string]*store.MMapIndexInput),
+		sortedDVDict:    make(map[string]*store.MMapIndexInput),
+		dvSkip:          make(map[string]*store.MMapIndexInput),
+	}
+
+	// Populate pointFields from metadata
+	ds.pointFields = make(map[string]struct{}, len(meta.PointFields))
+	for _, f := range meta.PointFields {
+		ds.pointFields[f] = struct{}{}
 	}
 
 	// Mmap per-field files
@@ -120,12 +133,21 @@ func OpenDiskSegment(dirPath string, segName string) (*DiskSegment, error) {
 		}
 		ds.numericDV[field] = ndv
 
-		ndvs, err := store.OpenMMap(fmt.Sprintf("%s/%s.%s.ndvs", dirPath, segName, field))
+		parsed, err := readNumericDocValues(ndv)
 		if err != nil {
 			ds.Close()
-			return nil, fmt.Errorf("mmap ndvs for %s: %w", field, err)
+			return nil, fmt.Errorf("parse ndv for %s: %w", field, err)
 		}
-		ds.dvSkip[field] = ndvs
+		ds.numericDVParsed[field] = parsed
+
+		if _, isPoint := ds.pointFields[field]; !isPoint {
+			ndvs, err := store.OpenMMap(fmt.Sprintf("%s/%s.%s.ndvs", dirPath, segName, field))
+			if err != nil {
+				ds.Close()
+				return nil, fmt.Errorf("mmap ndvs for %s: %w", field, err)
+			}
+			ds.dvSkip[field] = ndvs
+		}
 	}
 
 	// Mmap sorted doc values files
@@ -150,6 +172,17 @@ func OpenDiskSegment(dirPath string, segName string) (*DiskSegment, error) {
 			return nil, fmt.Errorf("mmap sdvs for %s: %w", field, err)
 		}
 		ds.dvSkip[field] = sdvs
+	}
+
+	// Open BKD readers for point fields
+	ds.bkdReaders = make(map[string]*bkd.BKDReader, len(meta.PointFields))
+	for _, field := range meta.PointFields {
+		reader, err := bkd.OpenBKDReaderFromPath(dirPath, segName, field)
+		if err != nil {
+			ds.Close()
+			return nil, fmt.Errorf("open bkd reader for %s: %w", field, err)
+		}
+		ds.bkdReaders[field] = reader
 	}
 
 	ds.refCount.Store(1)
@@ -194,6 +227,9 @@ func (ds *DiskSegment) Close() error {
 	}
 	for _, m := range ds.sortedDVDict {
 		m.Close()
+	}
+	for _, r := range ds.bkdReaders {
+		r.Close()
 	}
 	return nil
 }
@@ -395,11 +431,11 @@ func (ds *DiskSegment) DocValuesSkipper(field string) *DocValuesSkipper {
 }
 
 func (ds *DiskSegment) NumericDocValues(field string) NumericDocValues {
-	data := ds.numericDV[field]
-	if data == nil {
+	parsed := ds.numericDVParsed[field]
+	if parsed == nil {
 		return nil
 	}
-	return &diskNumericDocValues{data: data, docCount: ds.docCount}
+	return parsed
 }
 
 func (ds *DiskSegment) SortedDocValues(field string) SortedDocValues {
@@ -413,6 +449,18 @@ func (ds *DiskSegment) SortedDocValues(field string) SortedDocValues {
 		return nil
 	}
 	return sdv
+}
+
+func (ds *DiskSegment) PointValues(field string) PointValues {
+	reader := ds.bkdReaders[field]
+	if reader == nil {
+		return nil
+	}
+	return &bkdPointValues{reader: reader}
+}
+
+func (ds *DiskSegment) PointFields() map[string]struct{} {
+	return ds.pointFields
 }
 
 // Compile-time check: DiskSegment implements SegmentReader.
