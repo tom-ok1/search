@@ -98,6 +98,10 @@ func (dwpt *DocumentsWriterPerThread) addDocument(doc *document.Document) (int64
 			}
 			vals[docID] = field.NumericValue
 			seg.numericDocValues[field.Name] = vals
+			if seg.numericDocIDs[field.Name] == nil {
+				seg.numericDocIDs[field.Name] = make(map[int]struct{})
+			}
+			seg.numericDocIDs[field.Name][docID] = struct{}{}
 			bytesAdded += 8
 
 		case document.FieldTypeSortedDocValues:
@@ -117,10 +121,10 @@ func (dwpt *DocumentsWriterPerThread) addDocument(doc *document.Document) (int64
 			vals[docID] = field.NumericValue
 			seg.numericDocValues[field.Name] = vals
 			seg.pointFields[field.Name] = struct{}{}
-			if seg.pointDocIDs[field.Name] == nil {
-				seg.pointDocIDs[field.Name] = make(map[int]struct{})
+			if seg.numericDocIDs[field.Name] == nil {
+				seg.numericDocIDs[field.Name] = make(map[int]struct{})
 			}
-			seg.pointDocIDs[field.Name][docID] = struct{}{}
+			seg.numericDocIDs[field.Name][docID] = struct{}{}
 			bytesAdded += 8
 		}
 

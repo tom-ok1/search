@@ -430,17 +430,23 @@ func writeNumericDocValuesSkipIndexFromNDV(dir store.Directory, segName, field s
 	}
 
 	ndvPath := dir.FilePath(fmt.Sprintf("%s.%s.ndv", segName, field))
-	ndv, err := store.OpenMMap(ndvPath)
+	mmap, err := store.OpenMMap(ndvPath)
 	if err != nil {
 		return fmt.Errorf("open ndv for skip index: %w", err)
 	}
-	defer ndv.Close()
+	defer mmap.Close()
 
-	// Values start at offset 1 (after the mode byte) in the new .ndv format.
-	// This function is only called for dense (non-point) fields.
+	ndv, err := readNumericDocValues(mmap)
+	if err != nil {
+		return fmt.Errorf("read ndv for skip index: %w", err)
+	}
+
 	var acc skipBlockAccumulator
 	for i := range docCount {
-		v, err := ndv.ReadInt64At(1 + i*8)
+		if !ndv.HasValue(i) {
+			continue
+		}
+		v, err := ndv.Get(i)
 		if err != nil {
 			return fmt.Errorf("read ndv value %d: %w", i, err)
 		}

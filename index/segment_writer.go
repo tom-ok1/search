@@ -86,10 +86,7 @@ func WriteSegmentV2(dir store.Directory, seg *InMemorySegment) ([]string, []stri
 	// 5. Write numeric doc values
 	for _, fieldName := range meta.NumericDVFields {
 		values := seg.numericDocValues[fieldName]
-		var presence map[int]struct{}
-		if _, isPoint := seg.pointFields[fieldName]; isPoint {
-			presence = seg.pointDocIDs[fieldName]
-		}
+		presence := seg.numericDocIDs[fieldName]
 		if err := writeNumericDocValues(dir, seg.name, fieldName, values, seg.docCount, presence); err != nil {
 			return nil, nil, err
 		}

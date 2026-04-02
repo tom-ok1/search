@@ -25,8 +25,8 @@ type InMemorySegment struct {
 	numericDocValues map[string][]int64  // field -> values indexed by docID
 	sortedDocValues  map[string][]string // field -> values indexed by docID
 	// Point fields: tracks which numeric doc values fields are point-indexed
-	pointFields map[string]struct{}
-	pointDocIDs map[string]map[int]struct{} // field -> set of docIDs that have a point value
+	pointFields   map[string]struct{}
+	numericDocIDs map[string]map[int]struct{} // field -> set of docIDs that have a numeric doc value
 }
 
 func newInMemorySegment(name string) *InMemorySegment {
@@ -38,6 +38,6 @@ func newInMemorySegment(name string) *InMemorySegment {
 		numericDocValues: make(map[string][]int64),
 		sortedDocValues:  make(map[string][]string),
 		pointFields:      make(map[string]struct{}),
-		pointDocIDs:      make(map[string]map[int]struct{}),
+		numericDocIDs:    make(map[string]map[int]struct{}),
 	}
 }
