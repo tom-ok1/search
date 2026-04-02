@@ -20,6 +20,9 @@ const (
 // NumericDocValues provides random access to per-document int64 values.
 type NumericDocValues interface {
 	Get(docID int) (int64, error)
+	// HasValue reports whether docID has a value for this field.
+	// For dense fields (every doc has a value), this always returns true.
+	HasValue(docID int) bool
 }
 
 // SortedDocValues provides access to deduplicated, sorted byte values per document.
@@ -30,18 +33,53 @@ type SortedDocValues interface {
 	ValueCount() int
 }
 
+const (
+	ndvModeEmpty  byte = 0
+	ndvModeDense  byte = 1
+	ndvModeSparse byte = 2
+)
+
 // diskNumericDocValues reads int64 values from an mmap'd .ndv file.
-// Format: [values: docCount × int64][docCount: uint32]
+// Format: [mode: 1 byte][data...][docCount: uint32]
 type diskNumericDocValues struct {
-	data     *store.MMapIndexInput
-	docCount int
+	data         *store.MMapIndexInput
+	docCount     int
+	mode         byte
+	valuesOffset int
+	presence     *Bitset // nil means all docs have values (dense) or no docs have values (empty)
 }
 
 func (dv *diskNumericDocValues) Get(docID int) (int64, error) {
 	if docID < 0 || docID >= dv.docCount {
 		return 0, fmt.Errorf("docID %d out of range [0, %d)", docID, dv.docCount)
 	}
-	return dv.data.ReadInt64At(docID * 8)
+	switch dv.mode {
+	case ndvModeEmpty:
+		return 0, nil
+	case ndvModeDense:
+		return dv.data.ReadInt64At(dv.valuesOffset + docID*8)
+	case ndvModeSparse:
+		if !dv.presence.Get(docID) {
+			return 0, nil
+		}
+		rank := dv.presence.Rank(docID)
+		return dv.data.ReadInt64At(dv.valuesOffset + rank*8)
+	default:
+		return 0, fmt.Errorf("unknown ndv mode %d", dv.mode)
+	}
+}
+
+func (dv *diskNumericDocValues) HasValue(docID int) bool {
+	switch dv.mode {
+	case ndvModeEmpty:
+		return false
+	case ndvModeDense:
+		return true
+	case ndvModeSparse:
+		return dv.presence.Get(docID)
+	default:
+		return false
+	}
 }
 
 // diskSortedDocValues reads ordinals from .sdvo and dictionary from .sdvd.
@@ -148,29 +186,131 @@ func (dv *diskSortedDocValues) ValueCount() int {
 	return dv.valueCount
 }
 
-// writeNumericDocValues writes per-doc int64 values in fixed-width format.
-// Format: [values: docCount × int64 (little-endian)][docCount: uint32]
-func writeNumericDocValues(dir store.Directory, segName, field string, values []int64, docCount int) error {
+// writeNumericDocValues writes per-doc int64 values with dense/sparse/empty mode.
+// Format: [mode: 1 byte][data...][docCount: uint32]
+//   - presence=nil → dense mode (all docs have values)
+//   - presence non-nil, len==0 → empty mode
+//   - presence non-nil, len==docCount → dense mode
+//   - presence non-nil, 0 < len < docCount → sparse mode
+func writeNumericDocValues(dir store.Directory, segName, field string, values []int64, docCount int, presence map[int]struct{}) error {
 	out, err := dir.CreateOutput(fmt.Sprintf("%s.%s.ndv", segName, field))
 	if err != nil {
 		return err
 	}
 	defer out.Close()
 
-	for i := range docCount {
-		v := int64(0)
-		if i < len(values) {
-			v = values[i]
+	// Determine mode
+	var mode byte
+	switch {
+	case presence == nil || len(presence) == docCount:
+		mode = ndvModeDense
+	case len(presence) == 0:
+		mode = ndvModeEmpty
+	default:
+		mode = ndvModeSparse
+	}
+
+	// Write mode byte
+	if _, err := out.Write([]byte{mode}); err != nil {
+		return fmt.Errorf("write ndv mode: %w", err)
+	}
+
+	switch mode {
+	case ndvModeEmpty:
+		// Nothing to write
+
+	case ndvModeDense:
+		for i := range docCount {
+			v := int64(0)
+			if i < len(values) {
+				v = values[i]
+			}
+			if err := out.WriteUint64(uint64(v)); err != nil {
+				return fmt.Errorf("write ndv value: %w", err)
+			}
 		}
-		if err := out.WriteUint64(uint64(v)); err != nil {
-			return fmt.Errorf("write ndv value: %w", err)
+
+	case ndvModeSparse:
+		// Write bitset
+		bs := NewBitset(docCount)
+		for docID := range presence {
+			bs.Set(docID)
+		}
+		if _, err := out.Write(bs.Bytes()); err != nil {
+			return fmt.Errorf("write ndv bitset: %w", err)
+		}
+
+		// Write only values for docs in presence, in docID order
+		for i := range docCount {
+			if _, ok := presence[i]; ok {
+				v := int64(0)
+				if i < len(values) {
+					v = values[i]
+				}
+				if err := out.WriteUint64(uint64(v)); err != nil {
+					return fmt.Errorf("write ndv sparse value: %w", err)
+				}
+			}
 		}
 	}
 
+	// Trailer: docCount as uint32
 	if err := out.WriteUint32(uint32(docCount)); err != nil {
 		return fmt.Errorf("write ndv trailer: %w", err)
 	}
 	return nil
+}
+
+// readNumericDocValues reads a diskNumericDocValues from an mmap'd .ndv file.
+func readNumericDocValues(data *store.MMapIndexInput) (*diskNumericDocValues, error) {
+	length := data.Length()
+
+	// Read trailer: docCount from last 4 bytes
+	docCountU32, err := data.ReadUint32At(length - 4)
+	if err != nil {
+		return nil, fmt.Errorf("read ndv trailer: %w", err)
+	}
+	docCount := int(docCountU32)
+
+	// Read mode byte at offset 0
+	mode, err := data.ReadByteAt(0)
+	if err != nil {
+		return nil, fmt.Errorf("read ndv mode: %w", err)
+	}
+
+	dv := &diskNumericDocValues{
+		data:     data,
+		docCount: docCount,
+		mode:     mode,
+	}
+
+	switch mode {
+	case ndvModeEmpty:
+		// No values to read
+
+	case ndvModeDense:
+		dv.valuesOffset = 1
+
+	case ndvModeSparse:
+		bitsetLen := (docCount + 7) / 8
+		slice, err := data.Slice(1, bitsetLen)
+		if err != nil {
+			return nil, fmt.Errorf("slice ndv bitset: %w", err)
+		}
+		raw, err := slice.ReadBytes(bitsetLen)
+		if err != nil {
+			return nil, fmt.Errorf("read ndv bitset: %w", err)
+		}
+		bs := BitsetFromBytes(raw, docCount)
+		bs.BuildRankTable()
+		dv.presence = bs
+		dv.valuesOffset = 1 + bitsetLen
+
+	default:
+		return nil, fmt.Errorf("unknown ndv mode %d", mode)
+	}
+
+	return dv, nil
 }
 
 // writeSortedDocValues writes deduplicated sorted string values.

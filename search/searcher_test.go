@@ -82,6 +82,8 @@ func (m *mockSegment) PostingsIterator(field, term string) index.PostingsIterato
 func (m *mockSegment) NumericDocValues(field string) index.NumericDocValues  { return nil }
 func (m *mockSegment) DocValuesSkipper(field string) *index.DocValuesSkipper { return nil }
 func (m *mockSegment) SortedDocValues(field string) index.SortedDocValues    { return nil }
+func (m *mockSegment) PointValues(field string) index.PointValues            { return nil }
+func (m *mockSegment) PointFields() map[string]struct{}                      { return nil }
 func (m *mockSegment) Close() error                                          { return nil }
 
 // mockDocEntry represents a document with its score for mockQuery.

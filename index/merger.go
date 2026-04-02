@@ -7,6 +7,7 @@ import (
 	"sort"
 
 	"gosearch/fst"
+	"gosearch/index/bkd"
 	"gosearch/store"
 )
 
@@ -86,6 +87,19 @@ func MergeSegmentsToDisk(dir store.Directory, inputs []MergeInput, newName strin
 	numericDVFields := collectMergeFields(inputs, (*DiskSegment).NumericDVFields)
 	sortedDVFields := collectMergeFields(inputs, (*DiskSegment).SortedDVFields)
 
+	// Collect point fields from inputs.
+	pointFieldSet := make(map[string]struct{})
+	for _, input := range inputs {
+		for f := range input.Segment.PointFields() {
+			pointFieldSet[f] = struct{}{}
+		}
+	}
+	pointFields := make([]string, 0, len(pointFieldSet))
+	for f := range pointFieldSet {
+		pointFields = append(pointFields, f)
+	}
+	sort.Strings(pointFields)
+
 	var files []string
 
 	// Write metadata.
@@ -95,6 +109,7 @@ func MergeSegmentsToDisk(dir store.Directory, inputs []MergeInput, newName strin
 		Fields:          allFields,
 		NumericDVFields: numericDVFields,
 		SortedDVFields:  sortedDVFields,
+		PointFields:     pointFields,
 	})
 	if err != nil {
 		return nil, err
@@ -134,10 +149,18 @@ func MergeSegmentsToDisk(dir store.Directory, inputs []MergeInput, newName strin
 		}
 		files = append(files, fmt.Sprintf("%s.%s.ndv", newName, field))
 
-		if err := writeNumericDocValuesSkipIndexFromNDV(dir, newName, field, docCount); err != nil {
-			return nil, err
+		_, isPoint := pointFieldSet[field]
+		if isPoint {
+			if err := mergePointFieldToDisk(dir, newName, field, inputs, mapper); err != nil {
+				return nil, err
+			}
+			files = append(files, fmt.Sprintf("%s.%s.kd", newName, field))
+		} else {
+			if err := writeNumericDocValuesSkipIndexFromNDV(dir, newName, field, docCount); err != nil {
+				return nil, err
+			}
+			files = append(files, fmt.Sprintf("%s.%s.ndvs", newName, field))
 		}
-		files = append(files, fmt.Sprintf("%s.%s.ndvs", newName, field))
 	}
 
 	// Merge sorted doc values.
@@ -238,28 +261,97 @@ func mergeNumericDocValuesToDisk(dir store.Directory, segName, field string, inp
 	}
 	defer out.Close()
 
+	docCount := mapper.LiveDocCount()
+
+	// Collect presence + values, then determine mode.
+	presence := NewBitset(docCount)
+	var values []int64
+
 	for i, input := range inputs {
 		ndv := input.Segment.NumericDocValues(field)
+		if ndv == nil {
+			continue
+		}
 		for oldDoc := 0; oldDoc < input.Segment.DocCount(); oldDoc++ {
 			if !mapper.IsLive(i, oldDoc) {
 				continue
 			}
-			var v int64
-			if ndv != nil {
-				v, err = ndv.Get(oldDoc)
-				if err != nil {
-					return fmt.Errorf("read numeric DV for field %s doc %d: %w", field, oldDoc, err)
-				}
+			if !ndv.HasValue(oldDoc) {
+				continue
 			}
+			newDoc := mapper.Map(i, oldDoc)
+			v, err := ndv.Get(oldDoc)
+			if err != nil {
+				return fmt.Errorf("read numeric DV for field %s doc %d: %w", field, oldDoc, err)
+			}
+			presence.Set(newDoc)
+			values = append(values, v)
+		}
+	}
+
+	numWithValue := len(values)
+	switch numWithValue {
+	case 0:
+		if _, err := out.Write([]byte{ndvModeEmpty}); err != nil {
+			return fmt.Errorf("write ndv mode: %w", err)
+		}
+	case docCount:
+		// All docs have values — dense.
+		if _, err := out.Write([]byte{ndvModeDense}); err != nil {
+			return fmt.Errorf("write ndv mode: %w", err)
+		}
+		for _, v := range values {
 			if err := out.WriteUint64(uint64(v)); err != nil {
 				return fmt.Errorf("write ndv value: %w", err)
 			}
 		}
+	default:
+		// Sparse.
+		if _, err := out.Write([]byte{ndvModeSparse}); err != nil {
+			return fmt.Errorf("write ndv mode: %w", err)
+		}
+		if _, err := out.Write(presence.Bytes()); err != nil {
+			return fmt.Errorf("write ndv bitset: %w", err)
+		}
+		for _, v := range values {
+			if err := out.WriteUint64(uint64(v)); err != nil {
+				return fmt.Errorf("write ndv sparse value: %w", err)
+			}
+		}
 	}
-	if err := out.WriteUint32(uint32(mapper.LiveDocCount())); err != nil {
+
+	if err := out.WriteUint32(uint32(docCount)); err != nil {
 		return err
 	}
 	return nil
+}
+
+// mergePointFieldToDisk writes the BKD tree (.kd) for a point field during segment merge.
+func mergePointFieldToDisk(dir store.Directory, segName, field string, inputs []MergeInput, mapper *DocIDMapper) error {
+	w := bkd.NewBKDWriter()
+
+	for i, input := range inputs {
+		ndv := input.Segment.NumericDocValues(field)
+		if ndv == nil {
+			continue
+		}
+		for oldDoc := 0; oldDoc < input.Segment.DocCount(); oldDoc++ {
+			if !mapper.IsLive(i, oldDoc) {
+				continue
+			}
+			if !ndv.HasValue(oldDoc) {
+				continue
+			}
+			newDoc := mapper.Map(i, oldDoc)
+			v, err := ndv.Get(oldDoc)
+			if err != nil {
+				return fmt.Errorf("read numeric DV for field %s doc %d: %w", field, oldDoc, err)
+			}
+			w.Add(newDoc, v)
+		}
+	}
+
+	return w.Finish(dir, segName, field)
 }
 
 // mergeFieldPostingsToDisk performs k-way merge for a single field and writes
