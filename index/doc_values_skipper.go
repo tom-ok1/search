@@ -436,9 +436,11 @@ func writeNumericDocValuesSkipIndexFromNDV(dir store.Directory, segName, field s
 	}
 	defer ndv.Close()
 
+	// Values start at offset 1 (after the mode byte) in the new .ndv format.
+	// This function is only called for dense (non-point) fields.
 	var acc skipBlockAccumulator
 	for i := range docCount {
-		v, err := ndv.ReadInt64At(i * 8)
+		v, err := ndv.ReadInt64At(1 + i*8)
 		if err != nil {
 			return fmt.Errorf("read ndv value %d: %w", i, err)
 		}
