@@ -826,6 +826,158 @@ func TestNumericDocValuesEmptyRoundTrip(t *testing.T) {
 	}
 }
 
+func TestNumericDocValuesPointFieldSparse(t *testing.T) {
+	dir := createTempDir(t)
+
+	writer := NewIndexWriter(dir, analysis.NewFieldAnalyzers(analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{})), 100)
+
+	// Doc 0: has price (point field)
+	doc0 := document.NewDocument()
+	doc0.AddLongPoint("price", 100)
+	writer.AddDocument(doc0)
+
+	// Doc 1: no price
+	doc1 := document.NewDocument()
+	doc1.AddField("name", "test", document.FieldTypeKeyword)
+	writer.AddDocument(doc1)
+
+	// Doc 2: has price
+	doc2 := document.NewDocument()
+	doc2.AddLongPoint("price", 200)
+	writer.AddDocument(doc2)
+
+	if err := writer.Commit(); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+
+	reader, err := OpenDirectoryReader(dir)
+	if err != nil {
+		t.Fatalf("OpenDirectoryReader: %v", err)
+	}
+	defer reader.Close()
+
+	seg := reader.Leaves()[0].Segment
+	ndv := seg.NumericDocValues("price")
+	if ndv == nil {
+		t.Fatal("expected non-nil NumericDocValues for price")
+	}
+
+	// Doc 0 has value 100
+	v0, err := ndv.Get(0)
+	if err != nil {
+		t.Fatalf("Get(0): %v", err)
+	}
+	if v0 != 100 {
+		t.Errorf("Get(0) = %d, want 100", v0)
+	}
+	if !ndv.HasValue(0) {
+		t.Error("expected HasValue(0) = true")
+	}
+
+	// Doc 1 has no value
+	if ndv.HasValue(1) {
+		t.Error("expected HasValue(1) = false")
+	}
+
+	// Doc 2 has value 200
+	v2, err := ndv.Get(2)
+	if err != nil {
+		t.Fatalf("Get(2): %v", err)
+	}
+	if v2 != 200 {
+		t.Errorf("Get(2) = %d, want 200", v2)
+	}
+	if !ndv.HasValue(2) {
+		t.Error("expected HasValue(2) = true")
+	}
+
+	writer.Close()
+}
+
+func TestNumericDocValuesPointFieldMerge(t *testing.T) {
+	dir := createTempDir(t)
+
+	// Buffer size 2 to force multiple segments.
+	writer := NewIndexWriter(dir, analysis.NewFieldAnalyzers(analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{})), 2)
+
+	// Seg1: doc0 has price, doc1 does not
+	doc0 := document.NewDocument()
+	doc0.AddLongPoint("price", 100)
+	writer.AddDocument(doc0)
+
+	doc1 := document.NewDocument()
+	doc1.AddField("name", "noprice", document.FieldTypeKeyword)
+	writer.AddDocument(doc1)
+
+	// Seg2: doc2 has price, doc3 has price
+	doc2 := document.NewDocument()
+	doc2.AddLongPoint("price", 200)
+	writer.AddDocument(doc2)
+
+	doc3 := document.NewDocument()
+	doc3.AddLongPoint("price", 300)
+	writer.AddDocument(doc3)
+
+	if err := writer.Commit(); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+
+	// Force merge.
+	if err := writer.ForceMerge(1); err != nil {
+		t.Fatalf("ForceMerge: %v", err)
+	}
+	if err := writer.Commit(); err != nil {
+		t.Fatalf("Commit after merge: %v", err)
+	}
+
+	reader, err := OpenDirectoryReader(dir)
+	if err != nil {
+		t.Fatalf("OpenDirectoryReader: %v", err)
+	}
+	defer reader.Close()
+
+	if len(reader.Leaves()) != 1 {
+		t.Fatalf("expected 1 leaf, got %d", len(reader.Leaves()))
+	}
+
+	seg := reader.Leaves()[0].Segment
+	ndv := seg.NumericDocValues("price")
+	if ndv == nil {
+		t.Fatal("expected non-nil NumericDocValues after merge")
+	}
+
+	// After merge: doc0=100, doc1=no value, doc2=200, doc3=300
+	if !ndv.HasValue(0) {
+		t.Error("expected HasValue(0) = true")
+	}
+	v0, _ := ndv.Get(0)
+	if v0 != 100 {
+		t.Errorf("Get(0) = %d, want 100", v0)
+	}
+
+	if ndv.HasValue(1) {
+		t.Error("expected HasValue(1) = false")
+	}
+
+	if !ndv.HasValue(2) {
+		t.Error("expected HasValue(2) = true")
+	}
+	v2, _ := ndv.Get(2)
+	if v2 != 200 {
+		t.Errorf("Get(2) = %d, want 200", v2)
+	}
+
+	if !ndv.HasValue(3) {
+		t.Error("expected HasValue(3) = true")
+	}
+	v3, _ := ndv.Get(3)
+	if v3 != 300 {
+		t.Errorf("Get(3) = %d, want 300", v3)
+	}
+
+	writer.Close()
+}
+
 func createTempDir(t *testing.T) store.Directory {
 	t.Helper()
 	tmpDir := t.TempDir()
