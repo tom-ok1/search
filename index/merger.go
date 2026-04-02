@@ -145,20 +145,17 @@ func MergeSegmentsToDisk(dir store.Directory, inputs []MergeInput, newName strin
 
 	// Merge numeric doc values.
 	for _, field := range numericDVFields {
-		if err := mergeNumericDocValuesToDisk(dir, newName, field, inputs, mapper); err != nil {
+		_, isPoint := pointFieldSet[field]
+		if err := mergeNumericDocValuesToDisk(dir, newName, field, inputs, mapper, isPoint); err != nil {
 			return nil, err
 		}
 		files = append(files, fmt.Sprintf("%s.%s.ndv", newName, field))
 
-		if _, isPoint := pointFieldSet[field]; isPoint {
-			// Point fields: write presence bitset and BKD tree.
-			if err := mergePointFieldToDisk(dir, newName, field, inputs, mapper, docCount); err != nil {
+		if isPoint {
+			if err := mergePointFieldToDisk(dir, newName, field, inputs, mapper); err != nil {
 				return nil, err
 			}
-			files = append(files,
-				fmt.Sprintf("%s.%s.ndvp", newName, field),
-				fmt.Sprintf("%s.%s.kd", newName, field),
-			)
+			files = append(files, fmt.Sprintf("%s.%s.kd", newName, field))
 		} else {
 			if err := writeNumericDocValuesSkipIndexFromNDV(dir, newName, field, docCount); err != nil {
 				return nil, err
@@ -258,42 +255,105 @@ func mergeFieldLengthsToDisk(dir store.Directory, segName, field string, inputs 
 }
 
 // mergeNumericDocValuesToDisk streams numeric doc values for a single field to disk.
-func mergeNumericDocValuesToDisk(dir store.Directory, segName, field string, inputs []MergeInput, mapper *DocIDMapper) error {
+func mergeNumericDocValuesToDisk(dir store.Directory, segName, field string, inputs []MergeInput, mapper *DocIDMapper, isPoint bool) error {
 	out, err := dir.CreateOutput(fmt.Sprintf("%s.%s.ndv", segName, field))
 	if err != nil {
 		return err
 	}
 	defer out.Close()
 
-	for i, input := range inputs {
-		ndv := input.Segment.NumericDocValues(field)
-		for oldDoc := 0; oldDoc < input.Segment.DocCount(); oldDoc++ {
-			if !mapper.IsLive(i, oldDoc) {
+	docCount := mapper.LiveDocCount()
+
+	if !isPoint {
+		// Dense mode.
+		if _, err := out.Write([]byte{ndvModeDense}); err != nil {
+			return fmt.Errorf("write ndv mode: %w", err)
+		}
+		for i, input := range inputs {
+			ndv := input.Segment.NumericDocValues(field)
+			for oldDoc := 0; oldDoc < input.Segment.DocCount(); oldDoc++ {
+				if !mapper.IsLive(i, oldDoc) {
+					continue
+				}
+				var v int64
+				if ndv != nil {
+					v, err = ndv.Get(oldDoc)
+					if err != nil {
+						return fmt.Errorf("read numeric DV for field %s doc %d: %w", field, oldDoc, err)
+					}
+				}
+				if err := out.WriteUint64(uint64(v)); err != nil {
+					return fmt.Errorf("write ndv value: %w", err)
+				}
+			}
+		}
+	} else {
+		// Point field: collect presence + values, then write.
+		presence := NewBitset(docCount)
+		var sparseValues []int64
+
+		for i, input := range inputs {
+			ndv := input.Segment.NumericDocValues(field)
+			if ndv == nil {
 				continue
 			}
-			var v int64
-			if ndv != nil {
-				v, err = ndv.Get(oldDoc)
+			for oldDoc := 0; oldDoc < input.Segment.DocCount(); oldDoc++ {
+				if !mapper.IsLive(i, oldDoc) {
+					continue
+				}
+				if !ndv.HasValue(oldDoc) {
+					continue
+				}
+				newDoc := mapper.Map(i, oldDoc)
+				v, err := ndv.Get(oldDoc)
 				if err != nil {
 					return fmt.Errorf("read numeric DV for field %s doc %d: %w", field, oldDoc, err)
 				}
+				presence.Set(newDoc)
+				sparseValues = append(sparseValues, v)
 			}
-			if err := out.WriteUint64(uint64(v)); err != nil {
-				return fmt.Errorf("write ndv value: %w", err)
+		}
+
+		numWithValue := len(sparseValues)
+		switch numWithValue {
+		case 0:
+			if _, err := out.Write([]byte{ndvModeEmpty}); err != nil {
+				return fmt.Errorf("write ndv mode: %w", err)
+			}
+		case docCount:
+			// All docs have values — dense.
+			if _, err := out.Write([]byte{ndvModeDense}); err != nil {
+				return fmt.Errorf("write ndv mode: %w", err)
+			}
+			for _, v := range sparseValues {
+				if err := out.WriteUint64(uint64(v)); err != nil {
+					return fmt.Errorf("write ndv value: %w", err)
+				}
+			}
+		default:
+			// Sparse.
+			if _, err := out.Write([]byte{ndvModeSparse}); err != nil {
+				return fmt.Errorf("write ndv mode: %w", err)
+			}
+			if _, err := out.Write(presence.Bytes()); err != nil {
+				return fmt.Errorf("write ndv bitset: %w", err)
+			}
+			for _, v := range sparseValues {
+				if err := out.WriteUint64(uint64(v)); err != nil {
+					return fmt.Errorf("write ndv sparse value: %w", err)
+				}
 			}
 		}
 	}
-	if err := out.WriteUint32(uint32(mapper.LiveDocCount())); err != nil {
+
+	if err := out.WriteUint32(uint32(docCount)); err != nil {
 		return err
 	}
 	return nil
 }
 
-// mergePointFieldToDisk writes the presence bitset (.ndvp) and BKD tree (.kd)
-// for a point field during segment merge.
-func mergePointFieldToDisk(dir store.Directory, segName, field string, inputs []MergeInput, mapper *DocIDMapper, docCount int) error {
-	// Collect all live doc/value pairs and build the presence set.
-	presence := make(map[int]struct{})
+// mergePointFieldToDisk writes the BKD tree (.kd) for a point field during segment merge.
+func mergePointFieldToDisk(dir store.Directory, segName, field string, inputs []MergeInput, mapper *DocIDMapper) error {
 	w := bkd.NewBKDWriter()
 
 	for i, input := range inputs {
@@ -313,15 +373,10 @@ func mergePointFieldToDisk(dir store.Directory, segName, field string, inputs []
 			if err != nil {
 				return fmt.Errorf("read numeric DV for field %s doc %d: %w", field, oldDoc, err)
 			}
-			presence[newDoc] = struct{}{}
 			w.Add(newDoc, v)
 		}
 	}
 
-	// Presence is now written as part of the .ndv file (handled by the caller).
-	_ = presence
-
-	// Write BKD tree.
 	return w.Finish(dir, segName, field)
 }
 

@@ -96,12 +96,9 @@ func WriteSegmentV2(dir store.Directory, seg *InMemorySegment) ([]string, []stri
 		files = append(files, fmt.Sprintf("%s.%s.ndv", seg.name, fieldName))
 
 		if _, isPoint := seg.pointFields[fieldName]; isPoint {
-			docSet := seg.pointDocIDs[fieldName]
-			_ = docSet
-
 			w := bkd.NewBKDWriter()
 			for docID, val := range values {
-				if _, ok := docSet[docID]; !ok {
+				if _, ok := presence[docID]; !ok {
 					continue // skip docs that don't have this point field
 				}
 				w.Add(docID, val)
