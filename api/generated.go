@@ -193,6 +193,9 @@ type SearchTotal struct {
 type Settings struct {
 	NumberOfReplicas *int `json:"number_of_replicas,omitempty"`
 	NumberOfShards   *int `json:"number_of_shards,omitempty"`
+
+	// RefreshInterval Refresh interval (e.g., '1s', '5s', '-1' to disable)
+	RefreshInterval *string `json:"refresh_interval,omitempty"`
 }
 
 // ShardStats defines model for ShardStats.
