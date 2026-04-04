@@ -979,6 +979,67 @@ func TestEngine_DeleteCASAfterRefresh(t *testing.T) {
 	}
 }
 
+func TestEngine_TranslogRecoveryPreservesSeqNoDocValues(t *testing.T) {
+	dir, err := store.NewFSDirectory(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	translogPath := filepath.Join(t.TempDir(), "translog")
+
+	m := &mapping.MappingDefinition{
+		Properties: map[string]mapping.FieldMapping{
+			"title": {Type: mapping.FieldTypeText},
+		},
+	}
+
+	registry := newTestRegistry()
+
+	// Create shard, index a document, then close without flush
+	shard, err := index.NewIndexShard(0, "test", dir, m, registry, translogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = shard.Index("1", []byte(`{"title":"hello"}`), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := shard.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Reopen shard — translog recovery should replay the index operation
+	shard2, err := index.NewIndexShard(0, "test", dir, m, registry, translogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer shard2.Close()
+
+	// Refresh to make docs visible in Lucene
+	if err := shard2.Refresh(); err != nil {
+		t.Fatal(err)
+	}
+
+	// GET should return the document with a valid seqNo
+	gr := shard2.Get("1")
+	if !gr.Found {
+		t.Fatal("expected document to be found after translog recovery")
+	}
+	if gr.SeqNo < 0 {
+		t.Fatalf("expected SeqNo >= 0 after recovery, got %d", gr.SeqNo)
+	}
+	if gr.PrimaryTerm <= 0 {
+		t.Fatalf("expected PrimaryTerm > 0 after recovery, got %d", gr.PrimaryTerm)
+	}
+
+	// CAS should work after recovery + refresh
+	seqNo := gr.SeqNo
+	term := gr.PrimaryTerm
+	_, err = shard2.Index("1", []byte(`{"title":"updated"}`), &seqNo, &term)
+	if err != nil {
+		t.Fatalf("expected CAS after translog recovery to succeed, got: %v", err)
+	}
+}
+
 func TestEngine_GetAfterRefreshIncludesSeqNo(t *testing.T) {
 	dir, err := store.NewFSDirectory(t.TempDir())
 	if err != nil {
