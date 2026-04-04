@@ -200,7 +200,7 @@ func TestSkipIndexFromNDV(t *testing.T) {
 	}
 
 	values := []int64{10, 20, 30, 40, 50}
-	if err := writeNumericDocValues(dir, "seg0", "f", values, 5); err != nil {
+	if err := writeNumericDocValues(dir, "seg0", "f", values, 5, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := writeNumericDocValuesSkipIndexFromNDV(dir, "seg0", "f", 5); err != nil {

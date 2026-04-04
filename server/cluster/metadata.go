@@ -1,7 +1,11 @@
 // server/cluster/metadata.go
 package cluster
 
-import "gosearch/server/mapping"
+import (
+	"time"
+
+	"gosearch/server/mapping"
+)
 
 type IndexState int
 
@@ -24,7 +28,10 @@ type IndexMetadata struct {
 type IndexSettings struct {
 	NumberOfShards   int
 	NumberOfReplicas int
+	RefreshInterval  time.Duration // default 1s; -1 disables auto-refresh
 }
+
+const DefaultRefreshInterval = 1 * time.Second
 
 func NewMetadata() *Metadata {
 	return &Metadata{

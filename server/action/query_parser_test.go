@@ -1,6 +1,7 @@
 package action
 
 import (
+	"encoding/json"
 	"testing"
 
 	"gosearch/analysis"
@@ -609,5 +610,97 @@ func TestQueryParser_MatchPhraseObjectForm(t *testing.T) {
 		if term != wantTerms[i] {
 			t.Errorf("term[%d] = %q, want %q", i, term, wantTerms[i])
 		}
+	}
+}
+
+func TestQueryParser_Range(t *testing.T) {
+	m := &mapping.MappingDefinition{
+		Properties: map[string]mapping.FieldMapping{
+			"price": {Type: mapping.FieldTypeLong},
+			"score": {Type: mapping.FieldTypeDouble},
+			"title": {Type: mapping.FieldTypeText},
+		},
+	}
+	registry := analysis.NewAnalyzerRegistry()
+	parser := NewQueryParser(m, registry)
+
+	tests := []struct {
+		name    string
+		query   map[string]any
+		wantErr bool
+	}{
+		{
+			name: "long range gte/lte",
+			query: map[string]any{
+				"range": map[string]any{
+					"price": map[string]any{
+						"gte": json.Number("10"),
+						"lte": json.Number("100"),
+					},
+				},
+			},
+		},
+		{
+			name: "long range gt/lt",
+			query: map[string]any{
+				"range": map[string]any{
+					"price": map[string]any{
+						"gt": json.Number("10"),
+						"lt": json.Number("100"),
+					},
+				},
+			},
+		},
+		{
+			name: "double range",
+			query: map[string]any{
+				"range": map[string]any{
+					"score": map[string]any{
+						"gte": json.Number("1.5"),
+						"lte": json.Number("4.5"),
+					},
+				},
+			},
+		},
+		{
+			name: "unknown field",
+			query: map[string]any{
+				"range": map[string]any{
+					"unknown": map[string]any{
+						"gte": json.Number("1"),
+					},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "unsupported field type",
+			query: map[string]any{
+				"range": map[string]any{
+					"title": map[string]any{
+						"gte": json.Number("1"),
+					},
+				},
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			q, err := parser.ParseQuery(tt.query)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if q == nil {
+				t.Fatal("expected query, got nil")
+			}
+		})
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"sort"
 
 	"gosearch/fst"
+	"gosearch/index/bkd"
 	"gosearch/store"
 )
 
@@ -43,6 +44,11 @@ func WriteSegmentV2(dir store.Directory, seg *InMemorySegment) ([]string, []stri
 	}
 	sort.Strings(meta.SortedDVFields)
 
+	for fieldName := range seg.pointFields {
+		meta.PointFields = append(meta.PointFields, fieldName)
+	}
+	sort.Strings(meta.PointFields)
+
 	metaFileName, err := writeSegmentMeta(dir, meta)
 	if err != nil {
 		return nil, nil, err
@@ -68,7 +74,7 @@ func WriteSegmentV2(dir store.Directory, seg *InMemorySegment) ([]string, []stri
 	}
 	files = append(files, seg.name+".stored")
 
-	// 4. Write field lengths (fixed-width)
+	// 4. Write field lengths (fixed-width) for inverted index fields
 	for _, fieldName := range meta.Fields {
 		lengths := seg.fieldLengths[fieldName]
 		if err := writeFieldLengthsV2(dir, seg.name, fieldName, lengths, seg.docCount); err != nil {
@@ -80,15 +86,30 @@ func WriteSegmentV2(dir store.Directory, seg *InMemorySegment) ([]string, []stri
 	// 5. Write numeric doc values
 	for _, fieldName := range meta.NumericDVFields {
 		values := seg.numericDocValues[fieldName]
-		if err := writeNumericDocValues(dir, seg.name, fieldName, values, seg.docCount); err != nil {
+		presence := seg.numericDocIDs[fieldName]
+		if err := writeNumericDocValues(dir, seg.name, fieldName, values, seg.docCount, presence); err != nil {
 			return nil, nil, err
 		}
 		files = append(files, fmt.Sprintf("%s.%s.ndv", seg.name, fieldName))
 
-		if err := writeNumericDocValuesSkipIndexFromNDV(dir, seg.name, fieldName, len(values)); err != nil {
-			return nil, nil, err
+		if _, isPoint := seg.pointFields[fieldName]; isPoint {
+			w := bkd.NewBKDWriter()
+			for docID, val := range values {
+				if _, ok := presence[docID]; !ok {
+					continue // skip docs that don't have this point field
+				}
+				w.Add(docID, val)
+			}
+			if err := w.Finish(dir, seg.name, fieldName); err != nil {
+				return nil, nil, err
+			}
+			files = append(files, fmt.Sprintf("%s.%s.kd", seg.name, fieldName))
+		} else {
+			if err := writeNumericDocValuesSkipIndexFromNDV(dir, seg.name, fieldName, len(values)); err != nil {
+				return nil, nil, err
+			}
+			files = append(files, fmt.Sprintf("%s.%s.ndvs", seg.name, fieldName))
 		}
-		files = append(files, fmt.Sprintf("%s.%s.ndvs", seg.name, fieldName))
 	}
 
 	// 6. Write sorted doc values

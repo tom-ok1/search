@@ -113,6 +113,18 @@ func (s *IndexShard) IndexName() string {
 	return s.indexName
 }
 
+// ShardStats holds document count statistics for a shard.
+type ShardStats struct {
+	DocCount     int
+	DeletedCount int
+}
+
+// Stats returns document count statistics for this shard.
+func (s *IndexShard) Stats() ShardStats {
+	es := s.engine.Stats()
+	return ShardStats{DocCount: es.DocCount, DeletedCount: es.DeletedCount}
+}
+
 // Close shuts down the shard's engine.
 func (s *IndexShard) Close() error {
 	return s.engine.Close()

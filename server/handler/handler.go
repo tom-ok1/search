@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"time"
 
 	"gosearch/api"
 	"gosearch/server/action"
@@ -26,6 +27,8 @@ type Handler struct {
 	search         *action.TransportSearchAction
 	bulk           *action.TransportBulkAction
 	refresh        *action.TransportRefreshAction
+	catIndices     *action.TransportCatIndicesAction
+	catHealth      *action.TransportCatHealthAction
 }
 
 // Ensure Handler implements StrictServerInterface at compile time.
@@ -42,6 +45,8 @@ func NewHandler(
 	search *action.TransportSearchAction,
 	bulk *action.TransportBulkAction,
 	refresh *action.TransportRefreshAction,
+	catIndices *action.TransportCatIndicesAction,
+	catHealth *action.TransportCatHealthAction,
 ) *Handler {
 	return &Handler{
 		createIndex:    createIndex,
@@ -53,6 +58,8 @@ func NewHandler(
 		search:         search,
 		bulk:           bulk,
 		refresh:        refresh,
+		catIndices:     catIndices,
+		catHealth:      catHealth,
 	}
 }
 
@@ -62,6 +69,15 @@ func errorResponse(status int, errType, reason string) api.ErrorResponse {
 		Error:  api.ErrorDetail{Type: errType, Reason: reason},
 		Status: status,
 	}
+}
+
+// parseRefreshInterval parses an ES-style refresh interval string.
+// "-1" disables auto-refresh; otherwise delegates to time.ParseDuration.
+func parseRefreshInterval(s string) (time.Duration, error) {
+	if s == "-1" {
+		return -1, nil
+	}
+	return time.ParseDuration(s)
 }
 
 // mapErrorStatus returns (status, errType) for a given transport action error.
@@ -104,6 +120,13 @@ func (h *Handler) CreateIndex(_ context.Context, request api.CreateIndexRequestO
 			}
 			if request.Body.Settings.NumberOfReplicas != nil {
 				actionReq.Settings.NumberOfReplicas = *request.Body.Settings.NumberOfReplicas
+			}
+			if request.Body.Settings.RefreshInterval != nil {
+				d, err := parseRefreshInterval(*request.Body.Settings.RefreshInterval)
+				if err != nil {
+					return api.CreateIndex400JSONResponse(errorResponse(400, "illegal_argument_exception", fmt.Sprintf("invalid refresh_interval: %v", err))), nil
+				}
+				actionReq.Settings.RefreshInterval = d
 			}
 		}
 		if request.Body.Mappings != nil && request.Body.Mappings.Properties != nil {
@@ -160,9 +183,14 @@ func (h *Handler) GetIndex(_ context.Context, request api.GetIndexRequestObject)
 	meta := api.IndexMetadata{}
 
 	// Convert settings
+	refreshStr := resp.Settings.RefreshInterval.String()
+	if resp.Settings.RefreshInterval == -1 {
+		refreshStr = "-1"
+	}
 	settings := &api.Settings{
 		NumberOfShards:   &resp.Settings.NumberOfShards,
 		NumberOfReplicas: &resp.Settings.NumberOfReplicas,
+		RefreshInterval:  &refreshStr,
 	}
 	meta.Settings = settings
 
@@ -399,6 +427,11 @@ func buildSearchRequest(index string, body *api.SearchRequest, paramSize *int) a
 		if body.Size != nil {
 			req.Size = *body.Size
 		}
+		if body.Aggs != nil {
+			req.AggsJSON = *body.Aggs
+		} else if body.Aggregations != nil {
+			req.AggsJSON = *body.Aggregations
+		}
 	}
 
 	// Query param Size overrides body Size
@@ -429,7 +462,7 @@ func convertSearchResponse(resp action.SearchResponse) api.SearchResponse {
 
 	maxScore := float32(resp.Hits.MaxScore)
 
-	return api.SearchResponse{
+	result := api.SearchResponse{
 		Took: int(resp.Took),
 		Hits: api.SearchHits{
 			Total: api.SearchTotal{
@@ -440,6 +473,12 @@ func convertSearchResponse(resp action.SearchResponse) api.SearchResponse {
 			Hits:     hits,
 		},
 	}
+
+	if resp.Aggregations != nil {
+		result.Aggregations = &resp.Aggregations
+	}
+
+	return result
 }
 
 // Bulk handles bulk operations without an index scope.
@@ -568,4 +607,22 @@ func parseBulkNDJSON(body []byte, defaultIndex string) ([]action.BulkItem, error
 		}
 	}
 	return items, scanner.Err()
+}
+
+// CatIndices returns index listing as plain text.
+func (h *Handler) CatIndices(_ context.Context, _ api.CatIndicesRequestObject) (api.CatIndicesResponseObject, error) {
+	resp, err := h.catIndices.Execute()
+	if err != nil {
+		return nil, err
+	}
+	return api.CatIndices200TextResponse(resp.FormatText()), nil
+}
+
+// CatHealth returns cluster health as plain text.
+func (h *Handler) CatHealth(_ context.Context, _ api.CatHealthRequestObject) (api.CatHealthResponseObject, error) {
+	resp, err := h.catHealth.Execute()
+	if err != nil {
+		return nil, err
+	}
+	return api.CatHealth200TextResponse(resp.FormatText()), nil
 }

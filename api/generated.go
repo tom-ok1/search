@@ -178,14 +178,17 @@ type SearchHits struct {
 
 // SearchRequest defines model for SearchRequest.
 type SearchRequest struct {
-	Query *map[string]interface{} `json:"query,omitempty"`
-	Size  *int                    `json:"size,omitempty"`
+	Aggregations *map[string]interface{} `json:"aggregations,omitempty"`
+	Aggs         *map[string]interface{} `json:"aggs,omitempty"`
+	Query        *map[string]interface{} `json:"query,omitempty"`
+	Size         *int                    `json:"size,omitempty"`
 }
 
 // SearchResponse defines model for SearchResponse.
 type SearchResponse struct {
-	Hits SearchHits `json:"hits"`
-	Took int        `json:"took"`
+	Aggregations *map[string]interface{} `json:"aggregations,omitempty"`
+	Hits         SearchHits              `json:"hits"`
+	Took         int                     `json:"took"`
 }
 
 // SearchTotal defines model for SearchTotal.
@@ -273,6 +276,12 @@ type ServerInterface interface {
 	// Bulk operations
 	// (POST /_bulk)
 	Bulk(w http.ResponseWriter, r *http.Request)
+	// Cluster health in plain text table format
+	// (GET /_cat/health)
+	CatHealth(w http.ResponseWriter, r *http.Request)
+	// List indices in plain text table format
+	// (GET /_cat/indices)
+	CatIndices(w http.ResponseWriter, r *http.Request)
 	// Delete an index
 	// (DELETE /{index})
 	DeleteIndex(w http.ResponseWriter, r *http.Request, index IndexName)
@@ -315,6 +324,18 @@ type Unimplemented struct{}
 // Bulk operations
 // (POST /_bulk)
 func (_ Unimplemented) Bulk(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Cluster health in plain text table format
+// (GET /_cat/health)
+func (_ Unimplemented) CatHealth(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// List indices in plain text table format
+// (GET /_cat/indices)
+func (_ Unimplemented) CatIndices(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -398,6 +419,34 @@ func (siw *ServerInterfaceWrapper) Bulk(w http.ResponseWriter, r *http.Request) 
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.Bulk(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CatHealth operation middleware
+func (siw *ServerInterfaceWrapper) CatHealth(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CatHealth(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CatIndices operation middleware
+func (siw *ServerInterfaceWrapper) CatIndices(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CatIndices(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -914,6 +963,12 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 		r.Post(options.BaseURL+"/_bulk", wrapper.Bulk)
 	})
 	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/_cat/health", wrapper.CatHealth)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/_cat/indices", wrapper.CatIndices)
+	})
+	r.Group(func(r chi.Router) {
 		r.Delete(options.BaseURL+"/{index}", wrapper.DeleteIndex)
 	})
 	r.Group(func(r chi.Router) {
@@ -974,6 +1029,40 @@ func (response Bulk400JSONResponse) VisitBulkResponse(w http.ResponseWriter) err
 	w.WriteHeader(400)
 
 	return json.NewEncoder(w).Encode(response)
+}
+
+type CatHealthRequestObject struct {
+}
+
+type CatHealthResponseObject interface {
+	VisitCatHealthResponse(w http.ResponseWriter) error
+}
+
+type CatHealth200TextResponse string
+
+func (response CatHealth200TextResponse) VisitCatHealthResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "text/plain")
+	w.WriteHeader(200)
+
+	_, err := w.Write([]byte(response))
+	return err
+}
+
+type CatIndicesRequestObject struct {
+}
+
+type CatIndicesResponseObject interface {
+	VisitCatIndicesResponse(w http.ResponseWriter) error
+}
+
+type CatIndices200TextResponse string
+
+func (response CatIndices200TextResponse) VisitCatIndicesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "text/plain")
+	w.WriteHeader(200)
+
+	_, err := w.Write([]byte(response))
+	return err
 }
 
 type DeleteIndexRequestObject struct {
@@ -1345,6 +1434,12 @@ type StrictServerInterface interface {
 	// Bulk operations
 	// (POST /_bulk)
 	Bulk(ctx context.Context, request BulkRequestObject) (BulkResponseObject, error)
+	// Cluster health in plain text table format
+	// (GET /_cat/health)
+	CatHealth(ctx context.Context, request CatHealthRequestObject) (CatHealthResponseObject, error)
+	// List indices in plain text table format
+	// (GET /_cat/indices)
+	CatIndices(ctx context.Context, request CatIndicesRequestObject) (CatIndicesResponseObject, error)
 	// Delete an index
 	// (DELETE /{index})
 	DeleteIndex(ctx context.Context, request DeleteIndexRequestObject) (DeleteIndexResponseObject, error)
@@ -1428,6 +1523,54 @@ func (sh *strictHandler) Bulk(w http.ResponseWriter, r *http.Request) {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(BulkResponseObject); ok {
 		if err := validResponse.VisitBulkResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CatHealth operation middleware
+func (sh *strictHandler) CatHealth(w http.ResponseWriter, r *http.Request) {
+	var request CatHealthRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CatHealth(ctx, request.(CatHealthRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CatHealth")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CatHealthResponseObject); ok {
+		if err := validResponse.VisitCatHealthResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CatIndices operation middleware
+func (sh *strictHandler) CatIndices(w http.ResponseWriter, r *http.Request) {
+	var request CatIndicesRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CatIndices(ctx, request.(CatIndicesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CatIndices")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CatIndicesResponseObject); ok {
+		if err := validResponse.VisitCatIndicesResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

@@ -65,8 +65,7 @@ func TestParseDocument_LongField(t *testing.T) {
 		t.Fatalf("ParseDocument: %v", err)
 	}
 
-	assertHasField(t, doc, "count", "42", document.FieldTypeKeyword)
-	assertHasNumericField(t, doc, "count", 42)
+	assertHasLongPoint(t, doc, "count", 42)
 }
 
 func TestParseDocument_DoubleField(t *testing.T) {
@@ -82,8 +81,7 @@ func TestParseDocument_DoubleField(t *testing.T) {
 		t.Fatalf("ParseDocument: %v", err)
 	}
 
-	assertHasField(t, doc, "score", "3.14", document.FieldTypeKeyword)
-	assertHasNumericDocValues(t, doc, "score")
+	assertHasDoublePoint(t, doc, "score", 3.14)
 }
 
 func TestParseDocument_BooleanFieldTrue(t *testing.T) {
@@ -156,7 +154,7 @@ func TestParseDocument_MultipleFields(t *testing.T) {
 
 	assertHasField(t, doc, "title", "hello", document.FieldTypeText)
 	assertHasField(t, doc, "status", "draft", document.FieldTypeKeyword)
-	assertHasField(t, doc, "count", "5", document.FieldTypeKeyword)
+	assertHasLongPoint(t, doc, "count", 5)
 	assertHasField(t, doc, "active", "true", document.FieldTypeKeyword)
 }
 
@@ -181,8 +179,7 @@ func TestParseDocument_LongFieldWithFloatValue(t *testing.T) {
 		t.Fatalf("ParseDocument: %v", err)
 	}
 
-	assertHasField(t, doc, "count", "42", document.FieldTypeKeyword)
-	assertHasNumericField(t, doc, "count", 42)
+	assertHasLongPoint(t, doc, "count", 42)
 }
 
 func TestParseDocument_TextFieldJapanese(t *testing.T) {
@@ -479,9 +476,9 @@ func TestParseDocument_LongArrayField(t *testing.T) {
 		t.Fatalf("ParseDocument: %v", err)
 	}
 
-	assertHasField(t, doc, "scores", "10", document.FieldTypeKeyword)
-	assertHasField(t, doc, "scores", "20", document.FieldTypeKeyword)
-	assertHasField(t, doc, "scores", "30", document.FieldTypeKeyword)
+	assertHasLongPoint(t, doc, "scores", 10)
+	assertHasLongPoint(t, doc, "scores", 20)
+	assertHasLongPoint(t, doc, "scores", 30)
 }
 
 func TestParseDocument_BooleanArrayField(t *testing.T) {
@@ -515,17 +512,17 @@ func TestParseDocument_LargeIntegerPrecision(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Find the keyword field for big_id
+	// Find the long point field for big_id
 	for _, f := range doc.Fields {
-		if f.Name == "big_id" && f.Type == document.FieldTypeKeyword {
-			want := "9007199254740993"
-			if f.Value != want {
-				t.Errorf("big_id keyword = %q, want %q (precision lost)", f.Value, want)
+		if f.Name == "big_id" && f.Type == document.FieldTypeLongPoint {
+			var want int64 = 9007199254740993
+			if f.NumericValue != want {
+				t.Errorf("big_id numeric = %d, want %d (precision lost)", f.NumericValue, want)
 			}
 			return
 		}
 	}
-	t.Fatal("big_id keyword field not found")
+	t.Fatal("big_id long point field not found")
 }
 
 func TestParseDocument_LargeIntegerDocValues(t *testing.T) {
@@ -541,17 +538,8 @@ func TestParseDocument_LargeIntegerDocValues(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Find the numeric doc values field for big_id
-	for _, f := range doc.Fields {
-		if f.Name == "big_id" && f.Type == document.FieldTypeNumericDocValues {
-			var want int64 = 9007199254740993
-			if f.NumericValue != want {
-				t.Errorf("big_id numeric = %d, want %d", f.NumericValue, want)
-			}
-			return
-		}
-	}
-	t.Fatal("big_id numeric doc values field not found")
+	// Point fields include both indexing and doc values in a single field
+	assertHasLongPoint(t, doc, "big_id", 9007199254740993)
 }
 
 func TestParseDocument_KeywordHasSortedDocValues(t *testing.T) {
@@ -655,4 +643,26 @@ func assertHasNumericDocValues(t *testing.T, doc *document.Document, name string
 		}
 	}
 	t.Errorf("expected numeric doc values field {Name:%q} not found", name)
+}
+
+func assertHasLongPoint(t *testing.T, doc *document.Document, name string, value int64) {
+	t.Helper()
+	for _, f := range doc.Fields {
+		if f.Name == name && f.Type == document.FieldTypeLongPoint && f.NumericValue == value {
+			return
+		}
+	}
+	t.Errorf("expected long point field {Name:%q, NumericValue:%d, Type:FieldTypeLongPoint} not found", name, value)
+}
+
+func assertHasDoublePoint(t *testing.T, doc *document.Document, name string, value float64) {
+	t.Helper()
+	sortableLong := document.DoubleToSortableLong(value)
+
+	for _, f := range doc.Fields {
+		if f.Name == name && f.Type == document.FieldTypeDoublePoint && f.NumericValue == sortableLong {
+			return
+		}
+	}
+	t.Errorf("expected double point field {Name:%q, Value:%f, Type:FieldTypeDoublePoint} not found", name, value)
 }

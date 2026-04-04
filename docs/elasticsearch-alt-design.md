@@ -766,6 +766,19 @@ This section documents deliberate simplifications in v1 and what needs to change
 
 **Resolution:** Phase 2 — add a `PointValues` data structure to the Lucene layer (similar to Lucene's `IntPoint`/`LongPoint`/`DoublePoint`). Numeric fields would then be indexed as point values instead of keyword terms. This is a prerequisite for `range` query support.
 
+#### Point Fields: BKD Tree Implementation
+
+gosearch implements a 1D BKD tree for point field range queries, matching Lucene's
+architecture with the visitor pattern (`IntersectVisitor`, `Relation` enum, `PointTree`
+interface). Key divergences from Lucene:
+
+- **1D only** — Lucene supports 1-16 dimensions for geo_point and other multi-dim types.
+  Multi-dimensional support tracked in #17.
+- **Sort-based partitioning** — Lucene uses BKDRadixSelector for multi-dim efficiency.
+  We sort once and split at medians, which is correct and simpler for 1D.
+- **Single .kd file** — Lucene uses three files (.poi, .idx, .kdd). We use one file.
+- **No prefix compression** — Lucene prefix-codes split values and leaf data.
+
 ### 2. No `_source` Byte-Level Storage
 
 **v1 behavior:** `_source` is stored as a Go `string` via `document.Field.Value`, since the document model uses `string` for all field values.
@@ -827,13 +840,10 @@ This design explicitly supports the following extensions:
 - **Translog**: Write-ahead log for crash recovery — append index/delete ops to file before ack, replay on startup. (Addresses [Limitation #6](#6-no-translog-write-ahead-log))
 - **Real-time get**: In-memory `LiveVersionMap` (`_id` → source + version) checked before Lucene reader, cleared on refresh. (Addresses [Limitation #4](#4-no-real-time-get))
 - **Document versioning**: `_version` counter per document for optimistic concurrency control. (Addresses [Limitation #3](#3-no-document-versioning--optimistic-concurrency))
-- **Byte-level `_source` storage**: Store `_source` as raw `[]byte` with compression (LZ4) instead of Go string. (Addresses [Limitation #2](#2-no-_source-byte-level-storage))
 - **JSON number precision**: Use `json.Decoder` with `UseNumber()` to avoid float64 truncation of large integers. (Addresses [Limitation #5](#5-json-number-precision-for-large-integers))
-- **Dynamic mapping**: Auto-detect field types from document values
 - **Auto-refresh**: Configurable `refresh_interval` setting with background timer
 - **More query types**: `match_phrase` (→ PhraseQuery), `range` (requires BKD trees), `multi_match`, `exists`
 - **Aggregations**: Leverage existing NumericDocValues/SortedDocValues for terms/range aggs
-- **`_cat` APIs**: Human-readable status endpoints
 
 ### Phase 3: Multi-Shard
 - **Multiple shards per index**: Actual shard routing, per-shard directories

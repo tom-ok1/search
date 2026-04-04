@@ -61,6 +61,10 @@ func NewNode(config NodeConfig) (*Node, error) {
 	searchAction := action.NewTransportSearchAction(cs, indexServices, registry)
 	bulkAction := action.NewTransportBulkAction(cs, indexServices)
 
+	// Create _cat actions
+	catIndicesAction := action.NewTransportCatIndicesAction(cs, indexServices)
+	catHealthAction := action.NewTransportCatHealthAction(cs, indexServices)
+
 	// Create handler and wire up Chi router
 	h := handler.NewHandler(
 		createAction,
@@ -72,6 +76,8 @@ func NewNode(config NodeConfig) (*Node, error) {
 		searchAction,
 		bulkAction,
 		refreshAction,
+		catIndicesAction,
+		catHealthAction,
 	)
 
 	strictHandler := api.NewStrictHandler(h, nil)
