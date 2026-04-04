@@ -43,7 +43,7 @@ type Engine struct {
 	dir        store.Directory
 	translog   *translog.Translog
 	versionMap *LiveVersionMap
-	mu sync.RWMutex // protects reader/searcher swap on refresh
+	mu         sync.RWMutex // protects reader/searcher swap on refresh
 
 	localCheckpoint  atomic.Int64 // last assigned seqNo
 	globalCheckpoint int64        // last known durable seqNo
