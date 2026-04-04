@@ -74,6 +74,8 @@ paths:
       parameters:
         - $ref: "#/components/parameters/IndexName"
         - $ref: "#/components/parameters/DocId"
+        - $ref: "#/components/parameters/IfSeqNo"
+        - $ref: "#/components/parameters/IfPrimaryTerm"
       requestBody:
         required: true
         content:
@@ -95,6 +97,12 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
         "404":
           description: Index not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Version conflict
           content:
             application/json:
               schema:
@@ -105,6 +113,8 @@ paths:
       parameters:
         - $ref: "#/components/parameters/IndexName"
         - $ref: "#/components/parameters/DocId"
+        - $ref: "#/components/parameters/IfSeqNo"
+        - $ref: "#/components/parameters/IfPrimaryTerm"
       requestBody:
         required: true
         content:
@@ -126,6 +136,12 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
         "404":
           description: Index not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Version conflict
           content:
             application/json:
               schema:
@@ -155,6 +171,8 @@ paths:
       parameters:
         - $ref: "#/components/parameters/IndexName"
         - $ref: "#/components/parameters/DocId"
+        - $ref: "#/components/parameters/IfSeqNo"
+        - $ref: "#/components/parameters/IfPrimaryTerm"
       responses:
         "200":
           description: Document deleted
@@ -168,6 +186,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/DeleteDocumentResponse"
+        "409":
+          description: Version conflict
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
   /{index}/_search:
     get:
@@ -325,6 +349,20 @@ components:
       required: false
       schema:
         type: integer
+    IfSeqNo:
+      name: if_seq_no
+      in: query
+      required: false
+      schema:
+        type: integer
+        format: int64
+    IfPrimaryTerm:
+      name: if_primary_term
+      in: query
+      required: false
+      schema:
+        type: integer
+        format: int64
 
   schemas:
     # --- Field type enum ---
@@ -422,7 +460,6 @@ components:
       required:
         - _index
         - _id
-        - _version
         - _seq_no
         - _primary_term
         - result
@@ -431,9 +468,6 @@ components:
           type: string
         _id:
           type: string
-        _version:
-          type: integer
-          format: int64
         _seq_no:
           type: integer
           format: int64
@@ -448,7 +482,6 @@ components:
       required:
         - _index
         - _id
-        - _version
         - _seq_no
         - _primary_term
         - found
@@ -457,9 +490,6 @@ components:
           type: string
         _id:
           type: string
-        _version:
-          type: integer
-          format: int64
         _seq_no:
           type: integer
           format: int64
@@ -477,7 +507,6 @@ components:
       required:
         - _index
         - _id
-        - _version
         - _seq_no
         - _primary_term
         - result
@@ -486,9 +515,6 @@ components:
           type: string
         _id:
           type: string
-        _version:
-          type: integer
-          format: int64
         _seq_no:
           type: integer
           format: int64
@@ -590,7 +616,6 @@ components:
       required:
         - _index
         - _id
-        - _version
         - _seq_no
         - _primary_term
         - status
@@ -599,9 +624,6 @@ components:
           type: string
         _id:
           type: string
-        _version:
-          type: integer
-          format: int64
         _seq_no:
           type: integer
           format: int64

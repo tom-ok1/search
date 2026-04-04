@@ -2,6 +2,7 @@ package action
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -10,10 +11,12 @@ import (
 )
 
 type BulkItem struct {
-	Action string // "index", "create", or "delete"
-	Index  string
-	ID     string
-	Source json.RawMessage // nil for delete
+	Action        string // "index", "create", or "delete"
+	Index         string
+	ID            string
+	Source        json.RawMessage // nil for delete
+	IfSeqNo       *int64
+	IfPrimaryTerm *int64
 }
 
 type BulkRequest struct {
@@ -24,7 +27,6 @@ type BulkItemResponse struct {
 	Action      string       `json:"action"`
 	Index       string       `json:"_index"`
 	ID          string       `json:"_id"`
-	Version     int64        `json:"_version"`
 	SeqNo       int64        `json:"_seq_no"`
 	PrimaryTerm int64        `json:"_primary_term"`
 	Status      int          `json:"status"`
@@ -33,7 +35,6 @@ type BulkItemResponse struct {
 
 // bulkItemOutcome holds the result fields from a single bulk item execution.
 type bulkItemOutcome struct {
-	Version     int64
 	SeqNo       int64
 	PrimaryTerm int64
 }
@@ -142,7 +143,6 @@ func (a *TransportBulkAction) Execute(req BulkRequest) (BulkResponse, error) {
 					Reason: err.Error(),
 				}
 			} else {
-				resp.Version = outcome.Version
 				resp.SeqNo = outcome.SeqNo
 				resp.PrimaryTerm = outcome.PrimaryTerm
 				switch bi.item.Action {
@@ -173,23 +173,23 @@ func (a *TransportBulkAction) executeItemOnShard(shard *index.IndexShard, item B
 		if result.Found {
 			return bulkItemOutcome{}, &VersionConflictError{ID: item.ID, Index: item.Index}
 		}
-		r, err := shard.Index(item.ID, item.Source)
+		r, err := shard.Index(item.ID, item.Source, item.IfSeqNo, item.IfPrimaryTerm)
 		if err != nil {
 			return bulkItemOutcome{}, err
 		}
-		return bulkItemOutcome{Version: r.Version, SeqNo: r.SeqNo, PrimaryTerm: r.PrimaryTerm}, nil
+		return bulkItemOutcome{SeqNo: r.SeqNo, PrimaryTerm: r.PrimaryTerm}, nil
 	case "index":
-		r, err := shard.Index(item.ID, item.Source)
+		r, err := shard.Index(item.ID, item.Source, item.IfSeqNo, item.IfPrimaryTerm)
 		if err != nil {
 			return bulkItemOutcome{}, err
 		}
-		return bulkItemOutcome{Version: r.Version, SeqNo: r.SeqNo, PrimaryTerm: r.PrimaryTerm}, nil
+		return bulkItemOutcome{SeqNo: r.SeqNo, PrimaryTerm: r.PrimaryTerm}, nil
 	case "delete":
-		r, err := shard.Delete(item.ID)
+		r, err := shard.Delete(item.ID, item.IfSeqNo, item.IfPrimaryTerm)
 		if err != nil {
 			return bulkItemOutcome{}, err
 		}
-		return bulkItemOutcome{Version: r.Version, SeqNo: r.SeqNo, PrimaryTerm: r.PrimaryTerm}, nil
+		return bulkItemOutcome{SeqNo: r.SeqNo, PrimaryTerm: r.PrimaryTerm}, nil
 	default:
 		return bulkItemOutcome{}, fmt.Errorf("unknown bulk action [%s]", item.Action)
 	}
@@ -206,14 +206,18 @@ func (e *VersionConflictError) Error() string {
 }
 
 func errorType(err error) string {
-	if _, ok := err.(*VersionConflictError); ok {
+	var vce *VersionConflictError
+	var vcee *index.VersionConflictEngineError
+	if errors.As(err, &vce) || errors.As(err, &vcee) {
 		return "version_conflict_engine_exception"
 	}
 	return "action_request_validation_exception"
 }
 
 func errorStatusCode(err error) int {
-	if _, ok := err.(*VersionConflictError); ok {
+	var vce *VersionConflictError
+	var vcee *index.VersionConflictEngineError
+	if errors.As(err, &vce) || errors.As(err, &vcee) {
 		return 409
 	}
 	return 400

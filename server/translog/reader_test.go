@@ -1,101 +1,66 @@
 package translog
 
 import (
-	"os"
 	"path/filepath"
 	"testing"
 )
 
-func TestTranslogReader_ReadAll(t *testing.T) {
+func TestTranslogReader_Snapshot(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "test.tlog")
+	tlogPath := filepath.Join(dir, "translog-1.tlog")
+	ckpPath := filepath.Join(dir, "translog.ckp")
+	genCkpPath := filepath.Join(dir, "translog-1.ckp")
 
-	// Write 3 ops with TranslogWriter
-	w, err := NewTranslogWriter(path)
+	header := testHeader()
+	cp := EmptyCheckpoint(1, 1)
+	cp.Offset = HeaderSizeInBytes(&header)
+
+	w, err := NewTranslogWriter(tlogPath, ckpPath, 1, header, *cp)
 	if err != nil {
 		t.Fatalf("NewTranslogWriter: %v", err)
 	}
 
-	ops := []Operation{
-		&IndexOperation{ID: "1", Source: []byte(`{"title":"doc1"}`), Version: 1},
-		&DeleteOperation{ID: "2", Version: 2},
-		&IndexOperation{ID: "3", Source: []byte(`{"title":"doc3"}`), Version: 3},
+	if _, err := w.Add(&IndexOperation{ID: "1", Source: []byte(`{"a":1}`), SequenceNo: 0, PrimTerm: 1}); err != nil {
+		t.Fatalf("Add: %v", err)
 	}
-	for _, op := range ops {
-		if err := w.Add(op); err != nil {
-			t.Fatalf("Add: %v", err)
-		}
-	}
-	if err := w.Close(); err != nil {
-		t.Fatalf("Close writer: %v", err)
+	if _, err := w.Add(&IndexOperation{ID: "2", Source: []byte(`{"a":2}`), SequenceNo: 1, PrimTerm: 1}); err != nil {
+		t.Fatalf("Add: %v", err)
 	}
 
-	// Open with TranslogReader
-	r, err := NewTranslogReader(path)
+	reader, err := w.CloseIntoReader(genCkpPath)
 	if err != nil {
-		t.Fatalf("NewTranslogReader: %v", err)
+		t.Fatalf("CloseIntoReader: %v", err)
 	}
-	defer r.Close()
+	defer reader.Close()
 
-	result, err := r.ReadAll()
+	snap := reader.Snapshot()
+	defer snap.Close()
+
+	if snap.TotalOperations() != 2 {
+		t.Fatalf("expected 2 ops, got %d", snap.TotalOperations())
+	}
+
+	op1, err := snap.Next()
 	if err != nil {
-		t.Fatalf("ReadAll: %v", err)
+		t.Fatalf("Next 1: %v", err)
+	}
+	if op1.(*IndexOperation).ID != "1" {
+		t.Errorf("expected ID 1, got %s", op1.(*IndexOperation).ID)
 	}
 
-	if len(result) != 3 {
-		t.Fatalf("expected 3 ops, got %d", len(result))
-	}
-
-	// Verify op 0: IndexOperation
-	idx0, ok := result[0].(*IndexOperation)
-	if !ok {
-		t.Fatalf("op[0]: expected *IndexOperation, got %T", result[0])
-	}
-	if idx0.ID != "1" || string(idx0.Source) != `{"title":"doc1"}` || idx0.Version != 1 {
-		t.Errorf("op[0]: unexpected fields: %+v", idx0)
-	}
-
-	// Verify op 1: DeleteOperation
-	del1, ok := result[1].(*DeleteOperation)
-	if !ok {
-		t.Fatalf("op[1]: expected *DeleteOperation, got %T", result[1])
-	}
-	if del1.ID != "2" || del1.Version != 2 {
-		t.Errorf("op[1]: unexpected fields: %+v", del1)
-	}
-
-	// Verify op 2: IndexOperation
-	idx2, ok := result[2].(*IndexOperation)
-	if !ok {
-		t.Fatalf("op[2]: expected *IndexOperation, got %T", result[2])
-	}
-	if idx2.ID != "3" || string(idx2.Source) != `{"title":"doc3"}` || idx2.Version != 3 {
-		t.Errorf("op[2]: unexpected fields: %+v", idx2)
-	}
-}
-
-func TestTranslogReader_EmptyFile(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "empty.tlog")
-
-	// Create empty file
-	f, err := os.Create(path)
+	op2, err := snap.Next()
 	if err != nil {
-		t.Fatalf("create file: %v", err)
+		t.Fatalf("Next 2: %v", err)
 	}
-	f.Close()
+	if op2.(*IndexOperation).ID != "2" {
+		t.Errorf("expected ID 2, got %s", op2.(*IndexOperation).ID)
+	}
 
-	r, err := NewTranslogReader(path)
+	op3, err := snap.Next()
 	if err != nil {
-		t.Fatalf("NewTranslogReader: %v", err)
+		t.Fatalf("Next 3: %v", err)
 	}
-	defer r.Close()
-
-	ops, err := r.ReadAll()
-	if err != nil {
-		t.Fatalf("ReadAll: %v", err)
-	}
-	if len(ops) != 0 {
-		t.Errorf("expected 0 ops, got %d", len(ops))
+	if op3 != nil {
+		t.Errorf("expected nil at end, got %v", op3)
 	}
 }

@@ -15,7 +15,6 @@ type GetDocumentRequest struct {
 type GetDocumentResponse struct {
 	Index       string
 	ID          string
-	Version     int64
 	SeqNo       int64
 	PrimaryTerm int64
 	Found       bool
@@ -59,7 +58,6 @@ func (a *TransportGetAction) Execute(req GetDocumentRequest) (GetDocumentRespons
 	return GetDocumentResponse{
 		Index:       req.Index,
 		ID:          req.ID,
-		Version:     result.Version,
 		SeqNo:       result.SeqNo,
 		PrimaryTerm: result.PrimaryTerm,
 		Found:       result.Found,

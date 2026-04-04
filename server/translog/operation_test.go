@@ -8,14 +8,15 @@ import (
 
 func TestIndexOperation_Roundtrip(t *testing.T) {
 	original := &IndexOperation{
-		ID:      "doc-1",
-		Source:  []byte(`{"title":"hello","body":"world"}`),
-		Version: 42,
+		ID:         "doc-1",
+		Source:     []byte(`{"title":"hello","body":"world"}`),
+		SequenceNo: 42,
+		PrimTerm:   1,
 	}
 
 	var buf bytes.Buffer
-	if err := original.WriteTo(&buf); err != nil {
-		t.Fatalf("WriteTo failed: %v", err)
+	if err := original.Serialize(&buf); err != nil {
+		t.Fatalf("Serialize failed: %v", err)
 	}
 
 	got, err := ReadOperation(&buf)
@@ -34,8 +35,8 @@ func TestIndexOperation_Roundtrip(t *testing.T) {
 	if !bytes.Equal(idx.Source, original.Source) {
 		t.Errorf("Source: got %q, want %q", idx.Source, original.Source)
 	}
-	if idx.Version != original.Version {
-		t.Errorf("Version: got %d, want %d", idx.Version, original.Version)
+	if idx.SequenceNo != original.SequenceNo {
+		t.Errorf("SequenceNo: got %d, want %d", idx.SequenceNo, original.SequenceNo)
 	}
 	if idx.OpType() != OpTypeIndex {
 		t.Errorf("OpType: got %d, want %d", idx.OpType(), OpTypeIndex)
@@ -44,13 +45,14 @@ func TestIndexOperation_Roundtrip(t *testing.T) {
 
 func TestDeleteOperation_Roundtrip(t *testing.T) {
 	original := &DeleteOperation{
-		ID:      "doc-2",
-		Version: 7,
+		ID:         "doc-2",
+		SequenceNo: 7,
+		PrimTerm:   1,
 	}
 
 	var buf bytes.Buffer
-	if err := original.WriteTo(&buf); err != nil {
-		t.Fatalf("WriteTo failed: %v", err)
+	if err := original.Serialize(&buf); err != nil {
+		t.Fatalf("Serialize failed: %v", err)
 	}
 
 	got, err := ReadOperation(&buf)
@@ -66,8 +68,8 @@ func TestDeleteOperation_Roundtrip(t *testing.T) {
 	if del.ID != original.ID {
 		t.Errorf("ID: got %q, want %q", del.ID, original.ID)
 	}
-	if del.Version != original.Version {
-		t.Errorf("Version: got %d, want %d", del.Version, original.Version)
+	if del.SequenceNo != original.SequenceNo {
+		t.Errorf("SequenceNo: got %d, want %d", del.SequenceNo, original.SequenceNo)
 	}
 	if del.OpType() != OpTypeDelete {
 		t.Errorf("OpType: got %d, want %d", del.OpType(), OpTypeDelete)
@@ -76,14 +78,15 @@ func TestDeleteOperation_Roundtrip(t *testing.T) {
 
 func TestReadOperation_CRCMismatch(t *testing.T) {
 	original := &IndexOperation{
-		ID:      "doc-1",
-		Source:  []byte(`{"title":"test"}`),
-		Version: 1,
+		ID:         "doc-1",
+		Source:     []byte(`{"title":"test"}`),
+		SequenceNo: 1,
+		PrimTerm:   1,
 	}
 
 	var buf bytes.Buffer
-	if err := original.WriteTo(&buf); err != nil {
-		t.Fatalf("WriteTo failed: %v", err)
+	if err := original.Serialize(&buf); err != nil {
+		t.Fatalf("Serialize failed: %v", err)
 	}
 
 	// Corrupt the CRC (last 4 bytes)
@@ -99,10 +102,9 @@ func TestReadOperation_CRCMismatch(t *testing.T) {
 func TestReadOperation_UnknownOpType(t *testing.T) {
 	var buf bytes.Buffer
 	buf.WriteByte(99) // unknown op type
-	// Write enough data so version read succeeds
+	// Write seqNo and primaryTerm so those reads succeed
 	binary.Write(&buf, binary.LittleEndian, int64(0))
-	// Write an empty id
-	binary.Write(&buf, binary.LittleEndian, uint32(0))
+	binary.Write(&buf, binary.LittleEndian, int64(0))
 
 	_, err := ReadOperation(&buf)
 	if err == nil {

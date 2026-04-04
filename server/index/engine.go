@@ -15,9 +15,25 @@ import (
 
 const defaultBufferSize = 1000
 
+// VersionConflictEngineError is returned when an if_seq_no/if_primary_term
+// check fails during an index or delete operation.
+type VersionConflictEngineError struct {
+	ID            string
+	ExpectedSeqNo int64
+	ExpectedTerm  int64
+	CurrentSeqNo  int64
+	CurrentTerm   int64
+}
+
+func (e *VersionConflictEngineError) Error() string {
+	return fmt.Sprintf(
+		"[%s]: version conflict, required seqNo [%d], primary term [%d]. current document has seqNo [%d] and primary term [%d]",
+		e.ID, e.ExpectedSeqNo, e.ExpectedTerm, e.CurrentSeqNo, e.CurrentTerm,
+	)
+}
+
 // IndexResult holds the outcome of an index operation.
 type IndexResult struct {
-	Version     int64
 	SeqNo       int64
 	PrimaryTerm int64
 	Created     bool
@@ -25,7 +41,6 @@ type IndexResult struct {
 
 // DeleteResult holds the outcome of a delete operation.
 type DeleteResult struct {
-	Version     int64
 	SeqNo       int64
 	PrimaryTerm int64
 	Found       bool
@@ -34,7 +49,6 @@ type DeleteResult struct {
 // GetResult holds the outcome of a real-time get operation.
 type GetResult struct {
 	Found       bool
-	Version     int64
 	SeqNo       int64
 	PrimaryTerm int64
 	Source      []byte
@@ -125,97 +139,103 @@ func (e *Engine) RecoverFromTranslog(replayIndex func(id string, source []byte) 
 }
 
 // Index adds or updates a document in the engine. It returns whether the
-// document was newly created and the assigned version.
-func (e *Engine) Index(id string, doc *document.Document, source []byte) (IndexResult, error) {
+// document was newly created and the assigned sequence number.
+func (e *Engine) Index(id string, doc *document.Document, source []byte, ifSeqNo *int64, ifPrimaryTerm *int64) (IndexResult, error) {
 	var created bool
-	var currentVersion int64
 
 	vv, exists := e.versionMap.Get(id)
 	if !exists {
 		if e.docExistsInIndex(id) {
-			currentVersion = 0
 			created = false
 		} else {
-			currentVersion = 0
 			created = true
 		}
 	} else {
-		currentVersion = vv.Version
 		created = vv.Deleted
 	}
 
-	// Delete-then-add (update semantics)
+	// CAS check: if_seq_no / if_primary_term
+	if ifSeqNo != nil && ifPrimaryTerm != nil {
+		if !exists {
+			return IndexResult{}, &VersionConflictEngineError{
+				ID: id, ExpectedSeqNo: *ifSeqNo, ExpectedTerm: *ifPrimaryTerm,
+				CurrentSeqNo: 0, CurrentTerm: 0,
+			}
+		}
+		if vv.SeqNo != *ifSeqNo || vv.PrimaryTerm != *ifPrimaryTerm {
+			return IndexResult{}, &VersionConflictEngineError{
+				ID: id, ExpectedSeqNo: *ifSeqNo, ExpectedTerm: *ifPrimaryTerm,
+				CurrentSeqNo: vv.SeqNo, CurrentTerm: vv.PrimaryTerm,
+			}
+		}
+	}
+
 	e.writer.DeleteDocuments("_id", id)
 	if err := e.writer.AddDocument(doc); err != nil {
 		return IndexResult{}, err
 	}
 
-	// Per-document version: NOT_FOUND → 1, otherwise currentVersion + 1
-	version := currentVersion + 1
 	seqNo := e.localCheckpoint.Add(1)
 
 	e.versionMap.Put(id, VersionValue{
-		Version:     version,
-		SeqNo:       seqNo,
-		PrimaryTerm: e.currentTerm,
-		Source:      source,
-		Deleted:     false,
+		SeqNo: seqNo, PrimaryTerm: e.currentTerm,
+		Source: source, Deleted: false,
 	})
 
 	if e.translog != nil {
 		tlOp := &translog.IndexOperation{
-			ID:         id,
-			Source:     source,
-			Version:    version,
-			SequenceNo: seqNo,
-			PrimTerm:   e.currentTerm,
+			ID: id, Source: source,
+			SequenceNo: seqNo, PrimTerm: e.currentTerm,
 		}
 		if _, err := e.translog.Add(tlOp); err != nil {
 			return IndexResult{}, fmt.Errorf("translog add: %w", err)
 		}
 	}
 
-	return IndexResult{Version: version, SeqNo: seqNo, PrimaryTerm: e.currentTerm, Created: created}, nil
+	return IndexResult{SeqNo: seqNo, PrimaryTerm: e.currentTerm, Created: created}, nil
 }
 
 // Delete removes a document by its _id. It returns whether the document
-// was found and the assigned version.
-func (e *Engine) Delete(id string) (DeleteResult, error) {
-	var currentVersion int64
-
+// was found and the assigned sequence number.
+func (e *Engine) Delete(id string, ifSeqNo *int64, ifPrimaryTerm *int64) (DeleteResult, error) {
 	vv, exists := e.versionMap.Get(id)
-	if exists {
-		currentVersion = vv.Version
-	}
 	found := exists || e.docExistsInIndex(id)
+
+	if ifSeqNo != nil && ifPrimaryTerm != nil {
+		if !exists {
+			return DeleteResult{}, &VersionConflictEngineError{
+				ID: id, ExpectedSeqNo: *ifSeqNo, ExpectedTerm: *ifPrimaryTerm,
+				CurrentSeqNo: 0, CurrentTerm: 0,
+			}
+		}
+		if vv.SeqNo != *ifSeqNo || vv.PrimaryTerm != *ifPrimaryTerm {
+			return DeleteResult{}, &VersionConflictEngineError{
+				ID: id, ExpectedSeqNo: *ifSeqNo, ExpectedTerm: *ifPrimaryTerm,
+				CurrentSeqNo: vv.SeqNo, CurrentTerm: vv.PrimaryTerm,
+			}
+		}
+	}
 
 	if err := e.writer.DeleteDocuments("_id", id); err != nil {
 		return DeleteResult{}, err
 	}
 
-	version := currentVersion + 1
 	seqNo := e.localCheckpoint.Add(1)
 
 	e.versionMap.Put(id, VersionValue{
-		Version:     version,
-		SeqNo:       seqNo,
-		PrimaryTerm: e.currentTerm,
-		Deleted:     true,
+		SeqNo: seqNo, PrimaryTerm: e.currentTerm, Deleted: true,
 	})
 
 	if e.translog != nil {
 		tlOp := &translog.DeleteOperation{
-			ID:         id,
-			Version:    version,
-			SequenceNo: seqNo,
-			PrimTerm:   e.currentTerm,
+			ID: id, SequenceNo: seqNo, PrimTerm: e.currentTerm,
 		}
 		if _, err := e.translog.Add(tlOp); err != nil {
 			return DeleteResult{}, fmt.Errorf("translog add: %w", err)
 		}
 	}
 
-	return DeleteResult{Version: version, SeqNo: seqNo, PrimaryTerm: e.currentTerm, Found: found}, nil
+	return DeleteResult{SeqNo: seqNo, PrimaryTerm: e.currentTerm, Found: found}, nil
 }
 
 // Get performs a real-time get by checking the version map first, then
@@ -227,7 +247,7 @@ func (e *Engine) Get(id string) GetResult {
 		if vv.Deleted {
 			return GetResult{Found: false}
 		}
-		return GetResult{Found: true, Version: vv.Version, SeqNo: vv.SeqNo, PrimaryTerm: vv.PrimaryTerm, Source: vv.Source}
+		return GetResult{Found: true, SeqNo: vv.SeqNo, PrimaryTerm: vv.PrimaryTerm, Source: vv.Source}
 	}
 
 	// Fall back to Lucene searcher
@@ -247,7 +267,7 @@ func (e *Engine) Get(id string) GetResult {
 	}
 
 	source := results[0].Fields["_source"]
-	return GetResult{Found: true, Version: 0, Source: []byte(source)}
+	return GetResult{Found: true, Source: []byte(source)}
 }
 
 // docExistsInIndex checks whether a document with the given _id exists

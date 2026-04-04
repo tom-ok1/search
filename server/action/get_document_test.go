@@ -92,9 +92,6 @@ func TestGetDocument_RealtimeGet(t *testing.T) {
 	if !resp.Found {
 		t.Fatal("expected Found=true without refresh (real-time GET)")
 	}
-	if resp.Version < 1 {
-		t.Errorf("expected Version >= 1, got %d", resp.Version)
-	}
 	if string(resp.Source) != `{"title":"hello world"}` {
 		t.Errorf("unexpected source: %s", resp.Source)
 	}

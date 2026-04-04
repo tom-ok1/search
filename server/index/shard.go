@@ -58,11 +58,11 @@ func NewIndexShard(shardID int, indexName string, dir store.Directory, m *mappin
 			if err != nil {
 				return err
 			}
-			_, err = engine.Index(id, doc, source)
+			_, err = engine.Index(id, doc, source, nil, nil)
 			return err
 		},
 		func(id string) error {
-			_, err := engine.Delete(id)
+			_, err := engine.Delete(id, nil, nil)
 			return err
 		},
 	); err != nil {
@@ -74,18 +74,18 @@ func NewIndexShard(shardID int, indexName string, dir store.Directory, m *mappin
 }
 
 // Index parses the JSON source according to the mapping and indexes the document.
-func (s *IndexShard) Index(id string, source []byte) (IndexResult, error) {
+func (s *IndexShard) Index(id string, source []byte, ifSeqNo *int64, ifPrimaryTerm *int64) (IndexResult, error) {
 	doc, err := mapping.ParseDocument(id, source, s.mapping)
 	if err != nil {
 		return IndexResult{}, err
 	}
 
-	return s.engine.Index(id, doc, source)
+	return s.engine.Index(id, doc, source, ifSeqNo, ifPrimaryTerm)
 }
 
 // Delete removes a document by its _id.
-func (s *IndexShard) Delete(id string) (DeleteResult, error) {
-	return s.engine.Delete(id)
+func (s *IndexShard) Delete(id string, ifSeqNo *int64, ifPrimaryTerm *int64) (DeleteResult, error) {
+	return s.engine.Delete(id, ifSeqNo, ifPrimaryTerm)
 }
 
 // Get performs a real-time get for a document by its _id.

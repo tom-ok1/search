@@ -8,14 +8,15 @@ import (
 )
 
 type DeleteDocumentRequest struct {
-	Index string
-	ID    string
+	Index         string
+	ID            string
+	IfSeqNo       *int64
+	IfPrimaryTerm *int64
 }
 
 type DeleteDocumentResponse struct {
 	Index       string
 	ID          string
-	Version     int64
 	SeqNo       int64
 	PrimaryTerm int64
 	Result      string // "deleted" or "not_found"
@@ -53,7 +54,7 @@ func (a *TransportDeleteDocumentAction) Execute(req DeleteDocumentRequest) (Dele
 	shardID := index.RouteShard(req.ID, svc.NumShards())
 	shard := svc.Shard(shardID)
 
-	result, err := shard.Delete(req.ID)
+	result, err := shard.Delete(req.ID, req.IfSeqNo, req.IfPrimaryTerm)
 	if err != nil {
 		return DeleteDocumentResponse{}, fmt.Errorf("delete document: %w", err)
 	}
@@ -66,7 +67,6 @@ func (a *TransportDeleteDocumentAction) Execute(req DeleteDocumentRequest) (Dele
 	return DeleteDocumentResponse{
 		Index:       req.Index,
 		ID:          req.ID,
-		Version:     result.Version,
 		SeqNo:       result.SeqNo,
 		PrimaryTerm: result.PrimaryTerm,
 		Result:      resultStr,

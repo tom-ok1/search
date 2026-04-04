@@ -40,7 +40,7 @@ func TestEngine_IndexAndRefreshAndSearch(t *testing.T) {
 	doc.AddField("_id", "1", document.FieldTypeKeyword)
 	doc.AddField("title", "hello world", document.FieldTypeText)
 
-	if _, err := eng.Index("1", doc, nil); err != nil {
+	if _, err := eng.Index("1", doc, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -80,7 +80,7 @@ func TestEngine_Delete(t *testing.T) {
 	doc := document.NewDocument()
 	doc.AddField("_id", "1", document.FieldTypeKeyword)
 	doc.AddField("title", "hello world", document.FieldTypeText)
-	if _, err := eng.Index("1", doc, nil); err != nil {
+	if _, err := eng.Index("1", doc, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -92,7 +92,7 @@ func TestEngine_Delete(t *testing.T) {
 	}
 
 	// Delete and refresh
-	if _, err := eng.Delete("1"); err != nil {
+	if _, err := eng.Delete("1", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := eng.Refresh(); err != nil {
@@ -122,7 +122,7 @@ func TestIndexShard_IndexAndSearch(t *testing.T) {
 	defer shard.Close()
 
 	source := []byte(`{"title": "hello world"}`)
-	if _, err := shard.Index("doc1", source); err != nil {
+	if _, err := shard.Index("doc1", source, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -165,14 +165,14 @@ func TestIndexShard_Delete(t *testing.T) {
 	defer shard.Close()
 
 	source := []byte(`{"title": "hello world"}`)
-	if _, err := shard.Index("doc1", source); err != nil {
+	if _, err := shard.Index("doc1", source, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := shard.Refresh(); err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err := shard.Delete("doc1"); err != nil {
+	if _, err := shard.Delete("doc1", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := shard.Refresh(); err != nil {
@@ -216,7 +216,7 @@ func TestIndexService_CreateAndAccess(t *testing.T) {
 	}
 
 	// Index a doc through the shard
-	if _, err := shard.Index("1", []byte(`{"title": "hello"}`)); err != nil {
+	if _, err := shard.Index("1", []byte(`{"title": "hello"}`), nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := shard.Refresh(); err != nil {
@@ -252,12 +252,12 @@ func TestEngine_IndexAndSearchJapanese(t *testing.T) {
 	doc0 := document.NewDocument()
 	doc0.AddField("_id", "1", document.FieldTypeKeyword)
 	doc0.AddField("title", "東京タワー スカイツリー", document.FieldTypeText)
-	eng.Index("1", doc0, nil)
+	eng.Index("1", doc0, nil, nil, nil)
 
 	doc1 := document.NewDocument()
 	doc1.AddField("_id", "2", document.FieldTypeKeyword)
 	doc1.AddField("title", "大阪城 通天閣", document.FieldTypeText)
-	eng.Index("2", doc1, nil)
+	eng.Index("2", doc1, nil, nil, nil)
 
 	if err := eng.Refresh(); err != nil {
 		t.Fatal(err)
@@ -290,10 +290,10 @@ func TestEngine_DeleteJapanese(t *testing.T) {
 	doc := document.NewDocument()
 	doc.AddField("_id", "東京", document.FieldTypeKeyword)
 	doc.AddField("title", "東京タワー", document.FieldTypeText)
-	eng.Index("東京", doc, nil)
+	eng.Index("東京", doc, nil, nil, nil)
 	eng.Refresh()
 
-	if _, err := eng.Delete("東京"); err != nil {
+	if _, err := eng.Delete("東京", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	eng.Refresh()
@@ -322,8 +322,8 @@ func TestIndexShard_IndexAndSearchJapanese(t *testing.T) {
 	}
 	defer shard.Close()
 
-	shard.Index("1", []byte(`{"title": "東京 大阪", "category": "都市"}`))
-	shard.Index("2", []byte(`{"title": "名古屋 京都", "category": "都市"}`))
+	shard.Index("1", []byte(`{"title": "東京 大阪", "category": "都市"}`), nil, nil)
+	shard.Index("2", []byte(`{"title": "名古屋 京都", "category": "都市"}`), nil, nil)
 	shard.Refresh()
 
 	searcher := shard.Searcher()
@@ -338,7 +338,7 @@ func TestIndexShard_IndexAndSearchJapanese(t *testing.T) {
 	}
 }
 
-func TestEngine_PerDocumentVersion(t *testing.T) {
+func TestEngine_PerDocumentSeqNo(t *testing.T) {
 	dir, err := store.NewFSDirectory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -354,36 +354,36 @@ func TestEngine_PerDocumentVersion(t *testing.T) {
 	docA := document.NewDocument()
 	docA.AddField("_id", "a", document.FieldTypeKeyword)
 	docA.AddField("title", "hello", document.FieldTypeText)
-	r1, err := eng.Index("a", docA, []byte(`{"title":"hello"}`))
+	r1, err := eng.Index("a", docA, []byte(`{"title":"hello"}`), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r1.Version != 1 {
-		t.Fatalf("expected version 1 for new doc a, got %d", r1.Version)
+	if r1.SeqNo < 0 {
+		t.Fatalf("expected SeqNo >= 0 for new doc a, got %d", r1.SeqNo)
 	}
 
-	// First index of doc "b" → version 1 (NOT 2)
+	// First index of doc "b" gets its own SeqNo
 	docB := document.NewDocument()
 	docB.AddField("_id", "b", document.FieldTypeKeyword)
 	docB.AddField("title", "world", document.FieldTypeText)
-	r2, err := eng.Index("b", docB, []byte(`{"title":"world"}`))
+	r2, err := eng.Index("b", docB, []byte(`{"title":"world"}`), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r2.Version != 1 {
-		t.Fatalf("expected version 1 for new doc b, got %d", r2.Version)
+	if r2.SeqNo <= r1.SeqNo {
+		t.Fatalf("expected SeqNo > %d for new doc b, got %d", r1.SeqNo, r2.SeqNo)
 	}
 
-	// Update doc "a" → version 2
+	// Update doc "a" gets next SeqNo
 	docA2 := document.NewDocument()
 	docA2.AddField("_id", "a", document.FieldTypeKeyword)
 	docA2.AddField("title", "hello updated", document.FieldTypeText)
-	r3, err := eng.Index("a", docA2, []byte(`{"title":"hello updated"}`))
+	r3, err := eng.Index("a", docA2, []byte(`{"title":"hello updated"}`), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r3.Version != 2 {
-		t.Fatalf("expected version 2 for updated doc a, got %d", r3.Version)
+	if r3.SeqNo <= r2.SeqNo {
+		t.Fatalf("expected SeqNo > %d for updated doc a, got %d", r2.SeqNo, r3.SeqNo)
 	}
 }
 
@@ -425,17 +425,17 @@ func TestEngine_IndexAndSearchSpecialChars(t *testing.T) {
 	doc0 := document.NewDocument()
 	doc0.AddField("_id", "1", document.FieldTypeKeyword)
 	doc0.AddField("title", "café résumé", document.FieldTypeText)
-	eng.Index("1", doc0, nil)
+	eng.Index("1", doc0, nil, nil, nil)
 
 	doc1 := document.NewDocument()
 	doc1.AddField("_id", "2", document.FieldTypeKeyword)
 	doc1.AddField("title", "hello 🔍 world", document.FieldTypeText)
-	eng.Index("2", doc1, nil)
+	eng.Index("2", doc1, nil, nil, nil)
 
 	doc2 := document.NewDocument()
 	doc2.AddField("_id", "3", document.FieldTypeKeyword)
 	doc2.AddField("title", "𠮷野家 テスト", document.FieldTypeText)
-	eng.Index("3", doc2, nil)
+	eng.Index("3", doc2, nil, nil, nil)
 
 	if err := eng.Refresh(); err != nil {
 		t.Fatal(err)
@@ -476,14 +476,14 @@ func TestEngine_DeleteSpecialCharID(t *testing.T) {
 	doc := document.NewDocument()
 	doc.AddField("_id", "user@example.com", document.FieldTypeKeyword)
 	doc.AddField("title", "test doc", document.FieldTypeText)
-	eng.Index("user@example.com", doc, nil)
+	eng.Index("user@example.com", doc, nil, nil, nil)
 	eng.Refresh()
 
 	if eng.Searcher().Reader().LiveDocCount() != 1 {
 		t.Fatal("expected 1 doc")
 	}
 
-	eng.Delete("user@example.com")
+	eng.Delete("user@example.com", nil, nil)
 	eng.Refresh()
 
 	if eng.Searcher().Reader().LiveDocCount() != 0 {
@@ -510,9 +510,9 @@ func TestIndexShard_SpecialCharsRoundtrip(t *testing.T) {
 	}
 	defer shard.Close()
 
-	shard.Index("1", []byte(`{"title": "café résumé", "category": "New York"}`))
-	shard.Index("2", []byte(`{"title": "🔍 search 🔎", "category": "C++"}`))
-	shard.Index("3", []byte(`{"title": "𠮷野家 テスト", "category": "user@example.com"}`))
+	shard.Index("1", []byte(`{"title": "café résumé", "category": "New York"}`), nil, nil)
+	shard.Index("2", []byte(`{"title": "🔍 search 🔎", "category": "C++"}`), nil, nil)
+	shard.Index("3", []byte(`{"title": "𠮷野家 テスト", "category": "user@example.com"}`), nil, nil)
 	shard.Refresh()
 
 	searcher := shard.Searcher()
@@ -577,7 +577,7 @@ func TestIntegration_IndexLifecycle(t *testing.T) {
 		{"3", `{"name": "Blue T-Shirt", "category": "clothing"}`},
 	}
 	for _, d := range docs {
-		if _, err := shard.Index(d.id, []byte(d.source)); err != nil {
+		if _, err := shard.Index(d.id, []byte(d.source), nil, nil); err != nil {
 			t.Fatalf("index doc %s: %v", d.id, err)
 		}
 	}
@@ -610,7 +610,7 @@ func TestIntegration_IndexLifecycle(t *testing.T) {
 	}
 
 	// Delete one doc and verify
-	if _, err := shard.Delete("2"); err != nil {
+	if _, err := shard.Delete("2", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := shard.Refresh(); err != nil {
@@ -623,7 +623,7 @@ func TestIntegration_IndexLifecycle(t *testing.T) {
 	}
 
 	// Re-index (update) existing doc
-	if _, err := shard.Index("1", []byte(`{"name": "Advanced Go", "category": "books"}`)); err != nil {
+	if _, err := shard.Index("1", []byte(`{"name": "Advanced Go", "category": "books"}`), nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := shard.Refresh(); err != nil {
@@ -660,7 +660,7 @@ func TestEngine_ResultsIncludeSeqNoAndPrimaryTerm(t *testing.T) {
 	doc := document.NewDocument()
 	doc.AddField("_id", "1", document.FieldTypeKeyword)
 	doc.AddField("title", "hello", document.FieldTypeText)
-	ir, err := eng.Index("1", doc, []byte(`{"title":"hello"}`))
+	ir, err := eng.Index("1", doc, []byte(`{"title":"hello"}`), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -672,7 +672,7 @@ func TestEngine_ResultsIncludeSeqNoAndPrimaryTerm(t *testing.T) {
 	}
 
 	// Delete
-	dr, err := eng.Delete("1")
+	dr, err := eng.Delete("1", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -687,7 +687,7 @@ func TestEngine_ResultsIncludeSeqNoAndPrimaryTerm(t *testing.T) {
 	doc2 := document.NewDocument()
 	doc2.AddField("_id", "2", document.FieldTypeKeyword)
 	doc2.AddField("title", "world", document.FieldTypeText)
-	eng.Index("2", doc2, []byte(`{"title":"world"}`))
+	eng.Index("2", doc2, []byte(`{"title":"world"}`), nil, nil)
 
 	gr := eng.Get("2")
 	if !gr.Found {
@@ -701,7 +701,7 @@ func TestEngine_ResultsIncludeSeqNoAndPrimaryTerm(t *testing.T) {
 	}
 }
 
-func TestEngine_VersionAcrossDeleteAndReindex(t *testing.T) {
+func TestEngine_SeqNoAcrossDeleteAndReindex(t *testing.T) {
 	dir, err := store.NewFSDirectory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -713,42 +713,149 @@ func TestEngine_VersionAcrossDeleteAndReindex(t *testing.T) {
 	}
 	defer eng.Close()
 
-	// Index doc "a" → version 1
+	// Index doc "a"
 	docA := document.NewDocument()
 	docA.AddField("_id", "a", document.FieldTypeKeyword)
 	docA.AddField("title", "hello", document.FieldTypeText)
-	r1, err := eng.Index("a", docA, []byte(`{"title":"hello"}`))
+	r1, err := eng.Index("a", docA, []byte(`{"title":"hello"}`), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r1.Version != 1 {
-		t.Fatalf("expected version 1, got %d", r1.Version)
+	if r1.SeqNo < 0 {
+		t.Fatalf("expected SeqNo >= 0, got %d", r1.SeqNo)
 	}
 
-	// Delete doc "a" → version 2
-	dr, err := eng.Delete("a")
+	// Delete doc "a"
+	dr, err := eng.Delete("a", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if dr.Version != 2 {
-		t.Fatalf("expected delete version 2, got %d", dr.Version)
+	if dr.SeqNo <= r1.SeqNo {
+		t.Fatalf("expected delete SeqNo > %d, got %d", r1.SeqNo, dr.SeqNo)
 	}
 	if !dr.Found {
 		t.Fatal("expected Found=true")
 	}
 
-	// Re-index doc "a" → version 3 (continues from delete)
+	// Re-index doc "a" after delete
 	docA2 := document.NewDocument()
 	docA2.AddField("_id", "a", document.FieldTypeKeyword)
 	docA2.AddField("title", "hello again", document.FieldTypeText)
-	r2, err := eng.Index("a", docA2, []byte(`{"title":"hello again"}`))
+	r2, err := eng.Index("a", docA2, []byte(`{"title":"hello again"}`), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r2.Version != 3 {
-		t.Fatalf("expected version 3 after re-index, got %d", r2.Version)
+	if r2.SeqNo <= dr.SeqNo {
+		t.Fatalf("expected SeqNo > %d after re-index, got %d", dr.SeqNo, r2.SeqNo)
 	}
 	if !r2.Created {
 		t.Fatal("expected Created=true after re-index of deleted doc")
+	}
+}
+
+func TestEngine_IfSeqNoCASConflict(t *testing.T) {
+	dir, err := store.NewFSDirectory(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng, err := index.NewEngine(dir, newTestFieldAnalyzers(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+
+	doc := document.NewDocument()
+	doc.AddField("_id", "1", document.FieldTypeKeyword)
+	doc.AddField("title", "hello", document.FieldTypeText)
+	r1, err := eng.Index("1", doc, []byte(`{"title":"hello"}`), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Update with correct if_seq_no → should succeed
+	doc2 := document.NewDocument()
+	doc2.AddField("_id", "1", document.FieldTypeKeyword)
+	doc2.AddField("title", "updated", document.FieldTypeText)
+	seqNo := r1.SeqNo
+	term := r1.PrimaryTerm
+	r2, err := eng.Index("1", doc2, []byte(`{"title":"updated"}`), &seqNo, &term)
+	if err != nil {
+		t.Fatalf("expected CAS success, got: %v", err)
+	}
+
+	// Update with stale if_seq_no → should fail
+	doc3 := document.NewDocument()
+	doc3.AddField("_id", "1", document.FieldTypeKeyword)
+	doc3.AddField("title", "conflict", document.FieldTypeText)
+	_, err = eng.Index("1", doc3, []byte(`{"title":"conflict"}`), &seqNo, &term)
+	if err == nil {
+		t.Fatal("expected CAS conflict error")
+	}
+
+	// Update with correct new seqNo → should succeed
+	newSeqNo := r2.SeqNo
+	newTerm := r2.PrimaryTerm
+	_, err = eng.Index("1", doc3, []byte(`{"title":"conflict"}`), &newSeqNo, &newTerm)
+	if err != nil {
+		t.Fatalf("expected CAS success with updated seqNo, got: %v", err)
+	}
+}
+
+func TestEngine_IfSeqNoCASOnNonexistentDoc(t *testing.T) {
+	dir, err := store.NewFSDirectory(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng, err := index.NewEngine(dir, newTestFieldAnalyzers(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+
+	doc := document.NewDocument()
+	doc.AddField("_id", "1", document.FieldTypeKeyword)
+	doc.AddField("title", "hello", document.FieldTypeText)
+	seqNo := int64(0)
+	term := int64(1)
+	_, err = eng.Index("1", doc, []byte(`{"title":"hello"}`), &seqNo, &term)
+	if err == nil {
+		t.Fatal("expected CAS conflict error for nonexistent doc")
+	}
+}
+
+func TestEngine_DeleteWithCAS(t *testing.T) {
+	dir, err := store.NewFSDirectory(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng, err := index.NewEngine(dir, newTestFieldAnalyzers(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+
+	doc := document.NewDocument()
+	doc.AddField("_id", "1", document.FieldTypeKeyword)
+	doc.AddField("title", "hello", document.FieldTypeText)
+	r1, err := eng.Index("1", doc, []byte(`{"title":"hello"}`), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wrongSeqNo := int64(999)
+	wrongTerm := int64(1)
+	_, err = eng.Delete("1", &wrongSeqNo, &wrongTerm)
+	if err == nil {
+		t.Fatal("expected CAS conflict error")
+	}
+
+	seqNo := r1.SeqNo
+	term := r1.PrimaryTerm
+	dr, err := eng.Delete("1", &seqNo, &term)
+	if err != nil {
+		t.Fatalf("expected CAS delete success, got: %v", err)
+	}
+	if !dr.Found {
+		t.Fatal("expected Found=true")
 	}
 }
