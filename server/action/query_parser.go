@@ -1,6 +1,7 @@
 package action
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -11,6 +12,275 @@ import (
 	"gosearch/search"
 	"gosearch/server/mapping"
 )
+
+// QueryJSON is a discriminated union for ES query JSON. Exactly one field is non-nil.
+type QueryJSON struct {
+	MatchAll    *MatchAllQueryJSON
+	Term        *TermQueryJSON
+	Match       *MatchQueryJSON
+	MatchPhrase *MatchPhraseQueryJSON
+	Exists      *ExistsQueryJSON
+	MultiMatch  *MultiMatchQueryJSON
+	Bool        *BoolQueryJSON
+	Range       *RangeQueryJSON
+}
+
+type MatchAllQueryJSON struct{}
+
+type TermQueryJSON struct {
+	Field string
+	Value string
+}
+
+type MatchQueryJSON struct {
+	Field    string
+	Text     string
+	Analyzer string
+}
+
+type MatchPhraseQueryJSON struct {
+	Field    string
+	Text     string
+	Analyzer string
+}
+
+type ExistsQueryJSON struct {
+	Field string
+}
+
+type MultiMatchQueryJSON struct {
+	Query  string
+	Fields []string
+}
+
+type BoolQueryJSON struct {
+	Must    []QueryJSON
+	Filter  []QueryJSON
+	Should  []QueryJSON
+	MustNot []QueryJSON
+}
+
+type RangeQueryJSON struct {
+	Field string
+	GTE   any
+	GT    any
+	LTE   any
+	LT    any
+}
+
+func (q *QueryJSON) UnmarshalJSON(data []byte) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return fmt.Errorf("query must be a JSON object: %w", err)
+	}
+	if len(raw) != 1 {
+		return fmt.Errorf("query must have exactly one top-level key, got %d", len(raw))
+	}
+
+	for key, value := range raw {
+		switch key {
+		case "match_all":
+			q.MatchAll = &MatchAllQueryJSON{}
+			return nil
+		case "term":
+			return q.unmarshalTerm(value)
+		case "match":
+			return q.unmarshalMatch(value)
+		case "match_phrase":
+			return q.unmarshalMatchPhrase(value)
+		case "exists":
+			return q.unmarshalExists(value)
+		case "multi_match":
+			return q.unmarshalMultiMatch(value)
+		case "bool":
+			return q.unmarshalBool(value)
+		case "range":
+			return q.unmarshalRange(value)
+		default:
+			return fmt.Errorf("unknown query type [%s]", key)
+		}
+	}
+	return fmt.Errorf("empty query")
+}
+
+func (q *QueryJSON) unmarshalTerm(data json.RawMessage) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return fmt.Errorf("term query must be an object")
+	}
+	for field, raw := range fields {
+		var scalar any
+		dec := json.NewDecoder(bytes.NewReader(raw))
+		dec.UseNumber()
+		if err := dec.Decode(&scalar); err != nil {
+			return fmt.Errorf("term query value for [%s]: %w", field, err)
+		}
+		switch scalar.(type) {
+		case string, json.Number, bool:
+			q.Term = &TermQueryJSON{Field: field, Value: fmt.Sprintf("%v", scalar)}
+			return nil
+		default:
+			return fmt.Errorf("term query value for [%s] must be a scalar (string, number, or bool)", field)
+		}
+	}
+	return fmt.Errorf("term query must specify a field")
+}
+
+func (q *QueryJSON) unmarshalMatch(data json.RawMessage) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return fmt.Errorf("match query must be an object")
+	}
+	for field, raw := range fields {
+		text, analyzer, err := unmarshalMatchParams(raw)
+		if err != nil {
+			return fmt.Errorf("match query field [%s]: %w", field, err)
+		}
+		q.Match = &MatchQueryJSON{Field: field, Text: text, Analyzer: analyzer}
+		return nil
+	}
+	return fmt.Errorf("match query must specify a field")
+}
+
+func (q *QueryJSON) unmarshalMatchPhrase(data json.RawMessage) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return fmt.Errorf("match_phrase query must be an object")
+	}
+	for field, raw := range fields {
+		text, analyzer, err := unmarshalMatchParams(raw)
+		if err != nil {
+			return fmt.Errorf("match_phrase query field [%s]: %w", field, err)
+		}
+		q.MatchPhrase = &MatchPhraseQueryJSON{Field: field, Text: text, Analyzer: analyzer}
+		return nil
+	}
+	return fmt.Errorf("match_phrase query must specify a field")
+}
+
+// unmarshalMatchParams handles both scalar form ("hello") and object form
+// ({"query": "hello", "analyzer": "custom"}) for match/match_phrase fields.
+func unmarshalMatchParams(data json.RawMessage) (text string, analyzer string, err error) {
+	// Try object form first: {"query": "...", "analyzer": "..."}
+	var obj struct {
+		Query    any    `json:"query"`
+		Analyzer string `json:"analyzer"`
+	}
+	if err := json.Unmarshal(data, &obj); err == nil && obj.Query != nil {
+		return fmt.Sprintf("%v", obj.Query), obj.Analyzer, nil
+	}
+
+	// Scalar form: "hello" or 42 or true
+	var scalar any
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	if err := dec.Decode(&scalar); err != nil {
+		return "", "", fmt.Errorf("field value must be a string, number, bool, or object with 'query'")
+	}
+	switch scalar.(type) {
+	case string, json.Number, bool:
+		return fmt.Sprintf("%v", scalar), "", nil
+	default:
+		return "", "", fmt.Errorf("field value must be a string, number, bool, or object with 'query'")
+	}
+}
+
+func (q *QueryJSON) unmarshalExists(data json.RawMessage) error {
+	var obj struct {
+		Field string `json:"field"`
+	}
+	if err := json.Unmarshal(data, &obj); err != nil {
+		return fmt.Errorf("exists query must be an object")
+	}
+	if obj.Field == "" {
+		return fmt.Errorf("exists query must specify 'field'")
+	}
+	q.Exists = &ExistsQueryJSON{Field: obj.Field}
+	return nil
+}
+
+func (q *QueryJSON) unmarshalMultiMatch(data json.RawMessage) error {
+	var obj struct {
+		Query  string   `json:"query"`
+		Fields []string `json:"fields"`
+	}
+	if err := json.Unmarshal(data, &obj); err != nil {
+		return fmt.Errorf("multi_match query must be an object: %w", err)
+	}
+	if obj.Query == "" {
+		var raw map[string]json.RawMessage
+		json.Unmarshal(data, &raw)
+		if _, ok := raw["query"]; !ok {
+			return fmt.Errorf("multi_match query must specify 'query'")
+		}
+	}
+	if obj.Fields == nil {
+		return fmt.Errorf("multi_match query must specify 'fields'")
+	}
+	if len(obj.Fields) == 0 {
+		return fmt.Errorf("multi_match 'fields' must not be empty")
+	}
+	q.MultiMatch = &MultiMatchQueryJSON{Query: obj.Query, Fields: obj.Fields}
+	return nil
+}
+
+func (q *QueryJSON) unmarshalBool(data json.RawMessage) error {
+	var obj struct {
+		Must    []QueryJSON `json:"must"`
+		Filter  []QueryJSON `json:"filter"`
+		Should  []QueryJSON `json:"should"`
+		MustNot []QueryJSON `json:"must_not"`
+	}
+	if err := json.Unmarshal(data, &obj); err != nil {
+		return fmt.Errorf("bool query: %w", err)
+	}
+	total := len(obj.Must) + len(obj.Filter) + len(obj.Should) + len(obj.MustNot)
+	if total == 0 {
+		var raw map[string]json.RawMessage
+		json.Unmarshal(data, &raw)
+		keys := make([]string, 0, len(raw))
+		for k := range raw {
+			keys = append(keys, k)
+		}
+		return fmt.Errorf("bool query has no recognized clauses, got: [%s]", strings.Join(keys, ", "))
+	}
+	q.Bool = &BoolQueryJSON{
+		Must:    obj.Must,
+		Filter:  obj.Filter,
+		Should:  obj.Should,
+		MustNot: obj.MustNot,
+	}
+	return nil
+}
+
+func (q *QueryJSON) unmarshalRange(data json.RawMessage) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return fmt.Errorf("range query must be an object")
+	}
+	for field, raw := range fields {
+		var params struct {
+			GTE any `json:"gte"`
+			GT  any `json:"gt"`
+			LTE any `json:"lte"`
+			LT  any `json:"lt"`
+		}
+		dec := json.NewDecoder(bytes.NewReader(raw))
+		dec.UseNumber()
+		if err := dec.Decode(&params); err != nil {
+			return fmt.Errorf("range query value for [%s] must be an object", field)
+		}
+		q.Range = &RangeQueryJSON{
+			Field: field,
+			GTE:   params.GTE,
+			GT:    params.GT,
+			LTE:   params.LTE,
+			LT:    params.LT,
+		}
+		return nil
+	}
+	return fmt.Errorf("range query must specify a field")
+}
 
 type QueryParser struct {
 	mapping  *mapping.MappingDefinition
