@@ -170,12 +170,15 @@ func (e *Engine) Index(id string, doc *document.Document, source []byte, ifSeqNo
 		}
 	}
 
+	seqNo := e.localCheckpoint.Add(1)
+
+	// Set _seq_no and _primary_term in doc values before indexing into Lucene.
+	doc.SetSeqNoFields(seqNo, e.currentTerm)
+
 	e.writer.DeleteDocuments("_id", id)
 	if err := e.writer.AddDocument(doc); err != nil {
 		return IndexResult{}, err
 	}
-
-	seqNo := e.localCheckpoint.Add(1)
 
 	e.versionMap.Put(id, VersionValue{
 		SeqNo: seqNo, PrimaryTerm: e.currentTerm,
