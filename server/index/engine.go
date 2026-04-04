@@ -291,7 +291,13 @@ func (e *Engine) Get(id string) GetResult {
 	}
 
 	source := results[0].Fields["_source"]
-	return GetResult{Found: true, Source: []byte(source)}
+	docID := results[0].DocID
+	reader := s.Reader()
+
+	seqNo, _ := reader.GetNumericDocValue(docID, "_seq_no")
+	primaryTerm, _ := reader.GetNumericDocValue(docID, "_primary_term")
+
+	return GetResult{Found: true, SeqNo: seqNo, PrimaryTerm: primaryTerm, Source: []byte(source)}
 }
 
 // docExistsInIndex checks whether a document with the given _id exists

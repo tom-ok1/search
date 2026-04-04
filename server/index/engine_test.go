@@ -978,3 +978,42 @@ func TestEngine_DeleteCASAfterRefresh(t *testing.T) {
 		t.Fatal("expected Found=true")
 	}
 }
+
+func TestEngine_GetAfterRefreshIncludesSeqNo(t *testing.T) {
+	dir, err := store.NewFSDirectory(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng, err := index.NewEngine(dir, newTestFieldAnalyzers(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+
+	m := &mapping.MappingDefinition{
+		Properties: map[string]mapping.FieldMapping{
+			"title": {Type: mapping.FieldTypeText},
+		},
+	}
+
+	doc, _ := mapping.ParseDocument("1", []byte(`{"title":"hello"}`), m)
+	r1, err := eng.Index("1", doc, []byte(`{"title":"hello"}`), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := eng.Refresh(); err != nil {
+		t.Fatal(err)
+	}
+
+	gr := eng.Get("1")
+	if !gr.Found {
+		t.Fatal("expected document to be found after refresh")
+	}
+	if gr.SeqNo != r1.SeqNo {
+		t.Fatalf("expected SeqNo=%d after refresh GET, got %d", r1.SeqNo, gr.SeqNo)
+	}
+	if gr.PrimaryTerm != r1.PrimaryTerm {
+		t.Fatalf("expected PrimaryTerm=%d after refresh GET, got %d", r1.PrimaryTerm, gr.PrimaryTerm)
+	}
+}
