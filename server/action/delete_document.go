@@ -13,10 +13,12 @@ type DeleteDocumentRequest struct {
 }
 
 type DeleteDocumentResponse struct {
-	Index   string
-	ID      string
-	Version int64
-	Result  string // "deleted" or "not_found"
+	Index       string
+	ID          string
+	Version     int64
+	SeqNo       int64
+	PrimaryTerm int64
+	Result      string // "deleted" or "not_found"
 }
 
 type TransportDeleteDocumentAction struct {
@@ -62,9 +64,11 @@ func (a *TransportDeleteDocumentAction) Execute(req DeleteDocumentRequest) (Dele
 	}
 
 	return DeleteDocumentResponse{
-		Index:   req.Index,
-		ID:      req.ID,
-		Version: result.Version,
-		Result:  resultStr,
+		Index:       req.Index,
+		ID:          req.ID,
+		Version:     result.Version,
+		SeqNo:       result.SeqNo,
+		PrimaryTerm: result.PrimaryTerm,
+		Result:      resultStr,
 	}, nil
 }

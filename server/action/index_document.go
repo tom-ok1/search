@@ -15,10 +15,12 @@ type IndexDocumentRequest struct {
 }
 
 type IndexDocumentResponse struct {
-	Index   string
-	ID      string
-	Version int64
-	Result  string // "created" or "updated"
+	Index       string
+	ID          string
+	Version     int64
+	SeqNo       int64
+	PrimaryTerm int64
+	Result      string // "created" or "updated"
 }
 
 type TransportIndexAction struct {
@@ -64,9 +66,11 @@ func (a *TransportIndexAction) Execute(req IndexDocumentRequest) (IndexDocumentR
 	}
 
 	return IndexDocumentResponse{
-		Index:   req.Index,
-		ID:      req.ID,
-		Version: result.Version,
-		Result:  resultStr,
+		Index:       req.Index,
+		ID:          req.ID,
+		Version:     result.Version,
+		SeqNo:       result.SeqNo,
+		PrimaryTerm: result.PrimaryTerm,
+		Result:      resultStr,
 	}, nil
 }

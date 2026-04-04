@@ -204,10 +204,12 @@ func (h *Handler) IndexDocumentPut(_ context.Context, request api.IndexDocumentP
 	}
 
 	return api.IndexDocumentPut201JSONResponse{
-		UnderscoreId:      resp.ID,
-		UnderscoreIndex:   resp.Index,
-		UnderscoreVersion: resp.Version,
-		Result:            resp.Result,
+		UnderscoreId:          resp.ID,
+		UnderscoreIndex:       resp.Index,
+		UnderscoreVersion:     resp.Version,
+		UnderscoreSeqNo:       resp.SeqNo,
+		UnderscorePrimaryTerm: resp.PrimaryTerm,
+		Result:                resp.Result,
 	}, nil
 }
 
@@ -232,10 +234,12 @@ func (h *Handler) IndexDocumentPost(_ context.Context, request api.IndexDocument
 	}
 
 	return api.IndexDocumentPost201JSONResponse{
-		UnderscoreId:      resp.ID,
-		UnderscoreIndex:   resp.Index,
-		UnderscoreVersion: resp.Version,
-		Result:            resp.Result,
+		UnderscoreId:          resp.ID,
+		UnderscoreIndex:       resp.Index,
+		UnderscoreVersion:     resp.Version,
+		UnderscoreSeqNo:       resp.SeqNo,
+		UnderscorePrimaryTerm: resp.PrimaryTerm,
+		Result:                resp.Result,
 	}, nil
 }
 
@@ -279,11 +283,13 @@ func (h *Handler) GetDocument(_ context.Context, request api.GetDocumentRequestO
 	}
 
 	return api.GetDocument200JSONResponse{
-		UnderscoreId:      resp.ID,
-		UnderscoreIndex:   resp.Index,
-		UnderscoreVersion: resp.Version,
-		Found:             true,
-		UnderscoreSource:  source,
+		UnderscoreId:          resp.ID,
+		UnderscoreIndex:       resp.Index,
+		UnderscoreVersion:     resp.Version,
+		UnderscoreSeqNo:       resp.SeqNo,
+		UnderscorePrimaryTerm: resp.PrimaryTerm,
+		Found:                 true,
+		UnderscoreSource:      source,
 	}, nil
 }
 
@@ -311,18 +317,22 @@ func (h *Handler) DeleteDocument(_ context.Context, request api.DeleteDocumentRe
 
 	if resp.Result == "not_found" {
 		return api.DeleteDocument404JSONResponse{
-			UnderscoreId:      resp.ID,
-			UnderscoreIndex:   resp.Index,
-			UnderscoreVersion: resp.Version,
-			Result:            resp.Result,
+			UnderscoreId:          resp.ID,
+			UnderscoreIndex:       resp.Index,
+			UnderscoreVersion:     resp.Version,
+			UnderscoreSeqNo:       resp.SeqNo,
+			UnderscorePrimaryTerm: resp.PrimaryTerm,
+			Result:                resp.Result,
 		}, nil
 	}
 
 	return api.DeleteDocument200JSONResponse{
-		UnderscoreId:      resp.ID,
-		UnderscoreIndex:   resp.Index,
-		UnderscoreVersion: resp.Version,
-		Result:            resp.Result,
+		UnderscoreId:          resp.ID,
+		UnderscoreIndex:       resp.Index,
+		UnderscoreVersion:     resp.Version,
+		UnderscoreSeqNo:       resp.SeqNo,
+		UnderscorePrimaryTerm: resp.PrimaryTerm,
+		Result:                resp.Result,
 	}, nil
 }
 
@@ -462,10 +472,12 @@ func convertBulkResponse(resp action.BulkResponse) api.BulkResponse {
 	items := make([]api.BulkItemResponse, 0, len(resp.Items))
 	for _, item := range resp.Items {
 		result := api.BulkItemResult{
-			UnderscoreId:      item.ID,
-			UnderscoreIndex:   item.Index,
-			UnderscoreVersion: item.Version,
-			Status:            item.Status,
+			UnderscoreId:          item.ID,
+			UnderscoreIndex:       item.Index,
+			UnderscoreVersion:     item.Version,
+			UnderscoreSeqNo:       item.SeqNo,
+			UnderscorePrimaryTerm: item.PrimaryTerm,
+			Status:                item.Status,
 		}
 		if item.Error != nil {
 			result.Error = &api.ErrorDetail{

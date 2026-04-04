@@ -21,12 +21,21 @@ type BulkRequest struct {
 }
 
 type BulkItemResponse struct {
-	Action  string       `json:"action"`
-	Index   string       `json:"_index"`
-	ID      string       `json:"_id"`
-	Version int64        `json:"_version"`
-	Status  int          `json:"status"`
-	Error   *ErrorDetail `json:"error,omitempty"`
+	Action      string       `json:"action"`
+	Index       string       `json:"_index"`
+	ID          string       `json:"_id"`
+	Version     int64        `json:"_version"`
+	SeqNo       int64        `json:"_seq_no"`
+	PrimaryTerm int64        `json:"_primary_term"`
+	Status      int          `json:"status"`
+	Error       *ErrorDetail `json:"error,omitempty"`
+}
+
+// bulkItemOutcome holds the result fields from a single bulk item execution.
+type bulkItemOutcome struct {
+	Version     int64
+	SeqNo       int64
+	PrimaryTerm int64
 }
 
 type ErrorDetail struct {
@@ -124,7 +133,7 @@ func (a *TransportBulkAction) Execute(req BulkRequest) (BulkResponse, error) {
 				ID:     bi.item.ID,
 			}
 
-			version, err := a.executeItemOnShard(shard, bi.item)
+			outcome, err := a.executeItemOnShard(shard, bi.item)
 			if err != nil {
 				hasErrors = true
 				resp.Status = errorStatusCode(err)
@@ -133,7 +142,9 @@ func (a *TransportBulkAction) Execute(req BulkRequest) (BulkResponse, error) {
 					Reason: err.Error(),
 				}
 			} else {
-				resp.Version = version
+				resp.Version = outcome.Version
+				resp.SeqNo = outcome.SeqNo
+				resp.PrimaryTerm = outcome.PrimaryTerm
 				switch bi.item.Action {
 				case "index", "create":
 					resp.Status = 201
@@ -154,33 +165,33 @@ func (a *TransportBulkAction) Execute(req BulkRequest) (BulkResponse, error) {
 }
 
 // executeItemOnShard runs a single bulk item against the given shard.
-func (a *TransportBulkAction) executeItemOnShard(shard *index.IndexShard, item BulkItem) (int64, error) {
+func (a *TransportBulkAction) executeItemOnShard(shard *index.IndexShard, item BulkItem) (bulkItemOutcome, error) {
 	switch item.Action {
 	case "create":
 		// For create, check if doc already exists via the shard's Get (real-time).
 		result := shard.Get(item.ID)
 		if result.Found {
-			return 0, &VersionConflictError{ID: item.ID, Index: item.Index}
+			return bulkItemOutcome{}, &VersionConflictError{ID: item.ID, Index: item.Index}
 		}
 		r, err := shard.Index(item.ID, item.Source)
 		if err != nil {
-			return 0, err
+			return bulkItemOutcome{}, err
 		}
-		return r.Version, nil
+		return bulkItemOutcome{Version: r.Version, SeqNo: r.SeqNo, PrimaryTerm: r.PrimaryTerm}, nil
 	case "index":
 		r, err := shard.Index(item.ID, item.Source)
 		if err != nil {
-			return 0, err
+			return bulkItemOutcome{}, err
 		}
-		return r.Version, nil
+		return bulkItemOutcome{Version: r.Version, SeqNo: r.SeqNo, PrimaryTerm: r.PrimaryTerm}, nil
 	case "delete":
 		r, err := shard.Delete(item.ID)
 		if err != nil {
-			return 0, err
+			return bulkItemOutcome{}, err
 		}
-		return r.Version, nil
+		return bulkItemOutcome{Version: r.Version, SeqNo: r.SeqNo, PrimaryTerm: r.PrimaryTerm}, nil
 	default:
-		return 0, fmt.Errorf("unknown bulk action [%s]", item.Action)
+		return bulkItemOutcome{}, fmt.Errorf("unknown bulk action [%s]", item.Action)
 	}
 }
 

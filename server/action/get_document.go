@@ -13,11 +13,13 @@ type GetDocumentRequest struct {
 }
 
 type GetDocumentResponse struct {
-	Index   string
-	ID      string
-	Version int64
-	Found   bool
-	Source  json.RawMessage
+	Index       string
+	ID          string
+	Version     int64
+	SeqNo       int64
+	PrimaryTerm int64
+	Found       bool
+	Source      json.RawMessage
 }
 
 type TransportGetAction struct {
@@ -55,10 +57,12 @@ func (a *TransportGetAction) Execute(req GetDocumentRequest) (GetDocumentRespons
 	result := shard.Get(req.ID)
 
 	return GetDocumentResponse{
-		Index:   req.Index,
-		ID:      req.ID,
-		Version: result.Version,
-		Found:   result.Found,
-		Source:  json.RawMessage(result.Source),
+		Index:       req.Index,
+		ID:          req.ID,
+		Version:     result.Version,
+		SeqNo:       result.SeqNo,
+		PrimaryTerm: result.PrimaryTerm,
+		Found:       result.Found,
+		Source:      json.RawMessage(result.Source),
 	}, nil
 }
