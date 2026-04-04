@@ -46,6 +46,39 @@ func TestTransportIndexAction_Execute(t *testing.T) {
 	}
 }
 
+func TestIndexDocument_SeqNoAndPrimaryTerm(t *testing.T) {
+	cs, services, dataPath, registry := newTestDeps(t)
+	createAction := NewTransportCreateIndexAction(cs, services, dataPath, registry)
+	_, err := createAction.Execute(CreateIndexRequest{
+		Name: "docs",
+		Mappings: &mapping.MappingDefinition{
+			Properties: map[string]mapping.FieldMapping{
+				"title": {Type: mapping.FieldTypeText},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("create index: %v", err)
+	}
+	defer services["docs"].Close()
+
+	action := NewTransportIndexAction(cs, services)
+	resp, err := action.Execute(IndexDocumentRequest{
+		Index:  "docs",
+		ID:     "1",
+		Source: json.RawMessage(`{"title":"hello"}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.SeqNo < 0 {
+		t.Fatalf("expected SeqNo >= 0, got %d", resp.SeqNo)
+	}
+	if resp.PrimaryTerm < 1 {
+		t.Fatalf("expected PrimaryTerm >= 1, got %d", resp.PrimaryTerm)
+	}
+}
+
 func TestTransportIndexAction_IndexNotFound(t *testing.T) {
 	cs, services, _, _ := newTestDeps(t)
 	indexAction := NewTransportIndexAction(cs, services)

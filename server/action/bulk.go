@@ -2,19 +2,21 @@ package action
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
-	"gosearch/search"
 	"gosearch/server/cluster"
 	"gosearch/server/index"
 )
 
 type BulkItem struct {
-	Action string // "index", "create", or "delete"
-	Index  string
-	ID     string
-	Source json.RawMessage // nil for delete
+	Action        string // "index", "create", or "delete"
+	Index         string
+	ID            string
+	Source        json.RawMessage // nil for delete
+	IfSeqNo       *int64
+	IfPrimaryTerm *int64
 }
 
 type BulkRequest struct {
@@ -22,11 +24,19 @@ type BulkRequest struct {
 }
 
 type BulkItemResponse struct {
-	Action string       `json:"action"`
-	Index  string       `json:"_index"`
-	ID     string       `json:"_id"`
-	Status int          `json:"status"`
-	Error  *ErrorDetail `json:"error,omitempty"`
+	Action      string       `json:"action"`
+	Index       string       `json:"_index"`
+	ID          string       `json:"_id"`
+	SeqNo       int64        `json:"_seq_no"`
+	PrimaryTerm int64        `json:"_primary_term"`
+	Status      int          `json:"status"`
+	Error       *ErrorDetail `json:"error,omitempty"`
+}
+
+// bulkItemOutcome holds the result fields from a single bulk item execution.
+type bulkItemOutcome struct {
+	SeqNo       int64
+	PrimaryTerm int64
 }
 
 type ErrorDetail struct {
@@ -124,7 +134,7 @@ func (a *TransportBulkAction) Execute(req BulkRequest) (BulkResponse, error) {
 				ID:     bi.item.ID,
 			}
 
-			err := a.executeItemOnShard(shard, bi.item)
+			outcome, err := a.executeItemOnShard(shard, bi.item)
 			if err != nil {
 				hasErrors = true
 				resp.Status = errorStatusCode(err)
@@ -133,6 +143,8 @@ func (a *TransportBulkAction) Execute(req BulkRequest) (BulkResponse, error) {
 					Reason: err.Error(),
 				}
 			} else {
+				resp.SeqNo = outcome.SeqNo
+				resp.PrimaryTerm = outcome.PrimaryTerm
 				switch bi.item.Action {
 				case "index", "create":
 					resp.Status = 201
@@ -153,32 +165,34 @@ func (a *TransportBulkAction) Execute(req BulkRequest) (BulkResponse, error) {
 }
 
 // executeItemOnShard runs a single bulk item against the given shard.
-func (a *TransportBulkAction) executeItemOnShard(shard *index.IndexShard, item BulkItem) error {
+func (a *TransportBulkAction) executeItemOnShard(shard *index.IndexShard, item BulkItem) (bulkItemOutcome, error) {
 	switch item.Action {
 	case "create":
-		if docExists(shard, item.ID) {
-			return &VersionConflictError{ID: item.ID, Index: item.Index}
+		// For create, check if doc already exists via the shard's Get (real-time).
+		result := shard.Get(item.ID)
+		if result.Found {
+			return bulkItemOutcome{}, &VersionConflictError{ID: item.ID, Index: item.Index}
 		}
-		return shard.Index(item.ID, item.Source)
+		r, err := shard.Index(item.ID, item.Source, item.IfSeqNo, item.IfPrimaryTerm)
+		if err != nil {
+			return bulkItemOutcome{}, err
+		}
+		return bulkItemOutcome{SeqNo: r.SeqNo, PrimaryTerm: r.PrimaryTerm}, nil
 	case "index":
-		return shard.Index(item.ID, item.Source)
+		r, err := shard.Index(item.ID, item.Source, item.IfSeqNo, item.IfPrimaryTerm)
+		if err != nil {
+			return bulkItemOutcome{}, err
+		}
+		return bulkItemOutcome{SeqNo: r.SeqNo, PrimaryTerm: r.PrimaryTerm}, nil
 	case "delete":
-		return shard.Delete(item.ID)
+		r, err := shard.Delete(item.ID, item.IfSeqNo, item.IfPrimaryTerm)
+		if err != nil {
+			return bulkItemOutcome{}, err
+		}
+		return bulkItemOutcome{SeqNo: r.SeqNo, PrimaryTerm: r.PrimaryTerm}, nil
 	default:
-		return fmt.Errorf("unknown bulk action [%s]", item.Action)
+		return bulkItemOutcome{}, fmt.Errorf("unknown bulk action [%s]", item.Action)
 	}
-}
-
-// docExists checks whether a document with the given ID exists in the shard.
-func docExists(shard *index.IndexShard, id string) bool {
-	searcher := shard.Searcher()
-	if searcher == nil {
-		return false
-	}
-	query := search.NewTermQuery("_id", id)
-	collector := search.NewTopKCollector(1)
-	results := searcher.Search(query, collector)
-	return len(results) > 0
 }
 
 // VersionConflictError is returned when a create operation targets an existing document.
@@ -192,14 +206,18 @@ func (e *VersionConflictError) Error() string {
 }
 
 func errorType(err error) string {
-	if _, ok := err.(*VersionConflictError); ok {
+	var vce *VersionConflictError
+	var vcee *index.VersionConflictEngineError
+	if errors.As(err, &vce) || errors.As(err, &vcee) {
 		return "version_conflict_engine_exception"
 	}
 	return "action_request_validation_exception"
 }
 
 func errorStatusCode(err error) int {
-	if _, ok := err.(*VersionConflictError); ok {
+	var vce *VersionConflictError
+	var vcee *index.VersionConflictEngineError
+	if errors.As(err, &vce) || errors.As(err, &vcee) {
 		return 409
 	}
 	return 400

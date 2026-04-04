@@ -9,15 +9,19 @@ import (
 )
 
 type IndexDocumentRequest struct {
-	Index  string
-	ID     string
-	Source json.RawMessage
+	Index         string
+	ID            string
+	Source        json.RawMessage
+	IfSeqNo       *int64
+	IfPrimaryTerm *int64
 }
 
 type IndexDocumentResponse struct {
-	Index  string
-	ID     string
-	Result string // "created"
+	Index       string
+	ID          string
+	SeqNo       int64
+	PrimaryTerm int64
+	Result      string // "created" or "updated"
 }
 
 type TransportIndexAction struct {
@@ -52,13 +56,21 @@ func (a *TransportIndexAction) Execute(req IndexDocumentRequest) (IndexDocumentR
 	shardID := index.RouteShard(req.ID, svc.NumShards())
 	shard := svc.Shard(shardID)
 
-	if err := shard.Index(req.ID, req.Source); err != nil {
+	result, err := shard.Index(req.ID, req.Source, req.IfSeqNo, req.IfPrimaryTerm)
+	if err != nil {
 		return IndexDocumentResponse{}, fmt.Errorf("index document: %w", err)
 	}
 
+	resultStr := "updated"
+	if result.Created {
+		resultStr = "created"
+	}
+
 	return IndexDocumentResponse{
-		Index:  req.Index,
-		ID:     req.ID,
-		Result: "created",
+		Index:       req.Index,
+		ID:          req.ID,
+		SeqNo:       result.SeqNo,
+		PrimaryTerm: result.PrimaryTerm,
+		Result:      resultStr,
 	}, nil
 }

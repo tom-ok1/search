@@ -12,6 +12,7 @@ import (
 
 	"gosearch/api"
 	"gosearch/server/action"
+	"gosearch/server/index"
 	"gosearch/server/mapping"
 )
 
@@ -86,6 +87,7 @@ func mapErrorStatus(err error) (int, string) {
 	var invalidName *action.InvalidIndexNameError
 	var queryParsing *action.QueryParsingError
 	var mapperParsing *action.MapperParsingError
+	var versionConflict *index.VersionConflictEngineError
 
 	switch {
 	case errors.As(err, &indexNotFound):
@@ -98,6 +100,8 @@ func mapErrorStatus(err error) (int, string) {
 		return 400, "query_parsing_exception"
 	case errors.As(err, &mapperParsing):
 		return 400, "mapper_parsing_exception"
+	case errors.As(err, &versionConflict):
+		return 409, "version_conflict_engine_exception"
 	default:
 		return 500, "internal_error"
 	}
@@ -219,12 +223,17 @@ func (h *Handler) IndexDocumentPut(_ context.Context, request api.IndexDocumentP
 	}
 
 	resp, err := h.indexDocument.Execute(action.IndexDocumentRequest{
-		Index:  request.Index,
-		ID:     request.Id,
-		Source: source,
+		Index:         request.Index,
+		ID:            request.Id,
+		Source:        source,
+		IfSeqNo:       request.Params.IfSeqNo,
+		IfPrimaryTerm: request.Params.IfPrimaryTerm,
 	})
 	if err != nil {
 		status, errType := mapErrorStatus(err)
+		if status == 409 {
+			return api.IndexDocumentPut409JSONResponse(errorResponse(status, errType, err.Error())), nil
+		}
 		if status == 404 {
 			return api.IndexDocumentPut404JSONResponse(errorResponse(status, errType, err.Error())), nil
 		}
@@ -232,9 +241,11 @@ func (h *Handler) IndexDocumentPut(_ context.Context, request api.IndexDocumentP
 	}
 
 	return api.IndexDocumentPut201JSONResponse{
-		UnderscoreId:    resp.ID,
-		UnderscoreIndex: resp.Index,
-		Result:          resp.Result,
+		UnderscoreId:          resp.ID,
+		UnderscoreIndex:       resp.Index,
+		UnderscoreSeqNo:       resp.SeqNo,
+		UnderscorePrimaryTerm: resp.PrimaryTerm,
+		Result:                resp.Result,
 	}, nil
 }
 
@@ -246,12 +257,17 @@ func (h *Handler) IndexDocumentPost(_ context.Context, request api.IndexDocument
 	}
 
 	resp, err := h.indexDocument.Execute(action.IndexDocumentRequest{
-		Index:  request.Index,
-		ID:     request.Id,
-		Source: source,
+		Index:         request.Index,
+		ID:            request.Id,
+		Source:        source,
+		IfSeqNo:       request.Params.IfSeqNo,
+		IfPrimaryTerm: request.Params.IfPrimaryTerm,
 	})
 	if err != nil {
 		status, errType := mapErrorStatus(err)
+		if status == 409 {
+			return api.IndexDocumentPost409JSONResponse(errorResponse(status, errType, err.Error())), nil
+		}
 		if status == 404 {
 			return api.IndexDocumentPost404JSONResponse(errorResponse(status, errType, err.Error())), nil
 		}
@@ -259,9 +275,11 @@ func (h *Handler) IndexDocumentPost(_ context.Context, request api.IndexDocument
 	}
 
 	return api.IndexDocumentPost201JSONResponse{
-		UnderscoreId:    resp.ID,
-		UnderscoreIndex: resp.Index,
-		Result:          resp.Result,
+		UnderscoreId:          resp.ID,
+		UnderscoreIndex:       resp.Index,
+		UnderscoreSeqNo:       resp.SeqNo,
+		UnderscorePrimaryTerm: resp.PrimaryTerm,
+		Result:                resp.Result,
 	}, nil
 }
 
@@ -305,18 +323,22 @@ func (h *Handler) GetDocument(_ context.Context, request api.GetDocumentRequestO
 	}
 
 	return api.GetDocument200JSONResponse{
-		UnderscoreId:     resp.ID,
-		UnderscoreIndex:  resp.Index,
-		Found:            true,
-		UnderscoreSource: source,
+		UnderscoreId:          resp.ID,
+		UnderscoreIndex:       resp.Index,
+		UnderscoreSeqNo:       resp.SeqNo,
+		UnderscorePrimaryTerm: resp.PrimaryTerm,
+		Found:                 true,
+		UnderscoreSource:      source,
 	}, nil
 }
 
 // DeleteDocument deletes a document by ID.
 func (h *Handler) DeleteDocument(_ context.Context, request api.DeleteDocumentRequestObject) (api.DeleteDocumentResponseObject, error) {
 	resp, err := h.deleteDocument.Execute(action.DeleteDocumentRequest{
-		Index: request.Index,
-		ID:    request.Id,
+		Index:         request.Index,
+		ID:            request.Id,
+		IfSeqNo:       request.Params.IfSeqNo,
+		IfPrimaryTerm: request.Params.IfPrimaryTerm,
 	})
 	if err != nil {
 		var indexNotFound *action.IndexNotFoundError
@@ -327,6 +349,10 @@ func (h *Handler) DeleteDocument(_ context.Context, request api.DeleteDocumentRe
 				Result:          "not_found",
 			}, nil
 		}
+		status, errType := mapErrorStatus(err)
+		if status == 409 {
+			return api.DeleteDocument409JSONResponse(errorResponse(status, errType, err.Error())), nil
+		}
 		return api.DeleteDocument404JSONResponse{
 			UnderscoreId:    request.Id,
 			UnderscoreIndex: request.Index,
@@ -336,16 +362,20 @@ func (h *Handler) DeleteDocument(_ context.Context, request api.DeleteDocumentRe
 
 	if resp.Result == "not_found" {
 		return api.DeleteDocument404JSONResponse{
-			UnderscoreId:    resp.ID,
-			UnderscoreIndex: resp.Index,
-			Result:          resp.Result,
+			UnderscoreId:          resp.ID,
+			UnderscoreIndex:       resp.Index,
+			UnderscoreSeqNo:       resp.SeqNo,
+			UnderscorePrimaryTerm: resp.PrimaryTerm,
+			Result:                resp.Result,
 		}, nil
 	}
 
 	return api.DeleteDocument200JSONResponse{
-		UnderscoreId:    resp.ID,
-		UnderscoreIndex: resp.Index,
-		Result:          resp.Result,
+		UnderscoreId:          resp.ID,
+		UnderscoreIndex:       resp.Index,
+		UnderscoreSeqNo:       resp.SeqNo,
+		UnderscorePrimaryTerm: resp.PrimaryTerm,
+		Result:                resp.Result,
 	}, nil
 }
 
@@ -496,9 +526,11 @@ func convertBulkResponse(resp action.BulkResponse) api.BulkResponse {
 	items := make([]api.BulkItemResponse, 0, len(resp.Items))
 	for _, item := range resp.Items {
 		result := api.BulkItemResult{
-			UnderscoreId:    item.ID,
-			UnderscoreIndex: item.Index,
-			Status:          item.Status,
+			UnderscoreId:          item.ID,
+			UnderscoreIndex:       item.Index,
+			UnderscoreSeqNo:       item.SeqNo,
+			UnderscorePrimaryTerm: item.PrimaryTerm,
+			Status:                item.Status,
 		}
 		if item.Error != nil {
 			result.Error = &api.ErrorDetail{
@@ -550,8 +582,10 @@ func parseBulkNDJSON(body []byte, defaultIndex string) ([]action.BulkItem, error
 		}
 		for actionName, meta := range actionLine {
 			var metaObj struct {
-				Index string `json:"_index"`
-				ID    string `json:"_id"`
+				Index         string `json:"_index"`
+				ID            string `json:"_id"`
+				IfSeqNo       *int64 `json:"if_seq_no"`
+				IfPrimaryTerm *int64 `json:"if_primary_term"`
 			}
 			if err := json.Unmarshal(meta, &metaObj); err != nil {
 				return nil, err
@@ -560,7 +594,7 @@ func parseBulkNDJSON(body []byte, defaultIndex string) ([]action.BulkItem, error
 			if idx == "" {
 				idx = defaultIndex
 			}
-			item := action.BulkItem{Action: actionName, Index: idx, ID: metaObj.ID}
+			item := action.BulkItem{Action: actionName, Index: idx, ID: metaObj.ID, IfSeqNo: metaObj.IfSeqNo, IfPrimaryTerm: metaObj.IfPrimaryTerm}
 			if actionName == "index" || actionName == "create" {
 				if !scanner.Scan() {
 					return nil, fmt.Errorf("missing source line for %s action", actionName)

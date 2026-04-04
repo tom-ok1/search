@@ -60,10 +60,12 @@ type BulkItemResponse map[string]BulkItemResult
 
 // BulkItemResult defines model for BulkItemResult.
 type BulkItemResult struct {
-	UnderscoreId    string       `json:"_id"`
-	UnderscoreIndex string       `json:"_index"`
-	Error           *ErrorDetail `json:"error,omitempty"`
-	Status          int          `json:"status"`
+	UnderscoreId          string       `json:"_id"`
+	UnderscoreIndex       string       `json:"_index"`
+	UnderscorePrimaryTerm int64        `json:"_primary_term"`
+	UnderscoreSeqNo       int64        `json:"_seq_no"`
+	Error                 *ErrorDetail `json:"error,omitempty"`
+	Status                int          `json:"status"`
 }
 
 // BulkResponse defines model for BulkResponse.
@@ -87,9 +89,11 @@ type CreateIndexResponse struct {
 
 // DeleteDocumentResponse defines model for DeleteDocumentResponse.
 type DeleteDocumentResponse struct {
-	UnderscoreId    string `json:"_id"`
-	UnderscoreIndex string `json:"_index"`
-	Result          string `json:"result"`
+	UnderscoreId          string `json:"_id"`
+	UnderscoreIndex       string `json:"_index"`
+	UnderscorePrimaryTerm int64  `json:"_primary_term"`
+	UnderscoreSeqNo       int64  `json:"_seq_no"`
+	Result                string `json:"result"`
 }
 
 // DocumentBody defines model for DocumentBody.
@@ -112,10 +116,12 @@ type FieldType string
 
 // GetDocumentResponse defines model for GetDocumentResponse.
 type GetDocumentResponse struct {
-	UnderscoreId     string                  `json:"_id"`
-	UnderscoreIndex  string                  `json:"_index"`
-	UnderscoreSource *map[string]interface{} `json:"_source,omitempty"`
-	Found            bool                    `json:"found"`
+	UnderscoreId          string                  `json:"_id"`
+	UnderscoreIndex       string                  `json:"_index"`
+	UnderscorePrimaryTerm int64                   `json:"_primary_term"`
+	UnderscoreSeqNo       int64                   `json:"_seq_no"`
+	UnderscoreSource      *map[string]interface{} `json:"_source,omitempty"`
+	Found                 bool                    `json:"found"`
 }
 
 // GetIndexResponse defines model for GetIndexResponse.
@@ -123,9 +129,11 @@ type GetIndexResponse map[string]IndexMetadata
 
 // IndexDocumentResponse defines model for IndexDocumentResponse.
 type IndexDocumentResponse struct {
-	UnderscoreId    string `json:"_id"`
-	UnderscoreIndex string `json:"_index"`
-	Result          string `json:"result"`
+	UnderscoreId          string `json:"_id"`
+	UnderscoreIndex       string `json:"_index"`
+	UnderscorePrimaryTerm int64  `json:"_primary_term"`
+	UnderscoreSeqNo       int64  `json:"_seq_no"`
+	Result                string `json:"result"`
 }
 
 // IndexMetadata defines model for IndexMetadata.
@@ -208,11 +216,35 @@ type ShardStats struct {
 // DocId defines model for DocId.
 type DocId = string
 
+// IfPrimaryTerm defines model for IfPrimaryTerm.
+type IfPrimaryTerm = int64
+
+// IfSeqNo defines model for IfSeqNo.
+type IfSeqNo = int64
+
 // IndexName defines model for IndexName.
 type IndexName = string
 
 // SizeParam defines model for SizeParam.
 type SizeParam = int
+
+// DeleteDocumentParams defines parameters for DeleteDocument.
+type DeleteDocumentParams struct {
+	IfSeqNo       *IfSeqNo       `form:"if_seq_no,omitempty" json:"if_seq_no,omitempty"`
+	IfPrimaryTerm *IfPrimaryTerm `form:"if_primary_term,omitempty" json:"if_primary_term,omitempty"`
+}
+
+// IndexDocumentPostParams defines parameters for IndexDocumentPost.
+type IndexDocumentPostParams struct {
+	IfSeqNo       *IfSeqNo       `form:"if_seq_no,omitempty" json:"if_seq_no,omitempty"`
+	IfPrimaryTerm *IfPrimaryTerm `form:"if_primary_term,omitempty" json:"if_primary_term,omitempty"`
+}
+
+// IndexDocumentPutParams defines parameters for IndexDocumentPut.
+type IndexDocumentPutParams struct {
+	IfSeqNo       *IfSeqNo       `form:"if_seq_no,omitempty" json:"if_seq_no,omitempty"`
+	IfPrimaryTerm *IfPrimaryTerm `form:"if_primary_term,omitempty" json:"if_primary_term,omitempty"`
+}
 
 // SearchGetParams defines parameters for SearchGet.
 type SearchGetParams struct {
@@ -264,16 +296,16 @@ type ServerInterface interface {
 	BulkWithIndex(w http.ResponseWriter, r *http.Request, index IndexName)
 	// Delete a document
 	// (DELETE /{index}/_doc/{id})
-	DeleteDocument(w http.ResponseWriter, r *http.Request, index IndexName, id DocId)
+	DeleteDocument(w http.ResponseWriter, r *http.Request, index IndexName, id DocId, params DeleteDocumentParams)
 	// Get a document
 	// (GET /{index}/_doc/{id})
 	GetDocument(w http.ResponseWriter, r *http.Request, index IndexName, id DocId)
 	// Index a document (POST)
 	// (POST /{index}/_doc/{id})
-	IndexDocumentPost(w http.ResponseWriter, r *http.Request, index IndexName, id DocId)
+	IndexDocumentPost(w http.ResponseWriter, r *http.Request, index IndexName, id DocId, params IndexDocumentPostParams)
 	// Index a document (PUT)
 	// (PUT /{index}/_doc/{id})
-	IndexDocumentPut(w http.ResponseWriter, r *http.Request, index IndexName, id DocId)
+	IndexDocumentPut(w http.ResponseWriter, r *http.Request, index IndexName, id DocId, params IndexDocumentPutParams)
 	// Refresh an index
 	// (POST /{index}/_refresh)
 	Refresh(w http.ResponseWriter, r *http.Request, index IndexName)
@@ -333,7 +365,7 @@ func (_ Unimplemented) BulkWithIndex(w http.ResponseWriter, r *http.Request, ind
 
 // Delete a document
 // (DELETE /{index}/_doc/{id})
-func (_ Unimplemented) DeleteDocument(w http.ResponseWriter, r *http.Request, index IndexName, id DocId) {
+func (_ Unimplemented) DeleteDocument(w http.ResponseWriter, r *http.Request, index IndexName, id DocId, params DeleteDocumentParams) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -345,13 +377,13 @@ func (_ Unimplemented) GetDocument(w http.ResponseWriter, r *http.Request, index
 
 // Index a document (POST)
 // (POST /{index}/_doc/{id})
-func (_ Unimplemented) IndexDocumentPost(w http.ResponseWriter, r *http.Request, index IndexName, id DocId) {
+func (_ Unimplemented) IndexDocumentPost(w http.ResponseWriter, r *http.Request, index IndexName, id DocId, params IndexDocumentPostParams) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
 // Index a document (PUT)
 // (PUT /{index}/_doc/{id})
-func (_ Unimplemented) IndexDocumentPut(w http.ResponseWriter, r *http.Request, index IndexName, id DocId) {
+func (_ Unimplemented) IndexDocumentPut(w http.ResponseWriter, r *http.Request, index IndexName, id DocId, params IndexDocumentPutParams) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -547,8 +579,27 @@ func (siw *ServerInterfaceWrapper) DeleteDocument(w http.ResponseWriter, r *http
 		return
 	}
 
+	// Parameter object where we will unmarshal all parameters from the context
+	var params DeleteDocumentParams
+
+	// ------------- Optional query parameter "if_seq_no" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "if_seq_no", r.URL.Query(), &params.IfSeqNo, runtime.BindQueryParameterOptions{Type: "integer", Format: "int64"})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "if_seq_no", Err: err})
+		return
+	}
+
+	// ------------- Optional query parameter "if_primary_term" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "if_primary_term", r.URL.Query(), &params.IfPrimaryTerm, runtime.BindQueryParameterOptions{Type: "integer", Format: "int64"})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "if_primary_term", Err: err})
+		return
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.DeleteDocument(w, r, index, id)
+		siw.Handler.DeleteDocument(w, r, index, id, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -615,8 +666,27 @@ func (siw *ServerInterfaceWrapper) IndexDocumentPost(w http.ResponseWriter, r *h
 		return
 	}
 
+	// Parameter object where we will unmarshal all parameters from the context
+	var params IndexDocumentPostParams
+
+	// ------------- Optional query parameter "if_seq_no" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "if_seq_no", r.URL.Query(), &params.IfSeqNo, runtime.BindQueryParameterOptions{Type: "integer", Format: "int64"})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "if_seq_no", Err: err})
+		return
+	}
+
+	// ------------- Optional query parameter "if_primary_term" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "if_primary_term", r.URL.Query(), &params.IfPrimaryTerm, runtime.BindQueryParameterOptions{Type: "integer", Format: "int64"})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "if_primary_term", Err: err})
+		return
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.IndexDocumentPost(w, r, index, id)
+		siw.Handler.IndexDocumentPost(w, r, index, id, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -649,8 +719,27 @@ func (siw *ServerInterfaceWrapper) IndexDocumentPut(w http.ResponseWriter, r *ht
 		return
 	}
 
+	// Parameter object where we will unmarshal all parameters from the context
+	var params IndexDocumentPutParams
+
+	// ------------- Optional query parameter "if_seq_no" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "if_seq_no", r.URL.Query(), &params.IfSeqNo, runtime.BindQueryParameterOptions{Type: "integer", Format: "int64"})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "if_seq_no", Err: err})
+		return
+	}
+
+	// ------------- Optional query parameter "if_primary_term" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "if_primary_term", r.URL.Query(), &params.IfPrimaryTerm, runtime.BindQueryParameterOptions{Type: "integer", Format: "int64"})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "if_primary_term", Err: err})
+		return
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.IndexDocumentPut(w, r, index, id)
+		siw.Handler.IndexDocumentPut(w, r, index, id, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1083,8 +1172,9 @@ func (response BulkWithIndex400JSONResponse) VisitBulkWithIndexResponse(w http.R
 }
 
 type DeleteDocumentRequestObject struct {
-	Index IndexName `json:"index"`
-	Id    DocId     `json:"id"`
+	Index  IndexName `json:"index"`
+	Id     DocId     `json:"id"`
+	Params DeleteDocumentParams
 }
 
 type DeleteDocumentResponseObject interface {
@@ -1105,6 +1195,15 @@ type DeleteDocument404JSONResponse DeleteDocumentResponse
 func (response DeleteDocument404JSONResponse) VisitDeleteDocumentResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteDocument409JSONResponse ErrorResponse
+
+func (response DeleteDocument409JSONResponse) VisitDeleteDocumentResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
 
 	return json.NewEncoder(w).Encode(response)
 }
@@ -1137,9 +1236,10 @@ func (response GetDocument404JSONResponse) VisitGetDocumentResponse(w http.Respo
 }
 
 type IndexDocumentPostRequestObject struct {
-	Index IndexName `json:"index"`
-	Id    DocId     `json:"id"`
-	Body  *IndexDocumentPostJSONRequestBody
+	Index  IndexName `json:"index"`
+	Id     DocId     `json:"id"`
+	Params IndexDocumentPostParams
+	Body   *IndexDocumentPostJSONRequestBody
 }
 
 type IndexDocumentPostResponseObject interface {
@@ -1173,10 +1273,20 @@ func (response IndexDocumentPost404JSONResponse) VisitIndexDocumentPostResponse(
 	return json.NewEncoder(w).Encode(response)
 }
 
+type IndexDocumentPost409JSONResponse ErrorResponse
+
+func (response IndexDocumentPost409JSONResponse) VisitIndexDocumentPostResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
 type IndexDocumentPutRequestObject struct {
-	Index IndexName `json:"index"`
-	Id    DocId     `json:"id"`
-	Body  *IndexDocumentPutJSONRequestBody
+	Index  IndexName `json:"index"`
+	Id     DocId     `json:"id"`
+	Params IndexDocumentPutParams
+	Body   *IndexDocumentPutJSONRequestBody
 }
 
 type IndexDocumentPutResponseObject interface {
@@ -1206,6 +1316,15 @@ type IndexDocumentPut404JSONResponse ErrorResponse
 func (response IndexDocumentPut404JSONResponse) VisitIndexDocumentPutResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type IndexDocumentPut409JSONResponse ErrorResponse
+
+func (response IndexDocumentPut409JSONResponse) VisitIndexDocumentPutResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
 
 	return json.NewEncoder(w).Encode(response)
 }
@@ -1576,11 +1695,12 @@ func (sh *strictHandler) BulkWithIndex(w http.ResponseWriter, r *http.Request, i
 }
 
 // DeleteDocument operation middleware
-func (sh *strictHandler) DeleteDocument(w http.ResponseWriter, r *http.Request, index IndexName, id DocId) {
+func (sh *strictHandler) DeleteDocument(w http.ResponseWriter, r *http.Request, index IndexName, id DocId, params DeleteDocumentParams) {
 	var request DeleteDocumentRequestObject
 
 	request.Index = index
 	request.Id = id
+	request.Params = params
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
 		return sh.ssi.DeleteDocument(ctx, request.(DeleteDocumentRequestObject))
@@ -1630,11 +1750,12 @@ func (sh *strictHandler) GetDocument(w http.ResponseWriter, r *http.Request, ind
 }
 
 // IndexDocumentPost operation middleware
-func (sh *strictHandler) IndexDocumentPost(w http.ResponseWriter, r *http.Request, index IndexName, id DocId) {
+func (sh *strictHandler) IndexDocumentPost(w http.ResponseWriter, r *http.Request, index IndexName, id DocId, params IndexDocumentPostParams) {
 	var request IndexDocumentPostRequestObject
 
 	request.Index = index
 	request.Id = id
+	request.Params = params
 
 	var body IndexDocumentPostJSONRequestBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -1664,11 +1785,12 @@ func (sh *strictHandler) IndexDocumentPost(w http.ResponseWriter, r *http.Reques
 }
 
 // IndexDocumentPut operation middleware
-func (sh *strictHandler) IndexDocumentPut(w http.ResponseWriter, r *http.Request, index IndexName, id DocId) {
+func (sh *strictHandler) IndexDocumentPut(w http.ResponseWriter, r *http.Request, index IndexName, id DocId, params IndexDocumentPutParams) {
 	var request IndexDocumentPutRequestObject
 
 	request.Index = index
 	request.Id = id
+	request.Params = params
 
 	var body IndexDocumentPutJSONRequestBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -1800,33 +1922,34 @@ func (sh *strictHandler) SearchPost(w http.ResponseWriter, r *http.Request, inde
 // Base64 encoded, gzipped, json marshaled Swagger object
 var swaggerSpec = []string{
 
-	"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",
-	"HMWtKwAA",
+	"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",
+	"tS8AAA==",
 }
 
 // GetSwagger returns the content of the embedded swagger specification file

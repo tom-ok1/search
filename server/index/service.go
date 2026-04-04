@@ -27,7 +27,8 @@ func NewIndexService(meta *cluster.IndexMetadata, m *mapping.MappingDefinition, 
 	shards := make(map[int]*IndexShard, meta.Settings.NumberOfShards)
 
 	for i := 0; i < meta.Settings.NumberOfShards; i++ {
-		shardPath := filepath.Join(dataPath, fmt.Sprintf("%d", i), "index")
+		shardDataPath := filepath.Join(dataPath, fmt.Sprintf("%d", i))
+		shardPath := filepath.Join(shardDataPath, "index")
 		dir, err := store.NewFSDirectory(shardPath)
 		if err != nil {
 			// Close already-created shards on error
@@ -37,7 +38,7 @@ func NewIndexService(meta *cluster.IndexMetadata, m *mapping.MappingDefinition, 
 			return nil, fmt.Errorf("create shard %d directory: %w", i, err)
 		}
 
-		shard, err := NewIndexShard(i, meta.Name, dir, m, registry)
+		shard, err := NewIndexShard(i, meta.Name, dir, m, registry, shardDataPath)
 		if err != nil {
 			for _, s := range shards {
 				s.Close()
