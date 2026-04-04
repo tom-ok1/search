@@ -17,21 +17,27 @@ const defaultBufferSize = 1000
 
 // IndexResult holds the outcome of an index operation.
 type IndexResult struct {
-	Version int64
-	Created bool
+	Version     int64
+	SeqNo       int64
+	PrimaryTerm int64
+	Created     bool
 }
 
 // DeleteResult holds the outcome of a delete operation.
 type DeleteResult struct {
-	Version int64
-	Found   bool
+	Version     int64
+	SeqNo       int64
+	PrimaryTerm int64
+	Found       bool
 }
 
 // GetResult holds the outcome of a real-time get operation.
 type GetResult struct {
-	Found   bool
-	Version int64
-	Source  []byte
+	Found       bool
+	Version     int64
+	SeqNo       int64
+	PrimaryTerm int64
+	Source      []byte
 }
 
 // Engine wraps an IndexWriter and manages the IndexReader/IndexSearcher lifecycle.
@@ -169,7 +175,7 @@ func (e *Engine) Index(id string, doc *document.Document, source []byte) (IndexR
 		}
 	}
 
-	return IndexResult{Version: version, Created: created}, nil
+	return IndexResult{Version: version, SeqNo: seqNo, PrimaryTerm: e.currentTerm, Created: created}, nil
 }
 
 // Delete removes a document by its _id. It returns whether the document
@@ -209,7 +215,7 @@ func (e *Engine) Delete(id string) (DeleteResult, error) {
 		}
 	}
 
-	return DeleteResult{Version: version, Found: found}, nil
+	return DeleteResult{Version: version, SeqNo: seqNo, PrimaryTerm: e.currentTerm, Found: found}, nil
 }
 
 // Get performs a real-time get by checking the version map first, then
@@ -221,7 +227,7 @@ func (e *Engine) Get(id string) GetResult {
 		if vv.Deleted {
 			return GetResult{Found: false}
 		}
-		return GetResult{Found: true, Version: vv.Version, Source: vv.Source}
+		return GetResult{Found: true, Version: vv.Version, SeqNo: vv.SeqNo, PrimaryTerm: vv.PrimaryTerm, Source: vv.Source}
 	}
 
 	// Fall back to Lucene searcher

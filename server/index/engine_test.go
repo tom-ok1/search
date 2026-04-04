@@ -644,6 +644,63 @@ func TestIntegration_IndexLifecycle(t *testing.T) {
 	}
 }
 
+func TestEngine_ResultsIncludeSeqNoAndPrimaryTerm(t *testing.T) {
+	dir, err := store.NewFSDirectory(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	eng, err := index.NewEngine(dir, newTestFieldAnalyzers(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+
+	// Index
+	doc := document.NewDocument()
+	doc.AddField("_id", "1", document.FieldTypeKeyword)
+	doc.AddField("title", "hello", document.FieldTypeText)
+	ir, err := eng.Index("1", doc, []byte(`{"title":"hello"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ir.SeqNo < 0 {
+		t.Fatalf("expected SeqNo >= 0, got %d", ir.SeqNo)
+	}
+	if ir.PrimaryTerm != 1 {
+		t.Fatalf("expected PrimaryTerm 1, got %d", ir.PrimaryTerm)
+	}
+
+	// Delete
+	dr, err := eng.Delete("1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dr.SeqNo <= ir.SeqNo {
+		t.Fatalf("expected delete SeqNo > index SeqNo, got %d <= %d", dr.SeqNo, ir.SeqNo)
+	}
+	if dr.PrimaryTerm != 1 {
+		t.Fatalf("expected PrimaryTerm 1, got %d", dr.PrimaryTerm)
+	}
+
+	// Get (real-time)
+	doc2 := document.NewDocument()
+	doc2.AddField("_id", "2", document.FieldTypeKeyword)
+	doc2.AddField("title", "world", document.FieldTypeText)
+	eng.Index("2", doc2, []byte(`{"title":"world"}`))
+
+	gr := eng.Get("2")
+	if !gr.Found {
+		t.Fatal("expected doc 2 to be found")
+	}
+	if gr.SeqNo < 0 {
+		t.Fatalf("expected SeqNo >= 0 in GetResult, got %d", gr.SeqNo)
+	}
+	if gr.PrimaryTerm != 1 {
+		t.Fatalf("expected PrimaryTerm 1 in GetResult, got %d", gr.PrimaryTerm)
+	}
+}
+
 func TestEngine_VersionAcrossDeleteAndReindex(t *testing.T) {
 	dir, err := store.NewFSDirectory(t.TempDir())
 	if err != nil {
