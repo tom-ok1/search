@@ -47,7 +47,7 @@ func TestTransportSearchAction_Execute(t *testing.T) {
 	// Test match query
 	resp, err := searchAction.Execute(SearchRequest{
 		Index:     "docs",
-		QueryJSON: map[string]any{"match": map[string]any{"title": "hello"}},
+		QueryJSON: QueryJSON{Match: &MatchQueryJSON{Field: "title", Text: "hello"}},
 		Size:      10,
 	})
 	if err != nil {
@@ -60,7 +60,7 @@ func TestTransportSearchAction_Execute(t *testing.T) {
 	// Test term query on keyword
 	resp, err = searchAction.Execute(SearchRequest{
 		Index:     "docs",
-		QueryJSON: map[string]any{"term": map[string]any{"status": "active"}},
+		QueryJSON: QueryJSON{Term: &TermQueryJSON{Field: "status", Value: "active"}},
 		Size:      10,
 	})
 	if err != nil {
@@ -73,7 +73,7 @@ func TestTransportSearchAction_Execute(t *testing.T) {
 	// Test match_all
 	resp, err = searchAction.Execute(SearchRequest{
 		Index:     "docs",
-		QueryJSON: map[string]any{"match_all": map[string]any{}},
+		QueryJSON: QueryJSON{MatchAll: &MatchAllQueryJSON{}},
 		Size:      10,
 	})
 	if err != nil {
@@ -113,7 +113,7 @@ func TestTransportSearchAction_Size(t *testing.T) {
 	searchAction := NewTransportSearchAction(cs, services, registry)
 	resp, err := searchAction.Execute(SearchRequest{
 		Index:     "docs",
-		QueryJSON: map[string]any{"match_all": map[string]any{}},
+		QueryJSON: QueryJSON{MatchAll: &MatchAllQueryJSON{}},
 		Size:      2,
 	})
 	if err != nil {
@@ -168,7 +168,7 @@ func TestSearch_MatchPhrase(t *testing.T) {
 	searchAction := NewTransportSearchAction(cs, services, registry)
 	resp, err := searchAction.Execute(SearchRequest{
 		Index:     "articles",
-		QueryJSON: map[string]any{"match_phrase": map[string]any{"title": "quick brown"}},
+		QueryJSON: QueryJSON{MatchPhrase: &MatchPhraseQueryJSON{Field: "title", Text: "quick brown"}},
 		Size:      10,
 	})
 	if err != nil {
@@ -226,12 +226,7 @@ func TestSearch_MultiMatch(t *testing.T) {
 	searchAction := NewTransportSearchAction(cs, services, registry)
 	resp, err := searchAction.Execute(SearchRequest{
 		Index: "articles",
-		QueryJSON: map[string]any{
-			"multi_match": map[string]any{
-				"query":  "golang",
-				"fields": []any{"title", "body"},
-			},
-		},
+		QueryJSON: QueryJSON{MultiMatch: &MultiMatchQueryJSON{Query: "golang", Fields: []string{"title", "body"}}},
 		Size: 10,
 	})
 	if err != nil {
@@ -286,11 +281,7 @@ func TestSearch_Exists(t *testing.T) {
 	searchAction := NewTransportSearchAction(cs, services, registry)
 	resp, err := searchAction.Execute(SearchRequest{
 		Index: "products",
-		QueryJSON: map[string]any{
-			"exists": map[string]any{
-				"field": "color",
-			},
-		},
+		QueryJSON: QueryJSON{Exists: &ExistsQueryJSON{Field: "color"}},
 		Size: 10,
 	})
 	if err != nil {

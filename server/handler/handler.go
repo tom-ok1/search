@@ -381,7 +381,10 @@ func (h *Handler) DeleteDocument(_ context.Context, request api.DeleteDocumentRe
 
 // SearchGet handles GET search requests.
 func (h *Handler) SearchGet(_ context.Context, request api.SearchGetRequestObject) (api.SearchGetResponseObject, error) {
-	actionReq := buildSearchRequest(request.Index, request.Body, request.Params.Size)
+	actionReq, err := buildSearchRequest(request.Index, request.Body, request.Params.Size)
+	if err != nil {
+		return api.SearchGet400JSONResponse(errorResponse(400, "query_parsing_exception", err.Error())), nil
+	}
 
 	resp, err := h.search.Execute(actionReq)
 	if err != nil {
@@ -397,7 +400,10 @@ func (h *Handler) SearchGet(_ context.Context, request api.SearchGetRequestObjec
 
 // SearchPost handles POST search requests.
 func (h *Handler) SearchPost(_ context.Context, request api.SearchPostRequestObject) (api.SearchPostResponseObject, error) {
-	actionReq := buildSearchRequest(request.Index, request.Body, request.Params.Size)
+	actionReq, err := buildSearchRequest(request.Index, request.Body, request.Params.Size)
+	if err != nil {
+		return api.SearchPost400JSONResponse(errorResponse(400, "query_parsing_exception", err.Error())), nil
+	}
 
 	resp, err := h.search.Execute(actionReq)
 	if err != nil {
@@ -412,17 +418,25 @@ func (h *Handler) SearchPost(_ context.Context, request api.SearchPostRequestObj
 }
 
 // buildSearchRequest converts API search parameters to a transport action request.
-func buildSearchRequest(index string, body *api.SearchRequest, paramSize *int) action.SearchRequest {
+func buildSearchRequest(index string, body *api.SearchRequest, paramSize *int) (action.SearchRequest, error) {
 	req := action.SearchRequest{
 		Index: index,
 	}
 
 	// Default to match_all if no query specified
-	req.QueryJSON = map[string]any{"match_all": map[string]any{}}
+	req.QueryJSON = action.QueryJSON{MatchAll: &action.MatchAllQueryJSON{}}
 
 	if body != nil {
 		if body.Query != nil {
-			req.QueryJSON = *body.Query
+			queryBytes, err := json.Marshal(*body.Query)
+			if err != nil {
+				return action.SearchRequest{}, fmt.Errorf("marshal query: %w", err)
+			}
+			var q action.QueryJSON
+			if err := json.Unmarshal(queryBytes, &q); err != nil {
+				return action.SearchRequest{}, fmt.Errorf("parse query: %w", err)
+			}
+			req.QueryJSON = q
 		}
 		if body.Size != nil {
 			req.Size = *body.Size
@@ -439,7 +453,7 @@ func buildSearchRequest(index string, body *api.SearchRequest, paramSize *int) a
 		req.Size = *paramSize
 	}
 
-	return req
+	return req, nil
 }
 
 // convertSearchResponse converts a transport action SearchResponse to an API SearchResponse.

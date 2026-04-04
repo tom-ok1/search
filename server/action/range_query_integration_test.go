@@ -63,14 +63,7 @@ func TestRangeQuery_EndToEnd(t *testing.T) {
 	parser := NewQueryParser(m, registry)
 
 	t.Run("long range filter", func(t *testing.T) {
-		q, err := parser.ParseQuery(map[string]any{
-			"range": map[string]any{
-				"price": map[string]any{
-					"gte": json.Number("50"),
-					"lte": json.Number("100"),
-				},
-			},
-		})
+		q, err := parser.ParseQuery(QueryJSON{Range: &RangeQueryJSON{Field: "price", GTE: json.Number("50"), LTE: json.Number("100")}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -83,14 +76,7 @@ func TestRangeQuery_EndToEnd(t *testing.T) {
 	})
 
 	t.Run("double range filter", func(t *testing.T) {
-		q, err := parser.ParseQuery(map[string]any{
-			"range": map[string]any{
-				"rating": map[string]any{
-					"gt": json.Number("3.5"),
-					"lt": json.Number("5.0"),
-				},
-			},
-		})
+		q, err := parser.ParseQuery(QueryJSON{Range: &RangeQueryJSON{Field: "rating", GT: json.Number("3.5"), LT: json.Number("5.0")}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -103,22 +89,10 @@ func TestRangeQuery_EndToEnd(t *testing.T) {
 	})
 
 	t.Run("bool with range and match", func(t *testing.T) {
-		q, err := parser.ParseQuery(map[string]any{
-			"bool": map[string]any{
-				"must": []any{
-					map[string]any{"match": map[string]any{"title": "widget"}},
-				},
-				"filter": []any{
-					map[string]any{
-						"range": map[string]any{
-							"price": map[string]any{
-								"lte": json.Number("50"),
-							},
-						},
-					},
-				},
-			},
-		})
+		q, err := parser.ParseQuery(QueryJSON{Bool: &BoolQueryJSON{
+			Must:   []QueryJSON{{Match: &MatchQueryJSON{Field: "title", Text: "widget"}}},
+			Filter: []QueryJSON{{Range: &RangeQueryJSON{Field: "price", LTE: json.Number("50")}}},
+		}})
 		if err != nil {
 			t.Fatal(err)
 		}

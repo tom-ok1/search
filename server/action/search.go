@@ -14,7 +14,7 @@ import (
 
 type SearchRequest struct {
 	Index     string
-	QueryJSON map[string]any
+	QueryJSON QueryJSON
 	AggsJSON  map[string]any
 	Size      int
 }

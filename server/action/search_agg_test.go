@@ -43,7 +43,7 @@ func TestSearch_TermsAggregation(t *testing.T) {
 	searchAction := NewTransportSearchAction(cs, services, registry)
 	resp, err := searchAction.Execute(SearchRequest{
 		Index:     "agg-test",
-		QueryJSON: map[string]any{"match_all": map[string]any{}},
+		QueryJSON: QueryJSON{MatchAll: &MatchAllQueryJSON{}},
 		AggsJSON: map[string]any{
 			"status_counts": map[string]any{
 				"terms": map[string]any{
@@ -139,7 +139,7 @@ func TestSearch_ValueCountAggregation(t *testing.T) {
 	searchAction := NewTransportSearchAction(cs, services, registry)
 	resp, err := searchAction.Execute(SearchRequest{
 		Index:     "agg-vc",
-		QueryJSON: map[string]any{"match_all": map[string]any{}},
+		QueryJSON: QueryJSON{MatchAll: &MatchAllQueryJSON{}},
 		AggsJSON: map[string]any{
 			"status_count": map[string]any{
 				"value_count": map[string]any{

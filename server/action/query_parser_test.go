@@ -23,8 +23,7 @@ func newTestParser() *QueryParser {
 
 func TestQueryParser_MatchAll(t *testing.T) {
 	p := newTestParser()
-	raw := map[string]any{"match_all": map[string]any{}}
-	q, err := p.ParseQuery(raw)
+	q, err := p.ParseQuery(QueryJSON{MatchAll: &MatchAllQueryJSON{}})
 	if err != nil {
 		t.Fatalf("ParseQuery: %v", err)
 	}
@@ -35,12 +34,7 @@ func TestQueryParser_MatchAll(t *testing.T) {
 
 func TestQueryParser_Term(t *testing.T) {
 	p := newTestParser()
-	raw := map[string]any{
-		"term": map[string]any{
-			"status": "active",
-		},
-	}
-	q, err := p.ParseQuery(raw)
+	q, err := p.ParseQuery(QueryJSON{Term: &TermQueryJSON{Field: "status", Value: "active"}})
 	if err != nil {
 		t.Fatalf("ParseQuery: %v", err)
 	}
@@ -55,12 +49,7 @@ func TestQueryParser_Term(t *testing.T) {
 
 func TestQueryParser_MatchSingleToken(t *testing.T) {
 	p := newTestParser()
-	raw := map[string]any{
-		"match": map[string]any{
-			"title": "hello",
-		},
-	}
-	q, err := p.ParseQuery(raw)
+	q, err := p.ParseQuery(QueryJSON{Match: &MatchQueryJSON{Field: "title", Text: "hello"}})
 	if err != nil {
 		t.Fatalf("ParseQuery: %v", err)
 	}
@@ -75,12 +64,7 @@ func TestQueryParser_MatchSingleToken(t *testing.T) {
 
 func TestQueryParser_MatchMultipleTokens(t *testing.T) {
 	p := newTestParser()
-	raw := map[string]any{
-		"match": map[string]any{
-			"title": "hello world",
-		},
-	}
-	q, err := p.ParseQuery(raw)
+	q, err := p.ParseQuery(QueryJSON{Match: &MatchQueryJSON{Field: "title", Text: "hello world"}})
 	if err != nil {
 		t.Fatalf("ParseQuery: %v", err)
 	}
@@ -100,17 +84,10 @@ func TestQueryParser_MatchMultipleTokens(t *testing.T) {
 
 func TestQueryParser_Bool(t *testing.T) {
 	p := newTestParser()
-	raw := map[string]any{
-		"bool": map[string]any{
-			"must": []any{
-				map[string]any{"term": map[string]any{"status": "active"}},
-			},
-			"must_not": []any{
-				map[string]any{"term": map[string]any{"status": "archived"}},
-			},
-		},
-	}
-	q, err := p.ParseQuery(raw)
+	q, err := p.ParseQuery(QueryJSON{Bool: &BoolQueryJSON{
+		Must:    []QueryJSON{{Term: &TermQueryJSON{Field: "status", Value: "active"}}},
+		MustNot: []QueryJSON{{Term: &TermQueryJSON{Field: "status", Value: "archived"}}},
+	}})
 	if err != nil {
 		t.Fatalf("ParseQuery: %v", err)
 	}
@@ -138,36 +115,24 @@ func TestQueryParser_Bool(t *testing.T) {
 }
 
 func TestQueryParser_UnknownQuery(t *testing.T) {
-	p := newTestParser()
-	raw := map[string]any{"unknown_type": map[string]any{}}
-	_, err := p.ParseQuery(raw)
+	var q QueryJSON
+	err := json.Unmarshal([]byte(`{"unknown_type":{}}`), &q)
 	if err == nil {
 		t.Fatal("expected error for unknown query type")
 	}
 }
 
 func TestQueryParser_TermRejectsObjectValue(t *testing.T) {
-	p := newTestParser()
-
-	// ES expanded form — should error since we don't support it yet
-	_, err := p.ParseQuery(map[string]any{
-		"term": map[string]any{
-			"status": map[string]any{"value": "active", "boost": 1.5},
-		},
-	})
+	var q QueryJSON
+	err := json.Unmarshal([]byte(`{"term":{"status":{"value":"active","boost":1.5}}}`), &q)
 	if err == nil {
 		t.Error("expected error for object value in term query, got nil")
 	}
 }
 
 func TestQueryParser_TermRejectsArrayValue(t *testing.T) {
-	p := newTestParser()
-
-	_, err := p.ParseQuery(map[string]any{
-		"term": map[string]any{
-			"status": []any{"active", "pending"},
-		},
-	})
+	var q QueryJSON
+	err := json.Unmarshal([]byte(`{"term":{"status":["active","pending"]}}`), &q)
 	if err == nil {
 		t.Error("expected error for array value in term query, got nil")
 	}
@@ -176,9 +141,7 @@ func TestQueryParser_TermRejectsArrayValue(t *testing.T) {
 func TestQueryParser_MatchZeroTokensMatchesNothing(t *testing.T) {
 	p := newTestParser()
 
-	q, err := p.ParseQuery(map[string]any{
-		"match": map[string]any{"title": ""},
-	})
+	q, err := p.ParseQuery(QueryJSON{Match: &MatchQueryJSON{Field: "title", Text: ""}})
 	if err != nil {
 		t.Fatalf("ParseQuery: %v", err)
 	}
@@ -197,13 +160,7 @@ func TestQueryParser_MatchPhrase(t *testing.T) {
 	registry := analysis.DefaultRegistry()
 	parser := NewQueryParser(m, registry)
 
-	queryJSON := map[string]any{
-		"match_phrase": map[string]any{
-			"title": "quick brown fox",
-		},
-	}
-
-	q, err := parser.ParseQuery(queryJSON)
+	q, err := parser.ParseQuery(QueryJSON{MatchPhrase: &MatchPhraseQueryJSON{Field: "title", Text: "quick brown fox"}})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -237,13 +194,7 @@ func TestQueryParser_MatchPhrase_SingleToken(t *testing.T) {
 	registry := analysis.DefaultRegistry()
 	parser := NewQueryParser(m, registry)
 
-	queryJSON := map[string]any{
-		"match_phrase": map[string]any{
-			"title": "hello",
-		},
-	}
-
-	q, err := parser.ParseQuery(queryJSON)
+	q, err := parser.ParseQuery(QueryJSON{MatchPhrase: &MatchPhraseQueryJSON{Field: "title", Text: "hello"}})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -267,13 +218,7 @@ func TestQueryParser_MatchPhrase_EmptyTokens(t *testing.T) {
 	registry := analysis.DefaultRegistry()
 	parser := NewQueryParser(m, registry)
 
-	queryJSON := map[string]any{
-		"match_phrase": map[string]any{
-			"title": "",
-		},
-	}
-
-	q, err := parser.ParseQuery(queryJSON)
+	q, err := parser.ParseQuery(QueryJSON{MatchPhrase: &MatchPhraseQueryJSON{Field: "title", Text: ""}})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -293,13 +238,7 @@ func TestQueryParser_Exists(t *testing.T) {
 	registry := analysis.DefaultRegistry()
 	parser := NewQueryParser(m, registry)
 
-	queryJSON := map[string]any{
-		"exists": map[string]any{
-			"field": "title",
-		},
-	}
-
-	q, err := parser.ParseQuery(queryJSON)
+	q, err := parser.ParseQuery(QueryJSON{Exists: &ExistsQueryJSON{Field: "title"}})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -322,13 +261,7 @@ func TestQueryParser_ExistsKeyword(t *testing.T) {
 	registry := analysis.DefaultRegistry()
 	parser := NewQueryParser(m, registry)
 
-	queryJSON := map[string]any{
-		"exists": map[string]any{
-			"field": "status",
-		},
-	}
-
-	q, err := parser.ParseQuery(queryJSON)
+	q, err := parser.ParseQuery(QueryJSON{Exists: &ExistsQueryJSON{Field: "status"}})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -349,13 +282,7 @@ func TestQueryParser_ExistsUnmappedField(t *testing.T) {
 	registry := analysis.DefaultRegistry()
 	parser := NewQueryParser(m, registry)
 
-	queryJSON := map[string]any{
-		"exists": map[string]any{
-			"field": "nonexistent",
-		},
-	}
-
-	q, err := parser.ParseQuery(queryJSON)
+	q, err := parser.ParseQuery(QueryJSON{Exists: &ExistsQueryJSON{Field: "nonexistent"}})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -367,15 +294,8 @@ func TestQueryParser_ExistsUnmappedField(t *testing.T) {
 }
 
 func TestQueryParser_Exists_MissingField(t *testing.T) {
-	m := &mapping.MappingDefinition{}
-	registry := analysis.DefaultRegistry()
-	parser := NewQueryParser(m, registry)
-
-	queryJSON := map[string]any{
-		"exists": map[string]any{},
-	}
-
-	_, err := parser.ParseQuery(queryJSON)
+	var q QueryJSON
+	err := json.Unmarshal([]byte(`{"exists":{}}`), &q)
 	if err == nil {
 		t.Fatal("expected error for exists query without 'field'")
 	}
@@ -391,14 +311,7 @@ func TestQueryParser_MultiMatch(t *testing.T) {
 	registry := analysis.DefaultRegistry()
 	parser := NewQueryParser(m, registry)
 
-	queryJSON := map[string]any{
-		"multi_match": map[string]any{
-			"query":  "hello world",
-			"fields": []any{"title", "body"},
-		},
-	}
-
-	q, err := parser.ParseQuery(queryJSON)
+	q, err := parser.ParseQuery(QueryJSON{MultiMatch: &MultiMatchQueryJSON{Query: "hello world", Fields: []string{"title", "body"}}})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -429,14 +342,7 @@ func TestQueryParser_MultiMatch_SingleField(t *testing.T) {
 	registry := analysis.DefaultRegistry()
 	parser := NewQueryParser(m, registry)
 
-	queryJSON := map[string]any{
-		"multi_match": map[string]any{
-			"query":  "hello",
-			"fields": []any{"title"},
-		},
-	}
-
-	q, err := parser.ParseQuery(queryJSON)
+	q, err := parser.ParseQuery(QueryJSON{MultiMatch: &MultiMatchQueryJSON{Query: "hello", Fields: []string{"title"}}})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -452,17 +358,8 @@ func TestQueryParser_MultiMatch_SingleField(t *testing.T) {
 }
 
 func TestQueryParser_MultiMatch_MissingFields(t *testing.T) {
-	m := &mapping.MappingDefinition{}
-	registry := analysis.DefaultRegistry()
-	parser := NewQueryParser(m, registry)
-
-	queryJSON := map[string]any{
-		"multi_match": map[string]any{
-			"query": "hello",
-		},
-	}
-
-	_, err := parser.ParseQuery(queryJSON)
+	var q QueryJSON
+	err := json.Unmarshal([]byte(`{"multi_match":{"query":"hello"}}`), &q)
 	if err == nil {
 		t.Fatal("expected error for multi_match without 'fields'")
 	}
@@ -471,13 +368,9 @@ func TestQueryParser_MultiMatch_MissingFields(t *testing.T) {
 func TestQueryParser_BoolFilter(t *testing.T) {
 	p := newTestParser()
 
-	q, err := p.ParseQuery(map[string]any{
-		"bool": map[string]any{
-			"filter": []any{
-				map[string]any{"term": map[string]any{"status": "active"}},
-			},
-		},
-	})
+	q, err := p.ParseQuery(QueryJSON{Bool: &BoolQueryJSON{
+		Filter: []QueryJSON{{Term: &TermQueryJSON{Field: "status", Value: "active"}}},
+	}})
 	if err != nil {
 		t.Fatalf("ParseQuery: %v", err)
 	}
@@ -503,15 +396,7 @@ func TestQueryParser_MatchObjectForm(t *testing.T) {
 	registry := analysis.DefaultRegistry()
 	parser := NewQueryParser(m, registry)
 
-	queryJSON := map[string]any{
-		"match": map[string]any{
-			"title": map[string]any{
-				"query": "hello world",
-			},
-		},
-	}
-
-	q, err := parser.ParseQuery(queryJSON)
+	q, err := parser.ParseQuery(QueryJSON{Match: &MatchQueryJSON{Field: "title", Text: "hello world"}})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -524,7 +409,7 @@ func TestQueryParser_MatchObjectForm(t *testing.T) {
 		t.Fatalf("clauses = %d, want 2", len(bq.Clauses))
 	}
 
-	// Verify that the terms are "hello" and "world", not garbage like "map[query:hello"
+	// Verify that the terms are "hello" and "world"
 	terms := make([]string, 0)
 	for _, clause := range bq.Clauses {
 		if tq, ok := clause.Query.(*search.TermQuery); ok {
@@ -551,16 +436,7 @@ func TestQueryParser_MatchObjectFormWithAnalyzer(t *testing.T) {
 	registry := analysis.DefaultRegistry()
 	parser := NewQueryParser(m, registry)
 
-	queryJSON := map[string]any{
-		"match": map[string]any{
-			"title": map[string]any{
-				"query":    "hello",
-				"analyzer": "ngram",
-			},
-		},
-	}
-
-	q, err := parser.ParseQuery(queryJSON)
+	q, err := parser.ParseQuery(QueryJSON{Match: &MatchQueryJSON{Field: "title", Text: "hello", Analyzer: "ngram"}})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -584,15 +460,7 @@ func TestQueryParser_MatchPhraseObjectForm(t *testing.T) {
 	registry := analysis.DefaultRegistry()
 	parser := NewQueryParser(m, registry)
 
-	queryJSON := map[string]any{
-		"match_phrase": map[string]any{
-			"title": map[string]any{
-				"query": "quick brown fox",
-			},
-		},
-	}
-
-	q, err := parser.ParseQuery(queryJSON)
+	q, err := parser.ParseQuery(QueryJSON{MatchPhrase: &MatchPhraseQueryJSON{Field: "title", Text: "quick brown fox"}})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -626,62 +494,29 @@ func TestQueryParser_Range(t *testing.T) {
 
 	tests := []struct {
 		name    string
-		query   map[string]any
+		query   QueryJSON
 		wantErr bool
 	}{
 		{
-			name: "long range gte/lte",
-			query: map[string]any{
-				"range": map[string]any{
-					"price": map[string]any{
-						"gte": json.Number("10"),
-						"lte": json.Number("100"),
-					},
-				},
-			},
+			name:  "long range gte/lte",
+			query: QueryJSON{Range: &RangeQueryJSON{Field: "price", GTE: json.Number("10"), LTE: json.Number("100")}},
 		},
 		{
-			name: "long range gt/lt",
-			query: map[string]any{
-				"range": map[string]any{
-					"price": map[string]any{
-						"gt": json.Number("10"),
-						"lt": json.Number("100"),
-					},
-				},
-			},
+			name:  "long range gt/lt",
+			query: QueryJSON{Range: &RangeQueryJSON{Field: "price", GT: json.Number("10"), LT: json.Number("100")}},
 		},
 		{
-			name: "double range",
-			query: map[string]any{
-				"range": map[string]any{
-					"score": map[string]any{
-						"gte": json.Number("1.5"),
-						"lte": json.Number("4.5"),
-					},
-				},
-			},
+			name:  "double range",
+			query: QueryJSON{Range: &RangeQueryJSON{Field: "score", GTE: json.Number("1.5"), LTE: json.Number("4.5")}},
 		},
 		{
-			name: "unknown field",
-			query: map[string]any{
-				"range": map[string]any{
-					"unknown": map[string]any{
-						"gte": json.Number("1"),
-					},
-				},
-			},
+			name:    "unknown field",
+			query:   QueryJSON{Range: &RangeQueryJSON{Field: "unknown", GTE: json.Number("1")}},
 			wantErr: true,
 		},
 		{
-			name: "unsupported field type",
-			query: map[string]any{
-				"range": map[string]any{
-					"title": map[string]any{
-						"gte": json.Number("1"),
-					},
-				},
-			},
+			name:    "unsupported field type",
+			query:   QueryJSON{Range: &RangeQueryJSON{Field: "title", GTE: json.Number("1")}},
 			wantErr: true,
 		},
 	}
