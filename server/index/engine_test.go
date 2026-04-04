@@ -643,3 +643,55 @@ func TestIntegration_IndexLifecycle(t *testing.T) {
 		t.Fatalf("expected 1 result for 'advanced', got %d", len(results3))
 	}
 }
+
+func TestEngine_VersionAcrossDeleteAndReindex(t *testing.T) {
+	dir, err := store.NewFSDirectory(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	eng, err := index.NewEngine(dir, newTestFieldAnalyzers(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+
+	// Index doc "a" → version 1
+	docA := document.NewDocument()
+	docA.AddField("_id", "a", document.FieldTypeKeyword)
+	docA.AddField("title", "hello", document.FieldTypeText)
+	r1, err := eng.Index("a", docA, []byte(`{"title":"hello"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r1.Version != 1 {
+		t.Fatalf("expected version 1, got %d", r1.Version)
+	}
+
+	// Delete doc "a" → version 2
+	dr, err := eng.Delete("a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dr.Version != 2 {
+		t.Fatalf("expected delete version 2, got %d", dr.Version)
+	}
+	if !dr.Found {
+		t.Fatal("expected Found=true")
+	}
+
+	// Re-index doc "a" → version 3 (continues from delete)
+	docA2 := document.NewDocument()
+	docA2.AddField("_id", "a", document.FieldTypeKeyword)
+	docA2.AddField("title", "hello again", document.FieldTypeText)
+	r2, err := eng.Index("a", docA2, []byte(`{"title":"hello again"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r2.Version != 3 {
+		t.Fatalf("expected version 3 after re-index, got %d", r2.Version)
+	}
+	if !r2.Created {
+		t.Fatal("expected Created=true after re-index of deleted doc")
+	}
+}
