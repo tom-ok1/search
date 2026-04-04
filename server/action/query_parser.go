@@ -446,43 +446,29 @@ func (p *QueryParser) parseRange(r *RangeQueryJSON) (search.Query, error) {
 		return nil, fmt.Errorf("unknown field [%s] in range query", r.Field)
 	}
 
-	params := map[string]any{}
-	if r.GTE != nil {
-		params["gte"] = r.GTE
-	}
-	if r.GT != nil {
-		params["gt"] = r.GT
-	}
-	if r.LTE != nil {
-		params["lte"] = r.LTE
-	}
-	if r.LT != nil {
-		params["lt"] = r.LT
-	}
-
 	switch fm.Type {
 	case mapping.FieldTypeLong:
-		return p.parseLongRange(r.Field, params)
+		return p.parseLongRange(r)
 	case mapping.FieldTypeDouble:
-		return p.parseDoubleRange(r.Field, params)
+		return p.parseDoubleRange(r)
 	default:
 		return nil, fmt.Errorf("range query not supported for field type [%s]", fm.Type)
 	}
 }
 
-func (p *QueryParser) parseLongRange(field string, params map[string]any) (search.Query, error) {
+func (p *QueryParser) parseLongRange(r *RangeQueryJSON) (search.Query, error) {
 	minVal := int64(math.MinInt64)
 	maxVal := int64(math.MaxInt64)
 
-	if v, ok := params["gte"]; ok {
-		n, err := rangeToInt64(v)
+	if r.GTE != nil {
+		n, err := rangeToInt64(r.GTE)
 		if err != nil {
 			return nil, fmt.Errorf("range gte: %w", err)
 		}
 		minVal = n
 	}
-	if v, ok := params["gt"]; ok {
-		n, err := rangeToInt64(v)
+	if r.GT != nil {
+		n, err := rangeToInt64(r.GT)
 		if err != nil {
 			return nil, fmt.Errorf("range gt: %w", err)
 		}
@@ -491,15 +477,15 @@ func (p *QueryParser) parseLongRange(field string, params map[string]any) (searc
 		}
 		minVal = n + 1
 	}
-	if v, ok := params["lte"]; ok {
-		n, err := rangeToInt64(v)
+	if r.LTE != nil {
+		n, err := rangeToInt64(r.LTE)
 		if err != nil {
 			return nil, fmt.Errorf("range lte: %w", err)
 		}
 		maxVal = n
 	}
-	if v, ok := params["lt"]; ok {
-		n, err := rangeToInt64(v)
+	if r.LT != nil {
+		n, err := rangeToInt64(r.LT)
 		if err != nil {
 			return nil, fmt.Errorf("range lt: %w", err)
 		}
@@ -509,43 +495,43 @@ func (p *QueryParser) parseLongRange(field string, params map[string]any) (searc
 		maxVal = n - 1
 	}
 
-	return search.NewPointRangeQuery(field, minVal, maxVal), nil
+	return search.NewPointRangeQuery(r.Field, minVal, maxVal), nil
 }
 
-func (p *QueryParser) parseDoubleRange(field string, params map[string]any) (search.Query, error) {
+func (p *QueryParser) parseDoubleRange(r *RangeQueryJSON) (search.Query, error) {
 	minVal := -math.MaxFloat64
 	maxVal := math.MaxFloat64
 
-	if v, ok := params["gte"]; ok {
-		f, err := rangeToFloat64(v)
+	if r.GTE != nil {
+		f, err := rangeToFloat64(r.GTE)
 		if err != nil {
 			return nil, fmt.Errorf("range gte: %w", err)
 		}
 		minVal = f
 	}
-	if v, ok := params["gt"]; ok {
-		f, err := rangeToFloat64(v)
+	if r.GT != nil {
+		f, err := rangeToFloat64(r.GT)
 		if err != nil {
 			return nil, fmt.Errorf("range gt: %w", err)
 		}
 		minVal = math.Nextafter(f, math.Inf(1))
 	}
-	if v, ok := params["lte"]; ok {
-		f, err := rangeToFloat64(v)
+	if r.LTE != nil {
+		f, err := rangeToFloat64(r.LTE)
 		if err != nil {
 			return nil, fmt.Errorf("range lte: %w", err)
 		}
 		maxVal = f
 	}
-	if v, ok := params["lt"]; ok {
-		f, err := rangeToFloat64(v)
+	if r.LT != nil {
+		f, err := rangeToFloat64(r.LT)
 		if err != nil {
 			return nil, fmt.Errorf("range lt: %w", err)
 		}
 		maxVal = math.Nextafter(f, math.Inf(-1))
 	}
 
-	return search.NewDoublePointRangeQuery(field, minVal, maxVal), nil
+	return search.NewDoublePointRangeQuery(r.Field, minVal, maxVal), nil
 }
 
 func rangeToInt64(v any) (int64, error) {

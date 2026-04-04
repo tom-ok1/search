@@ -428,6 +428,8 @@ func buildSearchRequest(index string, body *api.SearchRequest, paramSize *int) (
 
 	if body != nil {
 		if body.Query != nil {
+			// The OpenAPI-generated SearchRequest uses *map[string]any for Query.
+			// Marshal and re-unmarshal into our typed QueryJSON to get compile-time safety.
 			queryBytes, err := json.Marshal(*body.Query)
 			if err != nil {
 				return action.SearchRequest{}, fmt.Errorf("marshal query: %w", err)
