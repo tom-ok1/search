@@ -35,7 +35,7 @@ func TestIndexService_AutoRefresh(t *testing.T) {
 	shard := svc.Shard(0)
 
 	// Index a document
-	if err := shard.Index("1", []byte(`{"title": "hello world"}`)); err != nil {
+	if _, err := shard.Index("1", []byte(`{"title": "hello world"}`), nil, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -83,7 +83,7 @@ func TestIndexService_AutoRefreshDisabled(t *testing.T) {
 	shard := svc.Shard(0)
 
 	// Index a document
-	if err := shard.Index("1", []byte(`{"title": "hello world"}`)); err != nil {
+	if _, err := shard.Index("1", []byte(`{"title": "hello world"}`), nil, nil); err != nil {
 		t.Fatal(err)
 	}
 
