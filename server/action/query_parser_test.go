@@ -539,3 +539,133 @@ func TestQueryParser_Range(t *testing.T) {
 		})
 	}
 }
+
+func TestQueryJSON_UnmarshalJSON(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		check   func(t *testing.T, q QueryJSON)
+		wantErr bool
+	}{
+		{
+			name:  "match_all",
+			input: `{"match_all":{}}`,
+			check: func(t *testing.T, q QueryJSON) {
+				if q.MatchAll == nil {
+					t.Error("expected MatchAll to be non-nil")
+				}
+			},
+		},
+		{
+			name:  "term",
+			input: `{"term":{"status":"active"}}`,
+			check: func(t *testing.T, q QueryJSON) {
+				if q.Term == nil {
+					t.Fatal("expected Term to be non-nil")
+				}
+				if q.Term.Field != "status" || q.Term.Value != "active" {
+					t.Errorf("got %s=%s, want status=active", q.Term.Field, q.Term.Value)
+				}
+			},
+		},
+		{
+			name:  "term with number",
+			input: `{"term":{"count":42}}`,
+			check: func(t *testing.T, q QueryJSON) {
+				if q.Term == nil {
+					t.Fatal("expected Term to be non-nil")
+				}
+				if q.Term.Field != "count" || q.Term.Value != "42" {
+					t.Errorf("got %s=%s, want count=42", q.Term.Field, q.Term.Value)
+				}
+			},
+		},
+		{
+			name:  "match scalar",
+			input: `{"match":{"title":"hello"}}`,
+			check: func(t *testing.T, q QueryJSON) {
+				if q.Match == nil {
+					t.Fatal("expected Match to be non-nil")
+				}
+				if q.Match.Field != "title" || q.Match.Text != "hello" {
+					t.Errorf("got %s=%s, want title=hello", q.Match.Field, q.Match.Text)
+				}
+			},
+		},
+		{
+			name:  "match object form",
+			input: `{"match":{"title":{"query":"hello","analyzer":"ngram"}}}`,
+			check: func(t *testing.T, q QueryJSON) {
+				if q.Match == nil {
+					t.Fatal("expected Match to be non-nil")
+				}
+				if q.Match.Text != "hello" || q.Match.Analyzer != "ngram" {
+					t.Errorf("got text=%s analyzer=%s", q.Match.Text, q.Match.Analyzer)
+				}
+			},
+		},
+		{
+			name:  "bool with nested queries",
+			input: `{"bool":{"must":[{"term":{"status":"active"}}],"should":[{"match":{"title":"hello"}}]}}`,
+			check: func(t *testing.T, q QueryJSON) {
+				if q.Bool == nil {
+					t.Fatal("expected Bool to be non-nil")
+				}
+				if len(q.Bool.Must) != 1 {
+					t.Errorf("must clauses = %d, want 1", len(q.Bool.Must))
+				}
+				if len(q.Bool.Should) != 1 {
+					t.Errorf("should clauses = %d, want 1", len(q.Bool.Should))
+				}
+			},
+		},
+		{
+			name:  "exists",
+			input: `{"exists":{"field":"title"}}`,
+			check: func(t *testing.T, q QueryJSON) {
+				if q.Exists == nil || q.Exists.Field != "title" {
+					t.Error("expected Exists with field=title")
+				}
+			},
+		},
+		{
+			name:  "range with gte/lte",
+			input: `{"range":{"price":{"gte":10,"lte":100}}}`,
+			check: func(t *testing.T, q QueryJSON) {
+				if q.Range == nil {
+					t.Fatal("expected Range to be non-nil")
+				}
+				if q.Range.Field != "price" {
+					t.Errorf("field = %s, want price", q.Range.Field)
+				}
+			},
+		},
+		{
+			name:    "unknown query type",
+			input:   `{"fuzzy":{"title":"hello"}}`,
+			wantErr: true,
+		},
+		{
+			name:    "multiple top-level keys",
+			input:   `{"term":{"status":"a"},"match":{"title":"b"}}`,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var q QueryJSON
+			err := json.Unmarshal([]byte(tt.input), &q)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			tt.check(t, q)
+		})
+	}
+}
