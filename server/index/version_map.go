@@ -2,12 +2,14 @@ package index
 
 import "sync"
 
-// VersionValue holds the version, source document bytes, and deletion status
-// for a single document in the LiveVersionMap.
+// VersionValue holds the version, source document bytes, sequence number,
+// primary term, and deletion status for a single document in the LiveVersionMap.
 type VersionValue struct {
-	Version int64
-	Source  []byte
-	Deleted bool
+	Version     int64
+	SeqNo       int64
+	PrimaryTerm int64
+	Source      []byte
+	Deleted     bool
 }
 
 // LiveVersionMap is an in-memory map from document _id to its latest version

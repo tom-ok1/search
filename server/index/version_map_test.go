@@ -68,6 +68,29 @@ func TestLiveVersionMap_Delete(t *testing.T) {
 	}
 }
 
+func TestLiveVersionMap_SeqNoAndPrimaryTerm(t *testing.T) {
+	m := NewLiveVersionMap()
+
+	m.Put("doc1", VersionValue{
+		Version:     1,
+		Source:      []byte(`{"title":"hello"}`),
+		Deleted:     false,
+		SeqNo:       42,
+		PrimaryTerm: 1,
+	})
+
+	vv, ok := m.Get("doc1")
+	if !ok {
+		t.Fatal("expected doc1 to be found")
+	}
+	if vv.SeqNo != 42 {
+		t.Fatalf("expected SeqNo 42, got %d", vv.SeqNo)
+	}
+	if vv.PrimaryTerm != 1 {
+		t.Fatalf("expected PrimaryTerm 1, got %d", vv.PrimaryTerm)
+	}
+}
+
 func TestLiveVersionMap_Clear(t *testing.T) {
 	m := NewLiveVersionMap()
 
