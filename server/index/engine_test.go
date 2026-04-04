@@ -859,3 +859,122 @@ func TestEngine_DeleteWithCAS(t *testing.T) {
 		t.Fatal("expected Found=true")
 	}
 }
+
+func TestEngine_CASAfterRefresh(t *testing.T) {
+	dir, err := store.NewFSDirectory(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng, err := index.NewEngine(dir, newTestFieldAnalyzers(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+
+	m := &mapping.MappingDefinition{
+		Properties: map[string]mapping.FieldMapping{
+			"title": {Type: mapping.FieldTypeText},
+		},
+	}
+
+	doc, _ := mapping.ParseDocument("1", []byte(`{"title":"hello"}`), m)
+	r1, err := eng.Index("1", doc, []byte(`{"title":"hello"}`), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := eng.Refresh(); err != nil {
+		t.Fatal(err)
+	}
+
+	doc2, _ := mapping.ParseDocument("1", []byte(`{"title":"updated"}`), m)
+	seqNo := r1.SeqNo
+	term := r1.PrimaryTerm
+	_, err = eng.Index("1", doc2, []byte(`{"title":"updated"}`), &seqNo, &term)
+	if err != nil {
+		t.Fatalf("expected CAS after refresh to succeed, got: %v", err)
+	}
+}
+
+func TestEngine_CASAfterRefreshWithStaleSeqNo(t *testing.T) {
+	dir, err := store.NewFSDirectory(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng, err := index.NewEngine(dir, newTestFieldAnalyzers(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+
+	m := &mapping.MappingDefinition{
+		Properties: map[string]mapping.FieldMapping{
+			"title": {Type: mapping.FieldTypeText},
+		},
+	}
+
+	doc, _ := mapping.ParseDocument("1", []byte(`{"title":"hello"}`), m)
+	r1, err := eng.Index("1", doc, []byte(`{"title":"hello"}`), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	doc2, _ := mapping.ParseDocument("1", []byte(`{"title":"updated"}`), m)
+	_, err = eng.Index("1", doc2, []byte(`{"title":"updated"}`), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := eng.Refresh(); err != nil {
+		t.Fatal(err)
+	}
+
+	doc3, _ := mapping.ParseDocument("1", []byte(`{"title":"conflict"}`), m)
+	staleSeqNo := r1.SeqNo
+	term := r1.PrimaryTerm
+	_, err = eng.Index("1", doc3, []byte(`{"title":"conflict"}`), &staleSeqNo, &term)
+	if err == nil {
+		t.Fatal("expected CAS conflict error for stale seqNo after refresh")
+	}
+	if _, ok := err.(*index.VersionConflictEngineError); !ok {
+		t.Fatalf("expected VersionConflictEngineError, got %T: %v", err, err)
+	}
+}
+
+func TestEngine_DeleteCASAfterRefresh(t *testing.T) {
+	dir, err := store.NewFSDirectory(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng, err := index.NewEngine(dir, newTestFieldAnalyzers(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+
+	m := &mapping.MappingDefinition{
+		Properties: map[string]mapping.FieldMapping{
+			"title": {Type: mapping.FieldTypeText},
+		},
+	}
+
+	doc, _ := mapping.ParseDocument("1", []byte(`{"title":"hello"}`), m)
+	r1, err := eng.Index("1", doc, []byte(`{"title":"hello"}`), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := eng.Refresh(); err != nil {
+		t.Fatal(err)
+	}
+
+	seqNo := r1.SeqNo
+	term := r1.PrimaryTerm
+	dr, err := eng.Delete("1", &seqNo, &term)
+	if err != nil {
+		t.Fatalf("expected CAS delete after refresh to succeed, got: %v", err)
+	}
+	if !dr.Found {
+		t.Fatal("expected Found=true")
+	}
+}

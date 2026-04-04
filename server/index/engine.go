@@ -157,15 +157,26 @@ func (e *Engine) Index(id string, doc *document.Document, source []byte, ifSeqNo
 	// CAS check: if_seq_no / if_primary_term
 	if ifSeqNo != nil && ifPrimaryTerm != nil {
 		if !exists {
-			return IndexResult{}, &VersionConflictEngineError{
-				ID: id, ExpectedSeqNo: *ifSeqNo, ExpectedTerm: *ifPrimaryTerm,
-				CurrentSeqNo: 0, CurrentTerm: 0,
+			// Fall back to Lucene doc values
+			luceneSeqNo, luceneTerm, found := e.loadSeqNoFromIndex(id)
+			if !found {
+				return IndexResult{}, &VersionConflictEngineError{
+					ID: id, ExpectedSeqNo: *ifSeqNo, ExpectedTerm: *ifPrimaryTerm,
+					CurrentSeqNo: 0, CurrentTerm: 0,
+				}
 			}
-		}
-		if vv.SeqNo != *ifSeqNo || vv.PrimaryTerm != *ifPrimaryTerm {
-			return IndexResult{}, &VersionConflictEngineError{
-				ID: id, ExpectedSeqNo: *ifSeqNo, ExpectedTerm: *ifPrimaryTerm,
-				CurrentSeqNo: vv.SeqNo, CurrentTerm: vv.PrimaryTerm,
+			if luceneSeqNo != *ifSeqNo || luceneTerm != *ifPrimaryTerm {
+				return IndexResult{}, &VersionConflictEngineError{
+					ID: id, ExpectedSeqNo: *ifSeqNo, ExpectedTerm: *ifPrimaryTerm,
+					CurrentSeqNo: luceneSeqNo, CurrentTerm: luceneTerm,
+				}
+			}
+		} else {
+			if vv.SeqNo != *ifSeqNo || vv.PrimaryTerm != *ifPrimaryTerm {
+				return IndexResult{}, &VersionConflictEngineError{
+					ID: id, ExpectedSeqNo: *ifSeqNo, ExpectedTerm: *ifPrimaryTerm,
+					CurrentSeqNo: vv.SeqNo, CurrentTerm: vv.PrimaryTerm,
+				}
 			}
 		}
 	}
@@ -206,15 +217,25 @@ func (e *Engine) Delete(id string, ifSeqNo *int64, ifPrimaryTerm *int64) (Delete
 
 	if ifSeqNo != nil && ifPrimaryTerm != nil {
 		if !exists {
-			return DeleteResult{}, &VersionConflictEngineError{
-				ID: id, ExpectedSeqNo: *ifSeqNo, ExpectedTerm: *ifPrimaryTerm,
-				CurrentSeqNo: 0, CurrentTerm: 0,
+			luceneSeqNo, luceneTerm, found := e.loadSeqNoFromIndex(id)
+			if !found {
+				return DeleteResult{}, &VersionConflictEngineError{
+					ID: id, ExpectedSeqNo: *ifSeqNo, ExpectedTerm: *ifPrimaryTerm,
+					CurrentSeqNo: 0, CurrentTerm: 0,
+				}
 			}
-		}
-		if vv.SeqNo != *ifSeqNo || vv.PrimaryTerm != *ifPrimaryTerm {
-			return DeleteResult{}, &VersionConflictEngineError{
-				ID: id, ExpectedSeqNo: *ifSeqNo, ExpectedTerm: *ifPrimaryTerm,
-				CurrentSeqNo: vv.SeqNo, CurrentTerm: vv.PrimaryTerm,
+			if luceneSeqNo != *ifSeqNo || luceneTerm != *ifPrimaryTerm {
+				return DeleteResult{}, &VersionConflictEngineError{
+					ID: id, ExpectedSeqNo: *ifSeqNo, ExpectedTerm: *ifPrimaryTerm,
+					CurrentSeqNo: luceneSeqNo, CurrentTerm: luceneTerm,
+				}
+			}
+		} else {
+			if vv.SeqNo != *ifSeqNo || vv.PrimaryTerm != *ifPrimaryTerm {
+				return DeleteResult{}, &VersionConflictEngineError{
+					ID: id, ExpectedSeqNo: *ifSeqNo, ExpectedTerm: *ifPrimaryTerm,
+					CurrentSeqNo: vv.SeqNo, CurrentTerm: vv.PrimaryTerm,
+				}
 			}
 		}
 	}
@@ -288,6 +309,40 @@ func (e *Engine) docExistsInIndex(id string) bool {
 	collector := search.NewTopKCollector(1)
 	results := s.Search(query, collector)
 	return len(results) > 0
+}
+
+// loadSeqNoFromIndex looks up _seq_no and _primary_term from Lucene doc values
+// for the given document _id. Returns (seqNo, primaryTerm, found).
+// This is the Lucene fallback used when the LiveVersionMap has no entry.
+func (e *Engine) loadSeqNoFromIndex(id string) (int64, int64, bool) {
+	e.mu.RLock()
+	s := e.searcher
+	e.mu.RUnlock()
+
+	if s == nil {
+		return 0, 0, false
+	}
+
+	query := search.NewTermQuery("_id", id)
+	collector := search.NewTopKCollector(1)
+	results := s.Search(query, collector)
+	if len(results) == 0 {
+		return 0, 0, false
+	}
+
+	reader := s.Reader()
+	docID := results[0].DocID
+
+	seqNo, ok := reader.GetNumericDocValue(docID, "_seq_no")
+	if !ok {
+		return 0, 0, false
+	}
+	primaryTerm, ok := reader.GetNumericDocValue(docID, "_primary_term")
+	if !ok {
+		return 0, 0, false
+	}
+
+	return seqNo, primaryTerm, true
 }
 
 // Flush flushes buffered documents, syncs the translog, rolls the generation,
