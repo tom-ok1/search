@@ -106,6 +106,27 @@ func (r *IndexReader) GetPositions(globalDocID int, field, term string) []int {
 	return nil
 }
 
+// GetNumericDocValue returns the numeric doc value for a global DocID and field.
+// The second return value indicates whether the value was found.
+func (r *IndexReader) GetNumericDocValue(globalDocID int, field string) (int64, bool) {
+	leaf, localDocID, ok := r.findLeaf(globalDocID)
+	if !ok {
+		return 0, false
+	}
+	ndv := leaf.Segment.NumericDocValues(field)
+	if ndv == nil {
+		return 0, false
+	}
+	if !ndv.HasValue(localDocID) {
+		return 0, false
+	}
+	val, err := ndv.Get(localDocID)
+	if err != nil {
+		return 0, false
+	}
+	return val, true
+}
+
 // OpenDirectoryReader opens an IndexReader from a committed index on disk.
 // It reads the latest segments_N file and opens each segment as a DiskSegment.
 func OpenDirectoryReader(dir store.Directory) (*IndexReader, error) {
