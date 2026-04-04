@@ -43,8 +43,11 @@ type Engine struct {
 	dir        store.Directory
 	translog   *translog.Translog
 	versionMap *LiveVersionMap
-	maxVersion atomic.Int64
-	mu         sync.RWMutex // protects reader/searcher swap on refresh
+	mu sync.RWMutex // protects reader/searcher swap on refresh
+
+	localCheckpoint  atomic.Int64 // last assigned seqNo
+	globalCheckpoint int64        // last known durable seqNo
+	currentTerm      int64        // primary term for operations
 }
 
 // NewEngine creates a new Engine backed by the given directory and field analyzers.
@@ -53,13 +56,16 @@ func NewEngine(dir store.Directory, fieldAnalyzers *analysis.FieldAnalyzers, tra
 	writer := goindex.NewIndexWriter(dir, fieldAnalyzers, defaultBufferSize)
 
 	e := &Engine{
-		writer:     writer,
-		dir:        dir,
-		versionMap: NewLiveVersionMap(),
+		writer:      writer,
+		dir:         dir,
+		versionMap:  NewLiveVersionMap(),
+		currentTerm: 1,
 	}
+	e.localCheckpoint.Store(translog.NoOpsPerformed)
 
 	if translogPath != "" {
-		tl, err := translog.NewTranslog(translogPath)
+		config := &translog.TranslogConfig{Dir: translogPath}
+		tl, err := translog.NewTranslog(config, "", e.currentTerm, translog.NoOpsPerformed, 1)
 		if err != nil {
 			writer.Close()
 			return nil, fmt.Errorf("open translog: %w", err)
@@ -70,20 +76,28 @@ func NewEngine(dir store.Directory, fieldAnalyzers *analysis.FieldAnalyzers, tra
 	return e, nil
 }
 
-// RecoverFromTranslog replays uncommitted operations from the translog.
-// The caller provides replay functions that have the necessary context
-// (e.g., mapping) to reconstruct documents.
+// RecoverFromTranslog replays uncommitted operations from the translog
+// using snapshot-based iteration.
 func (e *Engine) RecoverFromTranslog(replayIndex func(id string, source []byte) error, replayDelete func(id string) error) error {
 	if e.translog == nil {
 		return nil
 	}
 
-	ops, err := e.translog.Recover()
+	snapshot, err := e.translog.NewSnapshot(0, int64(^uint64(0)>>1)) // 0 to max int64
 	if err != nil {
-		return fmt.Errorf("recover translog: %w", err)
+		return fmt.Errorf("create recovery snapshot: %w", err)
 	}
+	defer snapshot.Close()
 
-	for _, op := range ops {
+	for {
+		op, err := snapshot.Next()
+		if err != nil {
+			return fmt.Errorf("read operation: %w", err)
+		}
+		if op == nil {
+			break
+		}
+
 		switch o := op.(type) {
 		case *translog.IndexOperation:
 			if err := replayIndex(o.ID, o.Source); err != nil {
@@ -94,6 +108,11 @@ func (e *Engine) RecoverFromTranslog(replayIndex func(id string, source []byte) 
 				return fmt.Errorf("replay delete op for %s: %w", o.ID, err)
 			}
 		}
+
+		// Track the highest seqNo we've replayed.
+		if op.SeqNo() > e.localCheckpoint.Load() {
+			e.localCheckpoint.Store(op.SeqNo())
+		}
 	}
 
 	return nil
@@ -103,10 +122,19 @@ func (e *Engine) RecoverFromTranslog(replayIndex func(id string, source []byte) 
 // document was newly created and the assigned version.
 func (e *Engine) Index(id string, doc *document.Document, source []byte) (IndexResult, error) {
 	var created bool
+	var currentVersion int64
+
 	vv, exists := e.versionMap.Get(id)
 	if !exists {
-		created = !e.docExistsInIndex(id)
+		if e.docExistsInIndex(id) {
+			currentVersion = 0
+			created = false
+		} else {
+			currentVersion = 0
+			created = true
+		}
 	} else {
+		currentVersion = vv.Version
 		created = vv.Deleted
 	}
 
@@ -116,12 +144,27 @@ func (e *Engine) Index(id string, doc *document.Document, source []byte) (IndexR
 		return IndexResult{}, err
 	}
 
-	version := e.maxVersion.Add(1)
-	e.versionMap.Put(id, VersionValue{Version: version, Source: source, Deleted: false})
+	// Per-document version: NOT_FOUND → 1, otherwise currentVersion + 1
+	version := currentVersion + 1
+	seqNo := e.localCheckpoint.Add(1)
+
+	e.versionMap.Put(id, VersionValue{
+		Version:     version,
+		SeqNo:       seqNo,
+		PrimaryTerm: e.currentTerm,
+		Source:      source,
+		Deleted:     false,
+	})
 
 	if e.translog != nil {
-		tlOp := &translog.IndexOperation{ID: id, Source: source, Version: version}
-		if err := e.translog.Add(tlOp); err != nil {
+		tlOp := &translog.IndexOperation{
+			ID:         id,
+			Source:     source,
+			Version:    version,
+			SequenceNo: seqNo,
+			PrimTerm:   e.currentTerm,
+		}
+		if _, err := e.translog.Add(tlOp); err != nil {
 			return IndexResult{}, fmt.Errorf("translog add: %w", err)
 		}
 	}
@@ -132,19 +175,36 @@ func (e *Engine) Index(id string, doc *document.Document, source []byte) (IndexR
 // Delete removes a document by its _id. It returns whether the document
 // was found and the assigned version.
 func (e *Engine) Delete(id string) (DeleteResult, error) {
-	_, exists := e.versionMap.Get(id)
+	var currentVersion int64
+
+	vv, exists := e.versionMap.Get(id)
+	if exists {
+		currentVersion = vv.Version
+	}
 	found := exists || e.docExistsInIndex(id)
 
 	if err := e.writer.DeleteDocuments("_id", id); err != nil {
 		return DeleteResult{}, err
 	}
 
-	version := e.maxVersion.Add(1)
-	e.versionMap.Put(id, VersionValue{Version: version, Deleted: true})
+	version := currentVersion + 1
+	seqNo := e.localCheckpoint.Add(1)
+
+	e.versionMap.Put(id, VersionValue{
+		Version:     version,
+		SeqNo:       seqNo,
+		PrimaryTerm: e.currentTerm,
+		Deleted:     true,
+	})
 
 	if e.translog != nil {
-		tlOp := &translog.DeleteOperation{ID: id, Version: version}
-		if err := e.translog.Add(tlOp); err != nil {
+		tlOp := &translog.DeleteOperation{
+			ID:         id,
+			Version:    version,
+			SequenceNo: seqNo,
+			PrimTerm:   e.currentTerm,
+		}
+		if _, err := e.translog.Add(tlOp); err != nil {
 			return DeleteResult{}, fmt.Errorf("translog add: %w", err)
 		}
 	}
@@ -201,10 +261,27 @@ func (e *Engine) docExistsInIndex(id string) bool {
 	return len(results) > 0
 }
 
-// Flush flushes buffered documents and applies pending deletes to disk segments
-// without opening a new reader.
+// Flush flushes buffered documents, syncs the translog, rolls the generation,
+// and trims unreferenced readers.
 func (e *Engine) Flush() error {
-	return e.writer.Flush()
+	if err := e.writer.Flush(); err != nil {
+		return err
+	}
+
+	if e.translog != nil {
+		if err := e.translog.Sync(); err != nil {
+			return fmt.Errorf("translog sync: %w", err)
+		}
+		if err := e.translog.RollGeneration(); err != nil {
+			return fmt.Errorf("translog roll: %w", err)
+		}
+		e.translog.SetMinRequiredGeneration(e.translog.CurrentGeneration())
+		if err := e.translog.TrimUnreferencedReaders(); err != nil {
+			return fmt.Errorf("translog trim: %w", err)
+		}
+	}
+
+	return nil
 }
 
 // Refresh opens a new NRT reader from the writer, making recently indexed

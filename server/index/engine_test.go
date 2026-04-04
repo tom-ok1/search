@@ -338,6 +338,55 @@ func TestIndexShard_IndexAndSearchJapanese(t *testing.T) {
 	}
 }
 
+func TestEngine_PerDocumentVersion(t *testing.T) {
+	dir, err := store.NewFSDirectory(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	eng, err := index.NewEngine(dir, newTestFieldAnalyzers(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+
+	// First index of doc "a" → version 1
+	docA := document.NewDocument()
+	docA.AddField("_id", "a", document.FieldTypeKeyword)
+	docA.AddField("title", "hello", document.FieldTypeText)
+	r1, err := eng.Index("a", docA, []byte(`{"title":"hello"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r1.Version != 1 {
+		t.Fatalf("expected version 1 for new doc a, got %d", r1.Version)
+	}
+
+	// First index of doc "b" → version 1 (NOT 2)
+	docB := document.NewDocument()
+	docB.AddField("_id", "b", document.FieldTypeKeyword)
+	docB.AddField("title", "world", document.FieldTypeText)
+	r2, err := eng.Index("b", docB, []byte(`{"title":"world"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r2.Version != 1 {
+		t.Fatalf("expected version 1 for new doc b, got %d", r2.Version)
+	}
+
+	// Update doc "a" → version 2
+	docA2 := document.NewDocument()
+	docA2.AddField("_id", "a", document.FieldTypeKeyword)
+	docA2.AddField("title", "hello updated", document.FieldTypeText)
+	r3, err := eng.Index("a", docA2, []byte(`{"title":"hello updated"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r3.Version != 2 {
+		t.Fatalf("expected version 2 for updated doc a, got %d", r3.Version)
+	}
+}
+
 func TestRouteShard(t *testing.T) {
 	// Deterministic: same ID always routes to same shard
 	shard1 := index.RouteShard("doc1", 5)
