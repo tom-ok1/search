@@ -31,9 +31,10 @@ func newFlushControl(ramBufferSize int64, maxBufferedDocs int, pool *perThreadPo
 
 // doAfterDocument is called after a document is indexed.
 // If total active bytes exceed the RAM buffer threshold or the DWPT has
-// reached the max buffered doc count, the DWPT is marked as flush-pending.
-// Returns the DWPT if it should be flushed, or nil otherwise.
-func (fc *FlushControl) doAfterDocument(dwpt *DocumentsWriterPerThread, bytesAdded int64) *DocumentsWriterPerThread {
+// reached the max buffered doc count, the DWPT is marked as flush-pending
+// and added to the flush queue. Returns true if the DWPT is now flush-pending
+// (and should NOT be returned to the free pool by the caller).
+func (fc *FlushControl) doAfterDocument(dwpt *DocumentsWriterPerThread, bytesAdded int64) bool {
 	fc.mu.Lock()
 	defer fc.mu.Unlock()
 
@@ -58,13 +59,14 @@ func (fc *FlushControl) doAfterDocument(dwpt *DocumentsWriterPerThread, bytesAdd
 			fc.stalled = true
 		}
 
-		return dwpt
+		return true
 	}
 
-	return nil
+	return false
 }
 
 // nextPendingFlush returns the next DWPT that needs flushing, or nil.
+// The DWPT is dequeued from the flush queue and removed from the pool.
 func (fc *FlushControl) nextPendingFlush() *DocumentsWriterPerThread {
 	fc.mu.Lock()
 	defer fc.mu.Unlock()
@@ -74,6 +76,7 @@ func (fc *FlushControl) nextPendingFlush() *DocumentsWriterPerThread {
 	}
 	dwpt := fc.flushQueue[0]
 	fc.flushQueue = fc.flushQueue[1:]
+	fc.pool.remove(dwpt)
 	return dwpt
 }
 

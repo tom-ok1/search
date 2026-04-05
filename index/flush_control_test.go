@@ -26,11 +26,11 @@ func TestFlushControlMarksFlushPending(t *testing.T) {
 	doc.AddField("body", "hello world this is a test document with enough text to exceed the tiny buffer", document.FieldTypeText)
 	bytesAdded, _ := dwpt.addDocument(doc)
 
-	result := fc.doAfterDocument(dwpt, bytesAdded)
-	if result == nil {
-		t.Fatal("expected DWPT to be returned as flush-pending")
+	flushPending := fc.doAfterDocument(dwpt, bytesAdded)
+	if !flushPending {
+		t.Fatal("expected DWPT to be marked as flush-pending")
 	}
-	if !result.flushPending {
+	if !dwpt.flushPending {
 		t.Error("expected flushPending to be true")
 	}
 }

@@ -47,14 +47,22 @@ func (dw *DocumentsWriter) addDocument(doc *document.Document) error {
 		return err
 	}
 
-	flushDWPT := dw.flushControl.doAfterDocument(dwpt, bytesAdded)
-	if flushDWPT != nil {
-		dw.pool.remove(flushDWPT)
-		if err := dw.doFlush(flushDWPT); err != nil {
+	flushPending := dw.flushControl.doAfterDocument(dwpt, bytesAdded)
+	if !flushPending {
+		dw.pool.returnAndUnlock(dwpt)
+	}
+
+	// Drain the flush queue. The current DWPT (if flush-pending) and any
+	// other pending DWPTs are dequeued and flushed here, ensuring that
+	// every DWPT added to the queue is properly released.
+	for {
+		toFlush := dw.flushControl.nextPendingFlush()
+		if toFlush == nil {
+			break
+		}
+		if err := dw.doFlush(toFlush); err != nil {
 			return err
 		}
-	} else {
-		dw.pool.returnAndUnlock(dwpt)
 	}
 
 	if err := dw.publishFlushedSegments(); err != nil {
