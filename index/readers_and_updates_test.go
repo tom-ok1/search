@@ -125,3 +125,44 @@ func TestReadersAndUpdatesLazyOpen(t *testing.T) {
 		t.Error("reader should be opened after getReader")
 	}
 }
+
+func TestReadersAndUpdates_CloseNilsReader(t *testing.T) {
+	dir, err := store.NewFSDirectory(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
+		analysis.NewWhitespaceTokenizer(),
+		&analysis.LowerCaseFilter{},
+	))
+
+	// Create a segment on disk
+	w := NewIndexWriter(dir, fa, 100)
+	doc := document.NewDocument()
+	doc.AddField("body", "hello world", document.FieldTypeText)
+	w.AddDocument(doc)
+	if err := w.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	segName := w.segmentInfos.Segments[0].Name
+	w.Close()
+
+	// Create RAU and open reader
+	info := &SegmentCommitInfo{Name: segName, MaxDoc: 1}
+	rau := NewReadersAndUpdates(info, dir.FilePath(""))
+	_, err = rau.getReader()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rau.reader == nil {
+		t.Fatal("reader should be set after getReader()")
+	}
+
+	// Close should nil the reader
+	if err := rau.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if rau.reader != nil {
+		t.Error("reader should be nil after Close() to release DiskSegment for GC")
+	}
+}
