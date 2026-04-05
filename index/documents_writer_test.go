@@ -274,3 +274,35 @@ func TestDocumentsWriterDeleteDocuments(t *testing.T) {
 		t.Errorf("expected nil frozen updates after second freeze, got %+v", frozen2)
 	}
 }
+
+func TestDoFlush_NilsSegment(t *testing.T) {
+	dir, err := store.NewFSDirectory(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	fa := newTestFieldAnalyzers()
+	dq := newDeleteQueue()
+	dwpt := newDWPT("_seg0", fa, dq)
+
+	for i := range 5 {
+		doc := document.NewDocument()
+		doc.AddField("body", fmt.Sprintf("word%d", i), document.FieldTypeText)
+		dwpt.addDocument(doc)
+	}
+
+	if dwpt.segment == nil {
+		t.Fatal("segment should not be nil before flush")
+	}
+	if dwpt.segment.docCount != 5 {
+		t.Fatalf("expected 5 docs, got %d", dwpt.segment.docCount)
+	}
+
+	_, err = dwpt.flush(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if dwpt.segment != nil {
+		t.Error("segment should be nil after flush to release memory")
+	}
+}
