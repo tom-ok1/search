@@ -315,6 +315,11 @@ func (w *IndexWriter) ForceMerge(maxSegments int) error {
 			return err
 		}
 	}
+
+	// Clean up orphaned files from merged-away segments immediately,
+	// rather than waiting for the next Commit.
+	w.deleteStaleFiles()
+
 	return nil
 }
 

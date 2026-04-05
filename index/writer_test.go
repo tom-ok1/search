@@ -1709,3 +1709,45 @@ func TestUpdateSameDocTwice(t *testing.T) {
 		}
 	}
 }
+
+func TestExecuteMerge_DeletesStaleFiles(t *testing.T) {
+	dir, err := store.NewFSDirectory(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	fa := analysis.NewFieldAnalyzers(analysis.NewAnalyzer(
+		analysis.NewWhitespaceTokenizer(),
+		&analysis.LowerCaseFilter{},
+	))
+
+	w := NewIndexWriter(dir, fa, 2) // flush every 2 docs
+	defer w.Close()
+
+	// Create 4 segments (8 docs, 2 per segment)
+	for i := range 8 {
+		doc := document.NewDocument()
+		doc.AddField("body", fmt.Sprintf("word%d", i), document.FieldTypeText)
+		if err := w.AddDocument(doc); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.Flush(); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Force merge all segments into 1
+	if err := w.ForceMerge(1); err != nil {
+		t.Fatal(err)
+	}
+
+	// Without calling Commit, stale files from merged-away segments
+	// should already be deleted
+	postFiles, _ := dir.ListAll()
+	referenced := w.segmentInfos.ReferencedFiles()
+
+	for _, f := range postFiles {
+		if len(f) > 4 && f[:4] == "_seg" && !referenced[f] {
+			t.Errorf("stale file %s not cleaned up after merge", f)
+		}
+	}
+}
