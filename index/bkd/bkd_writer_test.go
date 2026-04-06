@@ -60,8 +60,11 @@ func TestBKDWriter_SmallDataset(t *testing.T) {
 		t.Fatalf("Finish failed: %v", err)
 	}
 
-	if !dir.FileExists("seg0.price.kd") {
-		t.Fatal("expected seg0.price.kd to exist")
+	if !dir.FileExists("seg0.price.kdm") {
+		t.Fatal("expected seg0.price.kdm to exist")
+	}
+	if !dir.FileExists("seg0.price.kdd") {
+		t.Fatal("expected seg0.price.kdd to exist")
 	}
 }
 
@@ -76,8 +79,11 @@ func TestBKDWriter_LargeDataset(t *testing.T) {
 		t.Fatalf("Finish failed: %v", err)
 	}
 
-	if !dir.FileExists("seg1.score.kd") {
-		t.Fatal("expected seg1.score.kd to exist")
+	if !dir.FileExists("seg1.score.kdm") {
+		t.Fatal("expected seg1.score.kdm to exist")
+	}
+	if !dir.FileExists("seg1.score.kdd") {
+		t.Fatal("expected seg1.score.kdd to exist")
 	}
 }
 
@@ -89,8 +95,11 @@ func TestBKDWriter_EmptyDataset(t *testing.T) {
 		t.Fatalf("Finish failed: %v", err)
 	}
 
-	if !dir.FileExists("seg2.empty.kd") {
-		t.Fatal("expected seg2.empty.kd to exist")
+	if !dir.FileExists("seg2.empty.kdm") {
+		t.Fatal("expected seg2.empty.kdm to exist")
+	}
+	if !dir.FileExists("seg2.empty.kdd") {
+		t.Fatal("expected seg2.empty.kdd to exist")
 	}
 }
 
@@ -105,8 +114,11 @@ func TestBKDWriter_DuplicateValues(t *testing.T) {
 		t.Fatalf("Finish failed: %v", err)
 	}
 
-	if !dir.FileExists("seg3.dup.kd") {
-		t.Fatal("expected seg3.dup.kd to exist")
+	if !dir.FileExists("seg3.dup.kdm") {
+		t.Fatal("expected seg3.dup.kdm to exist")
+	}
+	if !dir.FileExists("seg3.dup.kdd") {
+		t.Fatal("expected seg3.dup.kdd to exist")
 	}
 }
 
