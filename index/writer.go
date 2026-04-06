@@ -371,8 +371,19 @@ func (w *IndexWriter) executeMerge(candidate MergeCandidate) error {
 		return nil
 	}
 
+	// Log merge start
+	if w.infoStream.IsEnabled("IW") {
+		var parts []string
+		for _, info := range candidate.Segments {
+			parts = append(parts, fmt.Sprintf("%s(%d docs)", info.Name, info.MaxDoc))
+		}
+		w.infoStream.Message("IW", "merging "+strings.Join(parts, " + "))
+	}
+
+	var totalDocs int64
 	inputs := make([]MergeInput, len(candidate.Segments))
 	for i, info := range candidate.Segments {
+		totalDocs += int64(info.MaxDoc)
 		rau := w.getOrCreateRAU(info)
 		reader, err := rau.getReader()
 		if err != nil {
@@ -385,9 +396,22 @@ func (w *IndexWriter) executeMerge(candidate MergeCandidate) error {
 	}
 
 	newName := w.nextSegmentName()
+	start := time.Now()
 	result, err := MergeSegmentsToDisk(w.dir, inputs, newName)
+	elapsed := time.Since(start)
 	if err != nil {
 		return fmt.Errorf("merge segments: %w", err)
+	}
+
+	if w.metrics != nil {
+		w.metrics.MergeCount.Add(1)
+		w.metrics.MergeDocCount.Add(totalDocs)
+		w.metrics.MergeTimeNanos.Add(elapsed.Nanoseconds())
+	}
+	if w.infoStream.IsEnabled("IW") {
+		w.infoStream.Message("IW", fmt.Sprintf(
+			"merge done: %d docs, took %dms",
+			result.DocCount, elapsed.Milliseconds()))
 	}
 
 	newInfo := &SegmentCommitInfo{
@@ -416,6 +440,10 @@ func (w *IndexWriter) executeMerge(candidate MergeCandidate) error {
 	remaining = append(remaining, newInfo)
 	w.segmentInfos.Segments = remaining
 	w.segmentInfos.Version++
+
+	if w.metrics != nil {
+		w.metrics.SegmentCount.Store(int64(len(w.segmentInfos.Segments)))
+	}
 
 	return nil
 }

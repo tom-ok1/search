@@ -152,3 +152,91 @@ func TestInfoStreamFlushControlMessages(t *testing.T) {
 		t.Errorf("expected 'flush triggered' message, got: %v", capture.Messages())
 	}
 }
+
+func TestInfoStreamMergeMessages(t *testing.T) {
+	dir, err := store.NewFSDirectory(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	fa := analysis.NewFieldAnalyzers(
+		analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), analysis.NewLowerCaseFilter()),
+	)
+	w := NewIndexWriter(dir, fa, 50)
+	defer w.Close()
+
+	capture := newCapturingInfoStream("IW", "DW", "DWFC", "DWPT", "IFD")
+	w.SetInfoStream(capture)
+
+	for batch := range 3 {
+		for i := range 100 {
+			doc := document.NewDocument()
+			doc.AddField("body", fmt.Sprintf("batch %d doc %d", batch, i), document.FieldTypeText)
+			if err := w.AddDocument(doc); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := w.Commit(); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := w.ForceMerge(1); err != nil {
+		t.Fatal(err)
+	}
+
+	if !capture.HasMessageContaining("merging") {
+		t.Errorf("expected 'merging' message, got: %v", capture.Messages())
+	}
+	if !capture.HasMessageContaining("merge done") {
+		t.Errorf("expected 'merge done' message, got: %v", capture.Messages())
+	}
+}
+
+func TestInfoStreamCommitMessages(t *testing.T) {
+	dir, err := store.NewFSDirectory(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	fa := analysis.NewFieldAnalyzers(
+		analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), analysis.NewLowerCaseFilter()),
+	)
+	w := NewIndexWriter(dir, fa, 1000)
+	defer w.Close()
+
+	capture := newCapturingInfoStream("IW", "DW", "DWFC", "DWPT", "IFD")
+	w.SetInfoStream(capture)
+
+	doc := document.NewDocument()
+	doc.AddField("title", "test", document.FieldTypeText)
+	if err := w.AddDocument(doc); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	if !capture.HasMessageContaining("commit start") {
+		t.Errorf("expected 'commit start' message, got: %v", capture.Messages())
+	}
+	if !capture.HasMessageContaining("commit done") {
+		t.Errorf("expected 'commit done' message, got: %v", capture.Messages())
+	}
+}
+
+func TestMetricsDeleteDocuments(t *testing.T) {
+	dir, err := store.NewFSDirectory(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	fa := analysis.NewFieldAnalyzers(
+		analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), analysis.NewLowerCaseFilter()),
+	)
+	w := NewIndexWriter(dir, fa, 1000)
+	defer w.Close()
+
+	m := w.Metrics()
+	w.DeleteDocuments("title", "test")
+	if m.DocsDeleted.Load() != 1 {
+		t.Errorf("DocsDeleted = %d, want 1", m.DocsDeleted.Load())
+	}
+}
