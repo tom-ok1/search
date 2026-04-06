@@ -285,6 +285,7 @@ func BenchmarkForceMergeWithDeletions(b *testing.B) {
 
 func makeLargeBenchDoc(id int) *document.Document {
 	doc := document.NewDocument()
+	// Text fields
 	doc.AddField("title", fmt.Sprintf("comprehensive document number %d covering search engine design patterns and implementation strategies", id), document.FieldTypeText)
 	doc.AddField("body", fmt.Sprintf(
 		"this is an extended body for document %d discussing full text search indexing strategies "+
@@ -293,8 +294,19 @@ func makeLargeBenchDoc(id int) *document.Document {
 			"relevance ranking document at a time scoring and skip list based posting list intersection "+
 			"methods for efficient large scale information retrieval systems and search applications number %d",
 		id, id), document.FieldTypeText)
+	// Keyword fields
 	doc.AddField("category", fmt.Sprintf("category_%d", id%20), document.FieldTypeKeyword)
 	doc.AddField("tag", fmt.Sprintf("tag_%d", id%100), document.FieldTypeKeyword)
+	// Stored field
+	doc.AddField("raw_content", fmt.Sprintf("raw-content-for-document-%d-with-extra-data", id), document.FieldTypeStored)
+	// Numeric doc values
+	doc.AddNumericDocValuesField("popularity", int64(id%1000))
+	// Sorted doc values
+	doc.AddSortedDocValuesField("author", fmt.Sprintf("author_%d", id%50))
+	// LongPoint
+	doc.AddLongPoint("created_at", int64(1700000000+id))
+	// DoublePoint
+	doc.AddDoublePoint("rating", float64(id%50)*0.1)
 	return doc
 }
 
