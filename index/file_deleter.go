@@ -1,6 +1,7 @@
 package index
 
 import (
+	"fmt"
 	"sync"
 
 	"gosearch/store"
@@ -9,18 +10,20 @@ import (
 // FileDeleter tracks per-file reference counts and defers deletion
 // until all references are released.
 type FileDeleter struct {
-	mu       sync.Mutex
-	dir      store.Directory
-	refCount map[string]int  // filename → reference count
-	pending  map[string]bool // files scheduled for deletion when refcount → 0
+	mu         sync.Mutex
+	dir        store.Directory
+	refCount   map[string]int  // filename → reference count
+	pending    map[string]bool // files scheduled for deletion when refcount → 0
+	infoStream InfoStream
 }
 
 // NewFileDeleter creates a FileDeleter for the given directory.
 func NewFileDeleter(dir store.Directory) *FileDeleter {
 	return &FileDeleter{
-		dir:      dir,
-		refCount: make(map[string]int),
-		pending:  make(map[string]bool),
+		dir:        dir,
+		refCount:   make(map[string]int),
+		pending:    make(map[string]bool),
+		infoStream: &NoOpInfoStream{},
 	}
 }
 
@@ -66,6 +69,9 @@ func (fd *FileDeleter) DeleteIfUnreferenced(files []string) {
 		if fd.refCount[f] > 0 {
 			fd.pending[f] = true
 		} else {
+			if fd.infoStream.IsEnabled("IFD") {
+				fd.infoStream.Message("IFD", fmt.Sprintf("delete %s: refcount=0", f))
+			}
 			_ = fd.dir.DeleteFile(f)
 		}
 	}

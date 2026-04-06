@@ -61,6 +61,11 @@ func BenchmarkSustainedThroughput(b *testing.B) {
 			b.ReportMetric(float64(m.HeapInuse)/(1024*1024), "final-heap-MB")
 			b.ReportMetric(float64(len(w.segmentInfos.Segments)), "final-segments")
 			b.ReportMetric(float64(totalDocs)/b.Elapsed().Seconds(), "docs/sec")
+			metrics := w.Metrics()
+			b.ReportMetric(float64(metrics.StallCount.Load()), "stalls")
+			b.ReportMetric(float64(metrics.StallTimeNanos.Load())/1e6, "stall-ms")
+			b.ReportMetric(float64(metrics.MergeCount.Load()), "merges")
+			b.ReportMetric(float64(metrics.FlushCount.Load()), "flushes")
 		})
 	}
 }
@@ -149,6 +154,11 @@ func BenchmarkMemoryStability(b *testing.B) {
 	}
 	b.ReportMetric(float64(peakHeap)/(1024*1024), "peak-heap-MB")
 	b.ReportMetric(float64(len(w.segmentInfos.Segments)), "final-segments")
+	m := w.Metrics()
+	b.ReportMetric(float64(m.StallCount.Load()), "stalls")
+	b.ReportMetric(float64(m.StallTimeNanos.Load())/1e6, "stall-ms")
+	b.ReportMetric(float64(m.MergeCount.Load()), "merges")
+	b.ReportMetric(float64(m.FlushCount.Load()), "flushes")
 }
 
 // --- Large segment merge benchmark ---
@@ -265,6 +275,11 @@ func BenchmarkConcurrentIndex(b *testing.B) {
 				reportMemory(b, before, after)
 				b.ReportMetric(float64(totalDocs)/b.Elapsed().Seconds(), "docs/sec")
 				b.ReportMetric(float64(len(w.segmentInfos.Segments)), "segments")
+				m := w.Metrics()
+				b.ReportMetric(float64(m.StallCount.Load()), "stalls")
+				b.ReportMetric(float64(m.StallTimeNanos.Load())/1e6, "stall-ms")
+				b.ReportMetric(float64(m.MergeCount.Load()), "merges")
+				b.ReportMetric(float64(m.FlushCount.Load()), "flushes")
 				w.Close()
 				b.StartTimer()
 			}

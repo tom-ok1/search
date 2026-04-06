@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"gosearch/analysis"
 	"gosearch/document"
@@ -24,6 +25,8 @@ type IndexWriter struct {
 	mergePolicy    MergePolicy
 	docWriter      *DocumentsWriter
 	fileDeleter    *FileDeleter
+	infoStream     InfoStream
+	metrics        *IndexWriterMetrics
 }
 
 // NewIndexWriter creates a new IndexWriter. bufferSize controls the approximate
@@ -35,6 +38,8 @@ func NewIndexWriter(dir store.Directory, fieldAnalyzers *analysis.FieldAnalyzers
 		fieldAnalyzers: fieldAnalyzers,
 		readerMap:      make(map[string]*ReadersAndUpdates),
 		fileDeleter:    NewFileDeleter(dir),
+		infoStream:     &NoOpInfoStream{},
+		metrics:        &IndexWriterMetrics{},
 	}
 
 	// Try to load existing committed state from the directory.
@@ -69,11 +74,16 @@ func NewIndexWriter(dir store.Directory, fieldAnalyzers *analysis.FieldAnalyzers
 	w.docWriter = newDocumentsWriter(dir, fieldAnalyzers, defaultRAMBufferSize, bufferSize, func() string {
 		return w.nextSegmentName()
 	})
+	w.docWriter.metrics = w.metrics
+	w.docWriter.flushControl.metrics = w.metrics
 	w.docWriter.onSegmentFlushed = func(info *SegmentCommitInfo) {
 		w.mu.Lock()
 		defer w.mu.Unlock()
 		w.segmentInfos.Segments = append(w.segmentInfos.Segments, info)
 		w.segmentInfos.Version++
+		if w.metrics != nil {
+			w.metrics.SegmentCount.Store(int64(len(w.segmentInfos.Segments)))
+		}
 	}
 	w.docWriter.onGlobalUpdates = func(updates *FrozenBufferedUpdates) {
 		w.mu.Lock()
@@ -89,6 +99,20 @@ func (w *IndexWriter) SetMergePolicy(policy MergePolicy) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.mergePolicy = policy
+}
+
+// SetInfoStream sets the InfoStream for diagnostic logging.
+func (w *IndexWriter) SetInfoStream(infoStream InfoStream) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.infoStream = infoStream
+	w.docWriter.setInfoStream(infoStream)
+	w.fileDeleter.infoStream = infoStream
+}
+
+// Metrics returns the IndexWriterMetrics for monitoring.
+func (w *IndexWriter) Metrics() *IndexWriterMetrics {
+	return w.metrics
 }
 
 // autoMerge runs the merge policy if one is configured.
@@ -127,6 +151,8 @@ func (w *IndexWriter) Flush() error {
 // Commit flushes any buffered data, resolves pending deletes, and writes
 // the segment metadata (segments_N) to disk.
 func (w *IndexWriter) Commit() error {
+	commitStart := time.Now()
+
 	// 1. Flush all threads
 	if err := w.docWriter.flushAllThreads(); err != nil {
 		return err
@@ -134,6 +160,10 @@ func (w *IndexWriter) Commit() error {
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
+
+	if w.infoStream.IsEnabled("IW") {
+		w.infoStream.Message("IW", fmt.Sprintf("commit start: %d segments", len(w.segmentInfos.Segments)))
+	}
 
 	// 2. Freeze and apply any remaining global deletes
 	frozen := w.docWriter.freezeGlobalBuffer()
@@ -187,6 +217,14 @@ func (w *IndexWriter) Commit() error {
 
 	// 9. Best-effort cleanup of stale files
 	w.deleteStaleFiles()
+
+	if w.metrics != nil {
+		w.metrics.SegmentCount.Store(int64(len(w.segmentInfos.Segments)))
+	}
+	if w.infoStream.IsEnabled("IW") {
+		w.infoStream.Message("IW", fmt.Sprintf("commit done: %d segments, took %dms",
+			len(w.segmentInfos.Segments), time.Since(commitStart).Milliseconds()))
+	}
 
 	// 10. Trigger auto-merge
 	return w.autoMerge()
@@ -279,6 +317,9 @@ func (w *IndexWriter) nrtSegments() ([]SegmentReader, []string, error) {
 // DeleteDocuments buffers a delete-by-term operation.
 func (w *IndexWriter) DeleteDocuments(field, term string) error {
 	w.docWriter.deleteDocuments(field, term)
+	if w.metrics != nil {
+		w.metrics.DocsDeleted.Add(1)
+	}
 	return nil
 }
 
@@ -286,6 +327,10 @@ func (w *IndexWriter) DeleteDocuments(field, term string) error {
 // Caller must hold w.mu.
 func (w *IndexWriter) MaybeMerge(policy MergePolicy) error {
 	candidates := policy.FindMerges(w.segmentInfos.Segments)
+	if w.infoStream.IsEnabled("IW") && len(candidates) > 0 {
+		w.infoStream.Message("IW", fmt.Sprintf("maybeMerge: %d candidates from %d segments",
+			len(candidates), len(w.segmentInfos.Segments)))
+	}
 	for _, candidate := range candidates {
 		if err := w.executeMerge(candidate); err != nil {
 			return err
@@ -329,8 +374,19 @@ func (w *IndexWriter) executeMerge(candidate MergeCandidate) error {
 		return nil
 	}
 
+	// Log merge start
+	if w.infoStream.IsEnabled("IW") {
+		var parts []string
+		for _, info := range candidate.Segments {
+			parts = append(parts, fmt.Sprintf("%s(%d docs)", info.Name, info.MaxDoc))
+		}
+		w.infoStream.Message("IW", "merging "+strings.Join(parts, " + "))
+	}
+
+	var totalDocs int64
 	inputs := make([]MergeInput, len(candidate.Segments))
 	for i, info := range candidate.Segments {
+		totalDocs += int64(info.MaxDoc)
 		rau := w.getOrCreateRAU(info)
 		reader, err := rau.getReader()
 		if err != nil {
@@ -343,9 +399,22 @@ func (w *IndexWriter) executeMerge(candidate MergeCandidate) error {
 	}
 
 	newName := w.nextSegmentName()
+	start := time.Now()
 	result, err := MergeSegmentsToDisk(w.dir, inputs, newName)
+	elapsed := time.Since(start)
 	if err != nil {
 		return fmt.Errorf("merge segments: %w", err)
+	}
+
+	if w.metrics != nil {
+		w.metrics.MergeCount.Add(1)
+		w.metrics.MergeDocCount.Add(totalDocs)
+		w.metrics.MergeTimeNanos.Add(elapsed.Nanoseconds())
+	}
+	if w.infoStream.IsEnabled("IW") {
+		w.infoStream.Message("IW", fmt.Sprintf(
+			"merge done: %d docs, took %dms",
+			result.DocCount, elapsed.Milliseconds()))
 	}
 
 	newInfo := &SegmentCommitInfo{
@@ -374,6 +443,10 @@ func (w *IndexWriter) executeMerge(candidate MergeCandidate) error {
 	remaining = append(remaining, newInfo)
 	w.segmentInfos.Segments = remaining
 	w.segmentInfos.Version++
+
+	if w.metrics != nil {
+		w.metrics.SegmentCount.Store(int64(len(w.segmentInfos.Segments)))
+	}
 
 	return nil
 }
