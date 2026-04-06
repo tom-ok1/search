@@ -3,16 +3,15 @@ package bkd
 import (
 	"encoding/binary"
 	"fmt"
-	"io"
 	"math"
 
 	"gosearch/store"
 )
 
 // leafMeta holds lightweight metadata for a completed leaf.
-// The actual leaf data lives in a temp file on disk.
+// The actual leaf data lives in the .kdd file on disk.
 type leafMeta struct {
-	offset   uint64 // byte offset within the temp file
+	offset   uint64 // byte offset within .kdd file
 	numPts   int
 	minValue int64
 	maxValue int64
@@ -21,7 +20,7 @@ type leafMeta struct {
 // OneDimensionBKDWriter builds a BKD tree from a pre-sorted stream of points.
 // Points must be added in ascending order of (value, docID).
 // Memory usage is O(MaxPointsInLeafNode) for the active buffer plus O(numLeaves)
-// for leaf metadata. Leaf data is flushed to a temporary file on disk.
+// for leaf metadata. Leaf data is written directly to the .kdd file.
 type OneDimensionBKDWriter struct {
 	dir     store.Directory
 	segName string
@@ -30,9 +29,9 @@ type OneDimensionBKDWriter struct {
 	leafBuf []point    // current leaf buffer — at most MaxPointsInLeafNode
 	metas   []leafMeta // completed leaf metadata
 
-	tmpOut   store.IndexOutput // temp file for leaf data
-	tmpName  string            // temp file name within dir
-	tmpBytes uint64            // bytes written to temp file so far
+	dataOut   store.IndexOutput // .kdd file output
+	dataName  string            // .kdd file name within dir
+	dataBytes uint64            // bytes written to .kdd so far
 
 	numPoints int
 	docSet    map[int]struct{}
@@ -40,32 +39,32 @@ type OneDimensionBKDWriter struct {
 
 // NewOneDimensionBKDWriter creates a writer that accepts sorted points.
 func NewOneDimensionBKDWriter(dir store.Directory, segName, field string) (*OneDimensionBKDWriter, error) {
-	tmpName := fmt.Sprintf("%s.%s.kd.tmp", segName, field)
-	tmpOut, err := dir.CreateOutput(tmpName)
+	dataName := fmt.Sprintf("%s.%s.kdd", segName, field)
+	dataOut, err := dir.CreateOutput(dataName)
 	if err != nil {
-		return nil, fmt.Errorf("bkd: create temp file %s: %w", tmpName, err)
+		return nil, fmt.Errorf("bkd: create data file %s: %w", dataName, err)
 	}
 	return &OneDimensionBKDWriter{
-		dir:     dir,
-		segName: segName,
-		field:   field,
-		leafBuf: make([]point, 0, MaxPointsInLeafNode),
-		tmpOut:  tmpOut,
-		tmpName: tmpName,
-		docSet:  make(map[int]struct{}),
+		dir:      dir,
+		segName:  segName,
+		field:    field,
+		leafBuf:  make([]point, 0, MaxPointsInLeafNode),
+		dataOut:  dataOut,
+		dataName: dataName,
+		docSet:   make(map[int]struct{}),
 	}, nil
 }
 
-// Abort cleans up the temp file without writing the .kd file.
+// Abort cleans up the .kdd file without writing the .kdm file.
 // Safe to call multiple times or after Finish.
 func (w *OneDimensionBKDWriter) Abort() {
-	if w.tmpOut != nil {
-		w.tmpOut.Close()
-		w.tmpOut = nil
+	if w.dataOut != nil {
+		w.dataOut.Close()
+		w.dataOut = nil
 	}
-	if w.tmpName != "" {
-		w.dir.DeleteFile(w.tmpName)
-		w.tmpName = ""
+	if w.dataName != "" {
+		w.dir.DeleteFile(w.dataName)
+		w.dataName = ""
 	}
 }
 
@@ -81,13 +80,13 @@ func (w *OneDimensionBKDWriter) Add(docID int, value int64) error {
 	return nil
 }
 
-// flushLeaf serializes the current leaf buffer to the temp file and records metadata.
+// flushLeaf serializes the current leaf buffer to the .kdd file and records metadata.
 func (w *OneDimensionBKDWriter) flushLeaf() error {
 	leaf := w.leafBuf
 	n := len(leaf)
 
 	w.metas = append(w.metas, leafMeta{
-		offset:   w.tmpBytes,
+		offset:   w.dataBytes,
 		numPts:   n,
 		minValue: leaf[0].value,
 		maxValue: leaf[n-1].value,
@@ -97,24 +96,24 @@ func (w *OneDimensionBKDWriter) flushLeaf() error {
 	// Write docIDs (4 bytes each).
 	for _, p := range leaf {
 		binary.LittleEndian.PutUint32(buf[:4], uint32(p.docID))
-		if _, err := w.tmpOut.Write(buf[:4]); err != nil {
+		if _, err := w.dataOut.Write(buf[:4]); err != nil {
 			return err
 		}
 	}
 	// Write values (8 bytes each).
 	for _, p := range leaf {
 		binary.LittleEndian.PutUint64(buf, uint64(p.value))
-		if _, err := w.tmpOut.Write(buf); err != nil {
+		if _, err := w.dataOut.Write(buf); err != nil {
 			return err
 		}
 	}
 
-	w.tmpBytes += uint64(n)*4 + uint64(n)*8
+	w.dataBytes += uint64(n)*4 + uint64(n)*8
 	w.leafBuf = w.leafBuf[:0]
 	return nil
 }
 
-// Finish writes the .kd file. After calling Finish, the writer must not be reused.
+// Finish writes the .kdm file. After calling Finish, the writer must not be reused.
 func (w *OneDimensionBKDWriter) Finish() error {
 	// Flush remaining points.
 	if len(w.leafBuf) > 0 {
@@ -123,30 +122,26 @@ func (w *OneDimensionBKDWriter) Finish() error {
 		}
 	}
 
-	// Close temp file so we can read it back.
-	if err := w.tmpOut.Close(); err != nil {
+	// Close .kdd file.
+	if err := w.dataOut.Close(); err != nil {
 		return err
 	}
-	w.tmpOut = nil
+	w.dataOut = nil
 
-	fileName := fmt.Sprintf("%s.%s.kd", w.segName, w.field)
-	out, err := w.dir.CreateOutput(fileName)
+	metaName := fmt.Sprintf("%s.%s.kdm", w.segName, w.field)
+	metaOut, err := w.dir.CreateOutput(metaName)
 	if err != nil {
 		return err
 	}
-	defer out.Close()
+	defer metaOut.Close()
 
 	numPoints := w.numPoints
 
-	// Empty dataset: write 32 bytes of zeros.
+	// Empty dataset: write 32 bytes of zeros to .kdm.
 	if numPoints == 0 {
-		if _, err := out.Write(make([]byte, 32)); err != nil {
+		if _, err := metaOut.Write(make([]byte, 32)); err != nil {
 			return err
 		}
-		if err := w.dir.DeleteFile(w.tmpName); err != nil {
-			return fmt.Errorf("bkd: delete temp file: %w", err)
-		}
-		w.tmpName = ""
 		return nil
 	}
 
@@ -169,74 +164,48 @@ func (w *OneDimensionBKDWriter) Finish() error {
 	innerNodes := make([]innerNode, numInnerNodes+1)
 	computeInnerNodesFromMetas(1, numInnerNodes, allMetas, innerNodes)
 
-	// --- Write .kd file ---
+	// --- Write .kdm file ---
 
 	// Header (32 bytes).
-	if err := out.WriteUint32(MaxPointsInLeafNode); err != nil {
+	if err := metaOut.WriteUint32(MaxPointsInLeafNode); err != nil {
 		return err
 	}
-	if err := out.WriteUint32(uint32(numLeaves)); err != nil {
+	if err := metaOut.WriteUint32(uint32(numLeaves)); err != nil {
 		return err
 	}
-	if err := out.WriteUint32(uint32(numPoints)); err != nil {
+	if err := metaOut.WriteUint32(uint32(numPoints)); err != nil {
 		return err
 	}
-	if err := out.WriteUint32(uint32(docCount)); err != nil {
+	if err := metaOut.WriteUint32(uint32(docCount)); err != nil {
 		return err
 	}
-	if err := out.WriteUint64(uint64(globalMinValue)); err != nil {
+	if err := metaOut.WriteUint64(uint64(globalMinValue)); err != nil {
 		return err
 	}
-	if err := out.WriteUint64(uint64(globalMaxValue)); err != nil {
+	if err := metaOut.WriteUint64(uint64(globalMaxValue)); err != nil {
 		return err
 	}
 
 	// Inner nodes (12 bytes each, heap-ordered 1-indexed).
 	for i := 1; i <= numInnerNodes; i++ {
-		if err := out.WriteUint64(uint64(innerNodes[i].splitValue)); err != nil {
+		if err := metaOut.WriteUint64(uint64(innerNodes[i].splitValue)); err != nil {
 			return err
 		}
-		if err := out.WriteUint32(uint32(innerNodes[i].numPoints)); err != nil {
+		if err := metaOut.WriteUint32(uint32(innerNodes[i].numPoints)); err != nil {
 			return err
 		}
 	}
 
-	// Leaf directory (28 bytes each).
-	// Offsets in the directory are relative to the start of leaf data in the .kd file,
-	// which matches the temp file offsets since the temp file contains only leaf data.
+	// Leaf directory (12 bytes each).
 	for i := range numLeaves {
 		m := allMetas[i]
-		if err := out.WriteUint64(m.offset); err != nil {
+		if err := metaOut.WriteUint64(m.offset); err != nil {
 			return err
 		}
-		if err := out.WriteUint32(uint32(m.numPts)); err != nil {
-			return err
-		}
-		if err := out.WriteUint64(uint64(m.minValue)); err != nil {
-			return err
-		}
-		if err := out.WriteUint64(uint64(m.maxValue)); err != nil {
+		if err := metaOut.WriteUint32(uint32(m.numPts)); err != nil {
 			return err
 		}
 	}
-
-	// Copy leaf data from temp file to .kd file.
-	tmpIn, err := w.dir.OpenInput(w.tmpName)
-	if err != nil {
-		return fmt.Errorf("bkd: reopen temp file: %w", err)
-	}
-	defer tmpIn.Close()
-
-	copyBuf := make([]byte, 64*1024) // 64 KB copy buffer
-	if _, err := io.CopyBuffer(out, tmpIn, copyBuf); err != nil {
-		return fmt.Errorf("bkd: copy leaf data: %w", err)
-	}
-
-	// Clean up temp file.
-	if err := w.dir.DeleteFile(w.tmpName); err != nil {
-		return fmt.Errorf("bkd: delete temp file: %w", err)
-	}
-	w.tmpName = ""
 
 	return nil
 }

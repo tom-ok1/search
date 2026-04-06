@@ -173,16 +173,11 @@ func TestOneDimensionBKDWriter_Duplicates(t *testing.T) {
 	}
 }
 
-func TestOneDimensionBKDWriter_TempFileCleanup(t *testing.T) {
+func TestOneDimensionBKDWriter_FileOutput(t *testing.T) {
 	dir := mustDir(t)
 	odw, err := NewOneDimensionBKDWriter(dir, "seg0", "price")
 	if err != nil {
 		t.Fatalf("NewOneDimensionBKDWriter: %v", err)
-	}
-
-	// Temp file should exist after construction.
-	if !dir.FileExists("seg0.price.kd.tmp") {
-		t.Fatal("expected temp file to exist after construction")
 	}
 
 	for i := range 1000 {
@@ -194,29 +189,11 @@ func TestOneDimensionBKDWriter_TempFileCleanup(t *testing.T) {
 		t.Fatalf("Finish: %v", err)
 	}
 
-	// Temp file should be cleaned up after Finish.
-	if dir.FileExists("seg0.price.kd.tmp") {
-		t.Fatal("expected temp file to be deleted after Finish")
+	if !dir.FileExists("seg0.price.kdm") {
+		t.Fatal("expected .kdm file to exist")
 	}
-	// Final .kd file should exist.
-	if !dir.FileExists("seg0.price.kd") {
-		t.Fatal("expected .kd file to exist")
-	}
-}
-
-func TestOneDimensionBKDWriter_EmptyTempFileCleanup(t *testing.T) {
-	dir := mustDir(t)
-	odw, err := NewOneDimensionBKDWriter(dir, "seg0", "empty")
-	if err != nil {
-		t.Fatalf("NewOneDimensionBKDWriter: %v", err)
-	}
-
-	if err := odw.Finish(); err != nil {
-		t.Fatalf("Finish: %v", err)
-	}
-
-	if dir.FileExists("seg0.empty.kd.tmp") {
-		t.Fatal("expected temp file to be deleted after empty Finish")
+	if !dir.FileExists("seg0.price.kdd") {
+		t.Fatal("expected .kdd file to exist")
 	}
 }
 
@@ -265,5 +242,38 @@ func TestOneDimensionBKDWriter_LargeMultiLeaf(t *testing.T) {
 		if d != want {
 			t.Fatalf("docs[%d] = %d, want %d", i, d, want)
 		}
+	}
+}
+
+func TestOneDimensionBKDWriter_TwoFileOutput(t *testing.T) {
+	dir := mustDir(t)
+	odw, err := NewOneDimensionBKDWriter(dir, "seg0", "f")
+	if err != nil {
+		t.Fatalf("NewOneDimensionBKDWriter: %v", err)
+	}
+
+	// .kdd should exist immediately (streaming writes go directly to it).
+	if !dir.FileExists("seg0.f.kdd") {
+		t.Fatal("expected .kdd to exist during writing")
+	}
+	// No temp file should exist.
+	if dir.FileExists("seg0.f.kd.tmp") {
+		t.Fatal("temp file should not exist in two-file format")
+	}
+
+	for i := range 100 {
+		if err := odw.Add(i, int64(i)); err != nil {
+			t.Fatalf("Add: %v", err)
+		}
+	}
+	if err := odw.Finish(); err != nil {
+		t.Fatalf("Finish: %v", err)
+	}
+
+	if !dir.FileExists("seg0.f.kdm") {
+		t.Fatal("expected .kdm to exist after Finish")
+	}
+	if !dir.FileExists("seg0.f.kdd") {
+		t.Fatal("expected .kdd to exist after Finish")
 	}
 }
