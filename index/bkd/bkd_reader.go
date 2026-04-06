@@ -8,16 +8,15 @@ import (
 
 // leafDirEntry describes a single leaf in the BKD tree's on-disk layout.
 type leafDirEntry struct {
-	offset   uint64 // byte offset relative to leaf data start
-	numPts   int
-	minValue int64
-	maxValue int64
+	offset uint64 // byte offset into .kdd file
+	numPts int
 }
 
-// BKDReader reads a .kd file produced by BKDWriter and provides a PointTree
+// BKDReader reads a .kdm/.kdd file pair produced by BKDWriter and provides a PointTree
 // implementation for tree navigation.
 type BKDReader struct {
-	data          *store.MMapIndexInput
+	meta          *store.MMapIndexInput // .kdm file
+	data          *store.MMapIndexInput // .kdd file
 	numLeaves     int
 	numPoints     int
 	docCount      int
@@ -26,118 +25,115 @@ type BKDReader struct {
 	globalMax     int64
 	innerNodes    []innerNode    // 1-indexed, size numInnerNodes+1
 	leafDir       []leafDirEntry // size numLeaves
-	leafDataStart int            // byte offset where leaf data begins in the file
 }
 
-// OpenBKDReaderFromPath opens a .kd file directly from a directory path string.
+// OpenBKDReaderFromPath opens a BKD index from a directory path string.
 func OpenBKDReaderFromPath(dirPath, segName, field string) (*BKDReader, error) {
-	path := fmt.Sprintf("%s/%s.%s.kd", dirPath, segName, field)
-	return openBKDReaderFromFile(path, segName, field)
+	dir, err := store.NewFSDirectory(dirPath)
+	if err != nil {
+		return nil, fmt.Errorf("bkd: open directory %s: %w", dirPath, err)
+	}
+	return OpenBKDReader(dir, segName, field)
 }
 
-func openBKDReaderFromFile(path, segName, field string) (*BKDReader, error) {
-	data, err := store.OpenMMap(path)
+// OpenBKDReader opens a BKD index from a directory.
+func OpenBKDReader(dir store.Directory, segName, field string) (*BKDReader, error) {
+	metaName := fmt.Sprintf("%s.%s.kdm", segName, field)
+	dataName := fmt.Sprintf("%s.%s.kdd", segName, field)
+
+	meta, err := store.OpenMMap(dir.FilePath(metaName))
 	if err != nil {
-		return nil, fmt.Errorf("bkd: open %s.%s.kd: %w", segName, field, err)
+		return nil, fmt.Errorf("bkd: open %s: %w", metaName, err)
 	}
 
-	r := &BKDReader{data: data}
-
-	// Read header (32 bytes).
-	data.Seek(0)
-
-	_, err = data.ReadUint32() // maxPointsInLeaf (unused for reading)
+	data, err := store.OpenMMap(dir.FilePath(dataName))
 	if err != nil {
-		data.Close()
+		meta.Close()
+		return nil, fmt.Errorf("bkd: open %s: %w", dataName, err)
+	}
+
+	r := &BKDReader{meta: meta, data: data}
+
+	// Read header (32 bytes) from .kdm.
+	meta.Seek(0)
+
+	_, err = meta.ReadUint32() // maxPointsInLeaf (unused for reading)
+	if err != nil {
+		r.Close()
 		return nil, err
 	}
 
-	numLeaves, err := data.ReadUint32()
+	numLeaves, err := meta.ReadUint32()
 	if err != nil {
-		data.Close()
+		r.Close()
 		return nil, err
 	}
 	r.numLeaves = int(numLeaves)
 
-	numPoints, err := data.ReadUint32()
+	numPoints, err := meta.ReadUint32()
 	if err != nil {
-		data.Close()
+		r.Close()
 		return nil, err
 	}
 	r.numPoints = int(numPoints)
 
-	docCount, err := data.ReadUint32()
+	docCount, err := meta.ReadUint32()
 	if err != nil {
-		data.Close()
+		r.Close()
 		return nil, err
 	}
 	r.docCount = int(docCount)
 
-	globalMin, err := data.ReadUint64()
+	globalMin, err := meta.ReadUint64()
 	if err != nil {
-		data.Close()
+		r.Close()
 		return nil, err
 	}
 	r.globalMin = int64(globalMin)
 
-	globalMax, err := data.ReadUint64()
+	globalMax, err := meta.ReadUint64()
 	if err != nil {
-		data.Close()
+		r.Close()
 		return nil, err
 	}
 	r.globalMax = int64(globalMax)
 
 	r.numInnerNodes = max(r.numLeaves-1, 0)
 
-	// Read inner nodes (12 bytes each, 1-indexed).
+	// Read inner nodes (12 bytes each, 1-indexed) from .kdm.
 	r.innerNodes = make([]innerNode, r.numInnerNodes+1)
 	for i := 1; i <= r.numInnerNodes; i++ {
-		sv, err := data.ReadUint64()
+		sv, err := meta.ReadUint64()
 		if err != nil {
-			data.Close()
+			r.Close()
 			return nil, err
 		}
-		np, err := data.ReadUint32()
+		np, err := meta.ReadUint32()
 		if err != nil {
-			data.Close()
+			r.Close()
 			return nil, err
 		}
 		r.innerNodes[i] = innerNode{splitValue: int64(sv), numPoints: int(np)}
 	}
 
-	// Read leaf directory (28 bytes each).
+	// Read leaf directory (12 bytes each) from .kdm.
 	r.leafDir = make([]leafDirEntry, r.numLeaves)
 	for i := range r.numLeaves {
-		offset, err := data.ReadUint64()
+		offset, err := meta.ReadUint64()
 		if err != nil {
-			data.Close()
+			r.Close()
 			return nil, err
 		}
-		numPts, err := data.ReadUint32()
+		numPts, err := meta.ReadUint32()
 		if err != nil {
-			data.Close()
-			return nil, err
-		}
-		minVal, err := data.ReadUint64()
-		if err != nil {
-			data.Close()
-			return nil, err
-		}
-		maxVal, err := data.ReadUint64()
-		if err != nil {
-			data.Close()
+			r.Close()
 			return nil, err
 		}
 		r.leafDir[i] = leafDirEntry{
-			offset:   offset,
-			numPts:   int(numPts),
-			minValue: int64(minVal),
-			maxValue: int64(maxVal),
+			offset: offset,
+			numPts: int(numPts),
 		}
 	}
-
-	// Leaf data starts after header + inner nodes + leaf directory.
-	r.leafDataStart = 32 + r.numInnerNodes*12 + r.numLeaves*28
 
 	return r, nil
 }
@@ -168,9 +164,14 @@ func (r *BKDReader) PointTree() PointTree {
 	}
 }
 
-// Close releases the memory-mapped file.
+// Close releases the memory-mapped files.
 func (r *BKDReader) Close() error {
-	return r.data.Close()
+	err1 := r.meta.Close()
+	err2 := r.data.Close()
+	if err1 != nil {
+		return err1
+	}
+	return err2
 }
 
 // bkdPointTree implements PointTree for navigating a BKD tree.
@@ -282,7 +283,7 @@ func (t *bkdPointTree) visitSubtreeDocIDs(nodeID int, v IntersectVisitor) {
 
 func (t *bkdPointTree) visitLeafDocIDs(leafIdx int, v IntersectVisitor) {
 	leaf := t.reader.leafDir[leafIdx]
-	baseOffset := t.reader.leafDataStart + int(leaf.offset)
+	baseOffset := int(leaf.offset)
 	for j := range leaf.numPts {
 		docID, _ := t.reader.data.ReadUint32At(baseOffset + j*4)
 		v.Visit(int(docID))
@@ -311,7 +312,7 @@ func (t *bkdPointTree) visitSubtreeDocValues(nodeID int, v IntersectVisitor) {
 
 func (t *bkdPointTree) visitLeafDocValues(leafIdx int, v IntersectVisitor) {
 	leaf := t.reader.leafDir[leafIdx]
-	baseOffset := t.reader.leafDataStart + int(leaf.offset)
+	baseOffset := int(leaf.offset)
 	for j := range leaf.numPts {
 		docID, _ := t.reader.data.ReadUint32At(baseOffset + j*4)
 		value, _ := t.reader.data.ReadInt64At(baseOffset + leaf.numPts*4 + j*8)

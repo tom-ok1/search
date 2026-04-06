@@ -154,7 +154,8 @@ func MergeSegmentsToDisk(dir store.Directory, inputs []MergeInput, newName strin
 			if err := mergePointFieldToDisk(dir, newName, field, inputs, mapper); err != nil {
 				return nil, err
 			}
-			files = append(files, fmt.Sprintf("%s.%s.kd", newName, field))
+			files = append(files, fmt.Sprintf("%s.%s.kdm", newName, field))
+			files = append(files, fmt.Sprintf("%s.%s.kdd", newName, field))
 		} else {
 			if err := writeNumericDocValuesSkipIndexFromNDV(dir, newName, field, docCount); err != nil {
 				return nil, err
@@ -327,31 +328,89 @@ func mergeNumericDocValuesToDisk(dir store.Directory, segName, field string, inp
 }
 
 // mergePointFieldToDisk writes the BKD tree (.kd) for a point field during segment merge.
+// It uses streaming k-way merge: each input segment's BKD tree is read leaf-by-leaf
+// via MergeReader, merged through a min-heap, and written to a OneDimensionBKDWriter.
+// Memory usage is O(segments × MaxPointsInLeafNode) instead of O(total points).
 func mergePointFieldToDisk(dir store.Directory, segName, field string, inputs []MergeInput, mapper *DocIDMapper) error {
-	w := bkd.NewBKDWriter()
+	type readerEntry struct {
+		reader *bkd.MergeReader
+		segIdx int
+	}
 
+	var entries []readerEntry
 	for i, input := range inputs {
-		ndv := input.Segment.NumericDocValues(field)
-		if ndv == nil {
+		pv := input.Segment.PointValues(field)
+		if pv == nil {
 			continue
 		}
-		for oldDoc := 0; oldDoc < input.Segment.DocCount(); oldDoc++ {
-			if !mapper.IsLive(i, oldDoc) {
+		tree := pv.PointTree()
+		if tree.Size() == 0 {
+			continue
+		}
+		mr, err := bkd.NewMergeReader(tree)
+		if err != nil {
+			return fmt.Errorf("create MergeReader for seg %d field %s: %w", i, field, err)
+		}
+		entries = append(entries, readerEntry{reader: mr, segIdx: i})
+	}
+
+	odw, err := bkd.NewOneDimensionBKDWriter(dir, segName, field)
+	if err != nil {
+		return err
+	}
+
+	// Seed the heap: advance each reader to its first live doc.
+	var h pointHeap
+	for idx := range entries {
+		e := &entries[idx]
+		for e.reader.Next() {
+			if !mapper.IsLive(e.segIdx, e.reader.DocID()) {
 				continue
 			}
-			if !ndv.HasValue(oldDoc) {
-				continue
-			}
-			newDoc := mapper.Map(i, oldDoc)
-			v, err := ndv.Get(oldDoc)
-			if err != nil {
-				return fmt.Errorf("read numeric DV for field %s doc %d: %w", field, oldDoc, err)
-			}
-			w.Add(newDoc, v)
+			h = append(h, &pointHeapEntry{
+				value:    e.reader.Value(),
+				docID:    mapper.Map(e.segIdx, e.reader.DocID()),
+				entryIdx: idx,
+			})
+			break
 		}
 	}
 
-	return w.Finish(dir, segName, field)
+	if len(h) == 0 {
+		return odw.Finish()
+	}
+
+	heap.Init(&h)
+
+	// k-way merge loop.
+	for len(h) > 0 {
+		top := h[0]
+		if err := odw.Add(top.docID, top.value); err != nil {
+			odw.Abort()
+			return err
+		}
+
+		// Advance this reader to the next live doc.
+		e := &entries[top.entryIdx]
+		advanced := false
+		for e.reader.Next() {
+			if !mapper.IsLive(e.segIdx, e.reader.DocID()) {
+				continue
+			}
+			top.value = e.reader.Value()
+			top.docID = mapper.Map(e.segIdx, e.reader.DocID())
+			advanced = true
+			break
+		}
+
+		if advanced {
+			heap.Fix(&h, 0)
+		} else {
+			heap.Pop(&h)
+		}
+	}
+
+	return odw.Finish()
 }
 
 // mergeFieldPostingsToDisk performs k-way merge for a single field and writes
@@ -641,6 +700,34 @@ func (h sdvHeap) Less(i, j int) bool { return bytes.Compare(h[i].value, h[j].val
 func (h sdvHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
 func (h *sdvHeap) Push(x any)        { *h = append(*h, x.(*sdvHeapEntry)) }
 func (h *sdvHeap) Pop() any {
+	old := *h
+	n := len(old)
+	entry := old[n-1]
+	old[n-1] = nil
+	*h = old[:n-1]
+	return entry
+}
+
+// pointHeapEntry holds one MergeReader's current point for the k-way merge heap.
+type pointHeapEntry struct {
+	value    int64
+	docID    int
+	entryIdx int // index into the entries slice for looking up the reader and segIdx
+}
+
+// pointHeap is a min-heap ordered by (value, docID).
+type pointHeap []*pointHeapEntry
+
+func (h pointHeap) Len() int { return len(h) }
+func (h pointHeap) Less(i, j int) bool {
+	if h[i].value != h[j].value {
+		return h[i].value < h[j].value
+	}
+	return h[i].docID < h[j].docID
+}
+func (h pointHeap) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
+func (h *pointHeap) Push(x any)   { *h = append(*h, x.(*pointHeapEntry)) }
+func (h *pointHeap) Pop() any {
 	old := *h
 	n := len(old)
 	entry := old[n-1]

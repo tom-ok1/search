@@ -1,7 +1,6 @@
 package index
 
 import (
-	"encoding/binary"
 	"gosearch/store"
 )
 
@@ -107,9 +106,6 @@ func (pd *PendingDeletes) WriteLiveDocs(dir store.Directory) (string, error) {
 	}
 
 	bitmapBytes := liveDocs.Bytes()
-	data := make([]byte, 4+len(bitmapBytes))
-	binary.LittleEndian.PutUint32(data[0:], uint32(pd.info.MaxDoc))
-	copy(data[4:], bitmapBytes)
 
 	delFileName := pd.info.Name + ".del"
 	out, err := dir.CreateOutput(delFileName)
@@ -117,7 +113,10 @@ func (pd *PendingDeletes) WriteLiveDocs(dir store.Directory) (string, error) {
 		return "", err
 	}
 	defer out.Close()
-	if _, err := out.Write(data); err != nil {
+	if err := out.WriteUint32(uint32(pd.info.MaxDoc)); err != nil {
+		return "", err
+	}
+	if _, err := out.Write(bitmapBytes); err != nil {
 		return "", err
 	}
 

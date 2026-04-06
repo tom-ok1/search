@@ -1,6 +1,7 @@
 package index
 
 import (
+	"fmt"
 	"testing"
 
 	"gosearch/analysis"
@@ -1068,6 +1069,62 @@ func TestNumericDocValuesSparseNonPointFieldMerge(t *testing.T) {
 	}
 
 	writer.Close()
+}
+
+func TestPointFieldMerge_LargeWithDeletions(t *testing.T) {
+	dir := createTempDir(t)
+
+	writer := NewIndexWriter(dir, analysis.NewFieldAnalyzers(analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{})), 500)
+
+	for i := range 2000 {
+		doc := document.NewDocument()
+		doc.AddLongPoint("score", int64(i))
+		doc.AddField("id", fmt.Sprintf("%d", i), document.FieldTypeKeyword)
+		writer.AddDocument(doc)
+	}
+	if err := writer.Commit(); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+
+	for i := 1; i < 2000; i += 2 {
+		writer.DeleteDocuments("id", fmt.Sprintf("%d", i))
+	}
+	if err := writer.Commit(); err != nil {
+		t.Fatalf("Commit after delete: %v", err)
+	}
+
+	if err := writer.ForceMerge(1); err != nil {
+		t.Fatalf("ForceMerge: %v", err)
+	}
+	if err := writer.Commit(); err != nil {
+		t.Fatalf("Commit after merge: %v", err)
+	}
+
+	reader, err := OpenDirectoryReader(dir)
+	if err != nil {
+		t.Fatalf("OpenDirectoryReader: %v", err)
+	}
+	defer reader.Close()
+
+	if len(reader.Leaves()) != 1 {
+		t.Fatalf("expected 1 leaf, got %d", len(reader.Leaves()))
+	}
+
+	seg := reader.Leaves()[0].Segment
+	ndv := seg.NumericDocValues("score")
+	if ndv == nil {
+		t.Fatal("expected non-nil NumericDocValues after merge")
+	}
+
+	count := 0
+	for d := 0; d < seg.DocCount(); d++ {
+		if ndv.HasValue(d) {
+			count++
+		}
+	}
+	if count != 1000 {
+		t.Fatalf("docs with score = %d, want 1000", count)
+	}
 }
 
 func createTempDir(t *testing.T) store.Directory {
