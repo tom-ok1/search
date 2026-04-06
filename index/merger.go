@@ -464,11 +464,16 @@ func mergeFieldPostingsToDisk(
 	var postings []Posting
 	termBuf := &bytes.Buffer{}
 
+	// Flat arena for position data, reused across terms.
+	// Each Posting.Positions is a sub-slice of this arena.
+	var posArena []int
+
 	for h.Len() > 0 {
 		currentTerm := h[0].term
 
 		// Collect postings from all segments that have this term.
 		postings = postings[:0]
+		posArena = posArena[:0]
 		for h.Len() > 0 && h[0].term == currentTerm {
 			entry := h[0]
 			i := entry.inputIdx
@@ -479,10 +484,13 @@ func mergeFieldPostingsToDisk(
 				if !mapper.IsLive(i, oldDoc) {
 					continue
 				}
+				positions := pi.Positions()
+				posStart := len(posArena)
+				posArena = append(posArena, positions...)
 				postings = append(postings, Posting{
 					DocID:     mapper.Map(i, oldDoc),
 					Freq:      pi.Freq(),
-					Positions: pi.Positions(),
+					Positions: posArena[posStart : posStart+len(positions)],
 				})
 			}
 

@@ -92,6 +92,9 @@ func (EmptyPostingsIterator) Advance(int) bool { return false }
 // ---------------------------------------------------------------------------
 
 // DiskPostingsIterator reads postings from a mmap'd .tdat slice using delta decoding.
+//
+// The slice returned by Positions() is reused across Next() calls.
+// Callers that need positions to outlive the next Next() call must copy the slice.
 type DiskPostingsIterator struct {
 	input     *store.MMapIndexInput
 	remaining int // remaining postings to read
@@ -130,7 +133,12 @@ func (it *DiskPostingsIterator) Next() bool {
 		it.remaining = 0
 		return false
 	}
-	it.positions = make([]int, posCount)
+	// Reuse the positions slice capacity to reduce allocations.
+	if posCount <= cap(it.positions) {
+		it.positions = it.positions[:posCount]
+	} else {
+		it.positions = make([]int, posCount)
+	}
 	prevPos := 0
 	for i := range posCount {
 		posDelta, err := it.input.ReadVInt()

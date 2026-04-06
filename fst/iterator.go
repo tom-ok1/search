@@ -2,9 +2,9 @@ package fst
 
 // iterFrame holds the DFS traversal state for one node.
 type iterFrame struct {
-	nodeAddr int64  // byte offset of the current node
-	arcIdx   int    // which arc we're currently processing within this node
-	output   uint64 // accumulated output up to (but not including) arcs at this node
+	arcs   []arcInfo // cached arcs for this node (read once per node visit)
+	arcIdx int       // which arc we're currently processing within this node
+	output uint64    // accumulated output up to (but not including) arcs at this node
 }
 
 // FSTIterator performs a depth-first traversal of an FST, yielding all
@@ -39,11 +39,7 @@ func (it *FSTIterator) Next() bool {
 	if !it.inited {
 		it.inited = true
 		// Push the root node
-		it.stack = append(it.stack, iterFrame{
-			nodeAddr: it.fst.startNode,
-			arcIdx:   0,
-			output:   0,
-		})
+		it.pushFrame(it.fst.startNode, 0)
 		return it.advance()
 	}
 
@@ -60,13 +56,32 @@ func (it *FSTIterator) Value() uint64 {
 	return it.output
 }
 
+// pushFrame reads arcs for the given node and pushes a new frame onto the stack.
+func (it *FSTIterator) pushFrame(nodeAddr int64, output uint64) {
+	arcs := it.fst.readArcsAt(nodeAddr)
+	n := len(it.stack)
+	if n < cap(it.stack) {
+		// Reuse existing frame slot to avoid allocation.
+		it.stack = it.stack[:n+1]
+		frame := &it.stack[n]
+		frame.arcs = arcs
+		frame.arcIdx = 0
+		frame.output = output
+	} else {
+		it.stack = append(it.stack, iterFrame{
+			arcs:   arcs,
+			arcIdx: 0,
+			output: output,
+		})
+	}
+}
+
 // advance performs DFS to find the next final state.
 func (it *FSTIterator) advance() bool {
 	for len(it.stack) > 0 {
 		frame := &it.stack[len(it.stack)-1]
-		arcs := it.fst.readArcsAt(frame.nodeAddr)
 
-		if frame.arcIdx >= len(arcs) {
+		if frame.arcIdx >= len(frame.arcs) {
 			// Pop this frame
 			it.stack = it.stack[:len(it.stack)-1]
 			if len(it.key) > 0 {
@@ -75,7 +90,7 @@ func (it *FSTIterator) advance() bool {
 			continue
 		}
 
-		arc := arcs[frame.arcIdx]
+		arc := frame.arcs[frame.arcIdx]
 		frame.arcIdx++
 
 		if arc.isFinal {
@@ -87,11 +102,7 @@ func (it *FSTIterator) advance() bool {
 		// Regular arc: push target node and continue DFS
 		it.key = append(it.key, arc.label)
 		accumulated := outputAdd(frame.output, arc.output)
-		it.stack = append(it.stack, iterFrame{
-			nodeAddr: arc.target,
-			arcIdx:   0,
-			output:   accumulated,
-		})
+		it.pushFrame(arc.target, accumulated)
 	}
 
 	it.done = true
