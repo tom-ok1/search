@@ -154,7 +154,8 @@ func MergeSegmentsToDisk(dir store.Directory, inputs []MergeInput, newName strin
 			if err := mergePointFieldToDisk(dir, newName, field, inputs, mapper); err != nil {
 				return nil, err
 			}
-			files = append(files, fmt.Sprintf("%s.%s.kd", newName, field))
+			files = append(files, fmt.Sprintf("%s.%s.kdm", newName, field))
+			files = append(files, fmt.Sprintf("%s.%s.kdd", newName, field))
 		} else {
 			if err := writeNumericDocValuesSkipIndexFromNDV(dir, newName, field, docCount); err != nil {
 				return nil, err
@@ -357,7 +358,6 @@ func mergePointFieldToDisk(dir store.Directory, segName, field string, inputs []
 	if err != nil {
 		return err
 	}
-	defer odw.Abort()
 
 	// Seed the heap: advance each reader to its first live doc.
 	var h pointHeap
@@ -386,6 +386,7 @@ func mergePointFieldToDisk(dir store.Directory, segName, field string, inputs []
 	for len(h) > 0 {
 		top := h[0]
 		if err := odw.Add(top.docID, top.value); err != nil {
+			odw.Abort()
 			return err
 		}
 

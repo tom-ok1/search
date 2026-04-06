@@ -27,6 +27,15 @@ type BKDReader struct {
 	leafDir       []leafDirEntry // size numLeaves
 }
 
+// OpenBKDReaderFromPath opens a BKD index from a directory path string.
+func OpenBKDReaderFromPath(dirPath, segName, field string) (*BKDReader, error) {
+	dir, err := store.NewFSDirectory(dirPath)
+	if err != nil {
+		return nil, fmt.Errorf("bkd: open directory %s: %w", dirPath, err)
+	}
+	return OpenBKDReader(dir, segName, field)
+}
+
 // OpenBKDReader opens a BKD index from a directory.
 func OpenBKDReader(dir store.Directory, segName, field string) (*BKDReader, error) {
 	metaName := fmt.Sprintf("%s.%s.kdm", segName, field)
