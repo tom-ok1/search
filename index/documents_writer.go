@@ -18,6 +18,8 @@ type DocumentsWriter struct {
 	ticketQueue  *FlushTicketQueue
 	deleteQueue  *DeleteQueue
 	dir          store.Directory
+	infoStream   InfoStream
+	metrics      *IndexWriterMetrics
 	// onSegmentFlushed is called when a segment is flushed to disk.
 	onSegmentFlushed func(info *SegmentCommitInfo)
 	// onGlobalUpdates is called when frozen global deletes need cross-segment application.
@@ -33,7 +35,14 @@ func newDocumentsWriter(dir store.Directory, fieldAnalyzers *analysis.FieldAnaly
 		ticketQueue:  newFlushTicketQueue(),
 		deleteQueue:  deleteQueue,
 		dir:          dir,
+		infoStream:   &NoOpInfoStream{},
 	}
+}
+
+// setInfoStream sets the InfoStream for diagnostic logging.
+func (dw *DocumentsWriter) setInfoStream(infoStream InfoStream) {
+	dw.infoStream = infoStream
+	dw.flushControl.infoStream = infoStream
 }
 
 // addDocument indexes a document concurrently. The caller does not need to hold any lock.
@@ -45,6 +54,9 @@ func (dw *DocumentsWriter) addDocument(doc *document.Document) error {
 	if err != nil {
 		dw.pool.returnAndUnlock(dwpt)
 		return err
+	}
+	if dw.metrics != nil {
+		dw.metrics.DocsAdded.Add(1)
 	}
 
 	flushPending := dw.flushControl.doAfterDocument(dwpt, bytesAdded)

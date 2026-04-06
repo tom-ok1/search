@@ -24,6 +24,8 @@ type IndexWriter struct {
 	mergePolicy    MergePolicy
 	docWriter      *DocumentsWriter
 	fileDeleter    *FileDeleter
+	infoStream     InfoStream
+	metrics        *IndexWriterMetrics
 }
 
 // NewIndexWriter creates a new IndexWriter. bufferSize controls the approximate
@@ -35,6 +37,8 @@ func NewIndexWriter(dir store.Directory, fieldAnalyzers *analysis.FieldAnalyzers
 		fieldAnalyzers: fieldAnalyzers,
 		readerMap:      make(map[string]*ReadersAndUpdates),
 		fileDeleter:    NewFileDeleter(dir),
+		infoStream:     &NoOpInfoStream{},
+		metrics:        &IndexWriterMetrics{},
 	}
 
 	// Try to load existing committed state from the directory.
@@ -69,6 +73,8 @@ func NewIndexWriter(dir store.Directory, fieldAnalyzers *analysis.FieldAnalyzers
 	w.docWriter = newDocumentsWriter(dir, fieldAnalyzers, defaultRAMBufferSize, bufferSize, func() string {
 		return w.nextSegmentName()
 	})
+	w.docWriter.metrics = w.metrics
+	w.docWriter.flushControl.metrics = w.metrics
 	w.docWriter.onSegmentFlushed = func(info *SegmentCommitInfo) {
 		w.mu.Lock()
 		defer w.mu.Unlock()
@@ -89,6 +95,19 @@ func (w *IndexWriter) SetMergePolicy(policy MergePolicy) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.mergePolicy = policy
+}
+
+// SetInfoStream sets the InfoStream for diagnostic logging.
+func (w *IndexWriter) SetInfoStream(infoStream InfoStream) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.infoStream = infoStream
+	w.docWriter.setInfoStream(infoStream)
+}
+
+// Metrics returns the IndexWriterMetrics for monitoring.
+func (w *IndexWriter) Metrics() *IndexWriterMetrics {
+	return w.metrics
 }
 
 // autoMerge runs the merge policy if one is configured.

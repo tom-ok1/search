@@ -16,6 +16,8 @@ type FlushControl struct {
 	stalled         bool
 	flushQueue      []*DocumentsWriterPerThread
 	pool            *perThreadPool
+	infoStream      InfoStream
+	metrics         *IndexWriterMetrics
 }
 
 func newFlushControl(ramBufferSize int64, maxBufferedDocs int, pool *perThreadPool) *FlushControl {
@@ -24,6 +26,7 @@ func newFlushControl(ramBufferSize int64, maxBufferedDocs int, pool *perThreadPo
 		maxBufferedDocs: maxBufferedDocs,
 		stallLimit:      2 * ramBufferSize,
 		pool:            pool,
+		infoStream:      &NoOpInfoStream{},
 	}
 	fc.stallCond = sync.NewCond(&fc.mu)
 	return fc
