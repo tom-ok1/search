@@ -142,8 +142,8 @@ func TestAddLongPoint(t *testing.T) {
 	if field.Type != FieldTypeLongPoint {
 		t.Errorf("field type = %v, want FieldTypeLongPoint", field.Type)
 	}
-	if field.NumericValue != 42 {
-		t.Errorf("numeric value = %d, want 42", field.NumericValue)
+	if field.Value.(int64) != 42 {
+		t.Errorf("numeric value = %d, want 42", field.Value.(int64))
 	}
 }
 
@@ -164,7 +164,7 @@ func TestAddDoublePoint(t *testing.T) {
 	}
 
 	// Verify the stored value can be decoded back to original
-	decoded := SortableLongToDouble(field.NumericValue)
+	decoded := SortableLongToDouble(field.Value.(int64))
 	if decoded != 3.14 {
 		t.Errorf("decoded value = %v, want 3.14", decoded)
 	}

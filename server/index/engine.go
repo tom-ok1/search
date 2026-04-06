@@ -354,17 +354,17 @@ func (e *Engine) loadSeqNoFromIndex(id string) (int64, int64, bool) {
 // Flush flushes buffered documents, syncs the translog, rolls the generation,
 // and trims unreferenced readers.
 func (e *Engine) Flush() error {
-	if err := e.writer.Flush(); err != nil {
+	if e.translog != nil {
+		if err := e.translog.RollGeneration(); err != nil {
+			return fmt.Errorf("translog roll: %w", err)
+		}
+	}
+
+	if err := e.writer.Commit(); err != nil {
 		return err
 	}
 
 	if e.translog != nil {
-		if err := e.translog.Sync(); err != nil {
-			return fmt.Errorf("translog sync: %w", err)
-		}
-		if err := e.translog.RollGeneration(); err != nil {
-			return fmt.Errorf("translog roll: %w", err)
-		}
 		e.translog.SetMinRequiredGeneration(e.translog.CurrentGeneration())
 		if err := e.translog.TrimUnreferencedReaders(); err != nil {
 			return fmt.Errorf("translog trim: %w", err)

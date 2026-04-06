@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bufio"
 	"encoding/binary"
 	"io"
 	"os"
@@ -24,7 +25,7 @@ func (d *FSDirectory) CreateOutput(name string) (IndexOutput, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &fsIndexOutput{file: f}, nil
+	return &fsIndexOutput{file: f, buf: bufio.NewWriter(f)}, nil
 }
 
 func (d *FSDirectory) OpenInput(name string) (IndexInput, error) {
@@ -92,41 +93,45 @@ func (d *FSDirectory) Rename(source, dest string) error {
 
 type fsIndexOutput struct {
 	file *os.File
+	buf  *bufio.Writer
 }
 
 func (o *fsIndexOutput) Write(p []byte) (int, error) {
-	return o.file.Write(p)
+	return o.buf.Write(p)
 }
 
 func (o *fsIndexOutput) WriteVInt(v int) error {
 	var buf [binary.MaxVarintLen64]byte
 	n := binary.PutUvarint(buf[:], uint64(v))
-	_, err := o.file.Write(buf[:n])
+	_, err := o.buf.Write(buf[:n])
 	return err
 }
 
 func (o *fsIndexOutput) WriteUint16(v uint16) error {
 	var buf [2]byte
 	binary.LittleEndian.PutUint16(buf[:], v)
-	_, err := o.file.Write(buf[:])
+	_, err := o.buf.Write(buf[:])
 	return err
 }
 
 func (o *fsIndexOutput) WriteUint32(v uint32) error {
 	var buf [4]byte
 	binary.LittleEndian.PutUint32(buf[:], v)
-	_, err := o.file.Write(buf[:])
+	_, err := o.buf.Write(buf[:])
 	return err
 }
 
 func (o *fsIndexOutput) WriteUint64(v uint64) error {
 	var buf [8]byte
 	binary.LittleEndian.PutUint64(buf[:], v)
-	_, err := o.file.Write(buf[:])
+	_, err := o.buf.Write(buf[:])
 	return err
 }
 
 func (o *fsIndexOutput) Close() error {
+	if err := o.buf.Flush(); err != nil {
+		return err
+	}
 	return o.file.Close()
 }
 

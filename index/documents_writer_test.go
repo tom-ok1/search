@@ -144,6 +144,97 @@ func TestDocumentsWriterFlushAllThreads(t *testing.T) {
 	}
 }
 
+// TestDocumentsWriterFlushQueueDrained verifies that DWPTs added to the
+// flush queue during addDocument are properly dequeued and released.
+// Before the fix, doAfterDocument appended DWPTs to flushQueue but
+// addDocument never called nextPendingFlush, causing a memory leak.
+func TestDocumentsWriterFlushQueueDrained(t *testing.T) {
+	dir, _ := store.NewFSDirectory(t.TempDir())
+	var counter atomic.Int32
+
+	// Use a small RAM buffer to trigger multiple flushes.
+	dw := newDocumentsWriter(dir, newTestFieldAnalyzers(), 200, 0, func() string {
+		n := counter.Add(1)
+		return fmt.Sprintf("_seg%d", n)
+	})
+	var flushedCount atomic.Int32
+	dw.onSegmentFlushed = func(info *SegmentCommitInfo) {
+		flushedCount.Add(1)
+	}
+
+	for i := range 50 {
+		doc := document.NewDocument()
+		doc.AddField("body", fmt.Sprintf("document %d with enough text to accumulate bytes and trigger flush", i), document.FieldTypeText)
+		if err := dw.addDocument(doc); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if flushedCount.Load() == 0 {
+		t.Fatal("test setup error: expected at least one flush to have been triggered")
+	}
+
+	// The flush queue must be empty — every DWPT that was enqueued should
+	// have been dequeued by nextPendingFlush inside addDocument.
+	if pending := dw.flushControl.nextPendingFlush(); pending != nil {
+		t.Fatalf("flush queue is not empty: found a leaked DWPT (segment %s)", pending.segment.name)
+	}
+}
+
+// TestDocumentsWriterFlushQueueDrainedConcurrent verifies the flush queue
+// is properly drained when multiple goroutines add documents concurrently,
+// triggering flushes in parallel.
+func TestDocumentsWriterFlushQueueDrainedConcurrent(t *testing.T) {
+	dir, _ := store.NewFSDirectory(t.TempDir())
+	var counter atomic.Int32
+
+	dw := newDocumentsWriter(dir, newTestFieldAnalyzers(), 500, 0, func() string {
+		n := counter.Add(1)
+		return fmt.Sprintf("_seg%d", n)
+	})
+	var flushedCount atomic.Int32
+	dw.onSegmentFlushed = func(info *SegmentCommitInfo) {
+		flushedCount.Add(1)
+	}
+
+	const goroutines = 8
+	const docsPerGoroutine = 200
+	var wg sync.WaitGroup
+
+	for g := range goroutines {
+		wg.Add(1)
+		go func(gid int) {
+			defer wg.Done()
+			for i := range docsPerGoroutine {
+				doc := document.NewDocument()
+				doc.AddField("body", fmt.Sprintf("goroutine %d document %d with text to generate bytes", gid, i), document.FieldTypeText)
+				if err := dw.addDocument(doc); err != nil {
+					t.Errorf("addDocument error: %v", err)
+					return
+				}
+			}
+		}(g)
+	}
+	wg.Wait()
+
+	if flushedCount.Load() == 0 {
+		t.Fatal("test setup error: expected at least one flush to have been triggered")
+	}
+
+	// Drain must have happened during addDocument — queue should be empty.
+	if pending := dw.flushControl.nextPendingFlush(); pending != nil {
+		t.Fatalf("flush queue is not empty after concurrent adds: leaked DWPT (segment %s)", pending.segment.name)
+	}
+
+	// Pool active map should have no stale entries for flushed DWPTs.
+	dw.pool.mu.Lock()
+	activeCount := len(dw.pool.active)
+	dw.pool.mu.Unlock()
+	if activeCount != 0 {
+		t.Errorf("expected 0 active DWPTs after all goroutines finished, got %d", activeCount)
+	}
+}
+
 func TestDocumentsWriterDeleteDocuments(t *testing.T) {
 	dir, _ := store.NewFSDirectory(t.TempDir())
 	var counter atomic.Int32
@@ -181,5 +272,37 @@ func TestDocumentsWriterDeleteDocuments(t *testing.T) {
 	frozen2 := dw.freezeGlobalBuffer()
 	if frozen2 != nil {
 		t.Errorf("expected nil frozen updates after second freeze, got %+v", frozen2)
+	}
+}
+
+func TestDoFlush_NilsSegment(t *testing.T) {
+	dir, err := store.NewFSDirectory(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	fa := newTestFieldAnalyzers()
+	dq := newDeleteQueue()
+	dwpt := newDWPT("_seg0", fa, dq)
+
+	for i := range 5 {
+		doc := document.NewDocument()
+		doc.AddField("body", fmt.Sprintf("word%d", i), document.FieldTypeText)
+		dwpt.addDocument(doc)
+	}
+
+	if dwpt.segment == nil {
+		t.Fatal("segment should not be nil before flush")
+	}
+	if dwpt.segment.docCount != 5 {
+		t.Fatalf("expected 5 docs, got %d", dwpt.segment.docCount)
+	}
+
+	_, err = dwpt.flush(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if dwpt.segment != nil {
+		t.Error("segment should be nil after flush to release memory")
 	}
 }

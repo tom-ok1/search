@@ -1,7 +1,9 @@
 package index
 
 import (
+	"fmt"
 	"sync"
+	"time"
 
 	"gosearch/analysis"
 	"gosearch/document"
@@ -18,6 +20,8 @@ type DocumentsWriter struct {
 	ticketQueue  *FlushTicketQueue
 	deleteQueue  *DeleteQueue
 	dir          store.Directory
+	infoStream   InfoStream
+	metrics      *IndexWriterMetrics
 	// onSegmentFlushed is called when a segment is flushed to disk.
 	onSegmentFlushed func(info *SegmentCommitInfo)
 	// onGlobalUpdates is called when frozen global deletes need cross-segment application.
@@ -33,7 +37,14 @@ func newDocumentsWriter(dir store.Directory, fieldAnalyzers *analysis.FieldAnaly
 		ticketQueue:  newFlushTicketQueue(),
 		deleteQueue:  deleteQueue,
 		dir:          dir,
+		infoStream:   &NoOpInfoStream{},
 	}
+}
+
+// setInfoStream sets the InfoStream for diagnostic logging.
+func (dw *DocumentsWriter) setInfoStream(infoStream InfoStream) {
+	dw.infoStream = infoStream
+	dw.flushControl.infoStream = infoStream
 }
 
 // addDocument indexes a document concurrently. The caller does not need to hold any lock.
@@ -46,15 +57,26 @@ func (dw *DocumentsWriter) addDocument(doc *document.Document) error {
 		dw.pool.returnAndUnlock(dwpt)
 		return err
 	}
+	if dw.metrics != nil {
+		dw.metrics.DocsAdded.Add(1)
+	}
 
-	flushDWPT := dw.flushControl.doAfterDocument(dwpt, bytesAdded)
-	if flushDWPT != nil {
-		dw.pool.remove(flushDWPT)
-		if err := dw.doFlush(flushDWPT); err != nil {
+	flushPending := dw.flushControl.doAfterDocument(dwpt, bytesAdded)
+	if !flushPending {
+		dw.pool.returnAndUnlock(dwpt)
+	}
+
+	// Drain the flush queue. The current DWPT (if flush-pending) and any
+	// other pending DWPTs are dequeued and flushed here, ensuring that
+	// every DWPT added to the queue is properly released.
+	for {
+		toFlush := dw.flushControl.nextPendingFlush()
+		if toFlush == nil {
+			break
+		}
+		if err := dw.doFlush(toFlush); err != nil {
 			return err
 		}
-	} else {
-		dw.pool.returnAndUnlock(dwpt)
 	}
 
 	if err := dw.publishFlushedSegments(); err != nil {
@@ -67,12 +89,33 @@ func (dw *DocumentsWriter) addDocument(doc *document.Document) error {
 func (dw *DocumentsWriter) doFlush(dwpt *DocumentsWriterPerThread) error {
 	ticket := dw.ticketQueue.addTicket()
 	globalUpdates := dwpt.prepareFlush()
+
+	start := time.Now()
 	info, err := dwpt.flush(dw.dir)
+	elapsed := time.Since(start)
+
 	dw.flushControl.doAfterFlush(dwpt)
 	dw.ticketQueue.markDone(ticket, info, globalUpdates, err)
+
 	if err != nil {
 		return err
 	}
+
+	if dw.metrics != nil {
+		dw.metrics.FlushCount.Add(1)
+		dw.metrics.FlushTimeNanos.Add(elapsed.Nanoseconds())
+		if info != nil {
+			dw.metrics.FlushBytes.Add(dwpt.estimateBytesUsed())
+		}
+	}
+	if dw.infoStream.IsEnabled("DWPT") && info != nil {
+		dw.infoStream.Message("DWPT", fmt.Sprintf(
+			"flush %s: %d docs, %.1f MB, took %dms",
+			info.Name, info.MaxDoc,
+			float64(dwpt.estimateBytesUsed())/(1024*1024),
+			elapsed.Milliseconds()))
+	}
+
 	return nil
 }
 

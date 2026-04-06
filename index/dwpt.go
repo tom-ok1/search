@@ -42,7 +42,8 @@ func (dwpt *DocumentsWriterPerThread) addDocument(doc *document.Document) (int64
 	for _, field := range doc.Fields {
 		switch field.Type {
 		case document.FieldTypeText:
-			tokens, err := dwpt.fieldAnalyzers.AnalyzeField(field.Name, field.Value)
+			strVal := field.Value.(string)
+			tokens, err := dwpt.fieldAnalyzers.AnalyzeField(field.Name, strVal)
 			if err != nil {
 				return 0, err
 			}
@@ -80,23 +81,25 @@ func (dwpt *DocumentsWriterPerThread) addDocument(doc *document.Document) (int64
 			}
 
 		case document.FieldTypeKeyword:
+			strVal := field.Value.(string)
 			fi := dwpt.getOrCreateFieldIndex(field.Name)
-			pl, exists := fi.postings[field.Value]
+			pl, exists := fi.postings[strVal]
 			if !exists {
-				pl = &PostingsList{Term: field.Value}
-				fi.postings[field.Value] = pl
+				pl = &PostingsList{Term: strVal}
+				fi.postings[strVal] = pl
 			}
 			pl.Postings = append(pl.Postings, Posting{
 				DocID: docID, Freq: 1, Positions: []int{0},
 			})
-			bytesAdded += int64(len(field.Value) + 16 + 8)
+			bytesAdded += int64(len(strVal) + 16 + 8)
 
 		case document.FieldTypeNumericDocValues:
+			numVal := field.Value.(int64)
 			vals := seg.numericDocValues[field.Name]
 			if len(vals) <= docID {
 				vals = append(vals, make([]int64, docID+1-len(vals))...)
 			}
-			vals[docID] = field.NumericValue
+			vals[docID] = numVal
 			seg.numericDocValues[field.Name] = vals
 			if seg.numericDocIDs[field.Name] == nil {
 				seg.numericDocIDs[field.Name] = make(map[int]struct{})
@@ -105,20 +108,22 @@ func (dwpt *DocumentsWriterPerThread) addDocument(doc *document.Document) (int64
 			bytesAdded += 8
 
 		case document.FieldTypeSortedDocValues:
+			strVal := field.Value.(string)
 			svals := seg.sortedDocValues[field.Name]
 			if len(svals) <= docID {
 				svals = append(svals, make([]string, docID+1-len(svals))...)
 			}
-			svals[docID] = field.Value
+			svals[docID] = strVal
 			seg.sortedDocValues[field.Name] = svals
-			bytesAdded += int64(len(field.Value))
+			bytesAdded += int64(len(strVal))
 
 		case document.FieldTypeLongPoint, document.FieldTypeDoublePoint:
+			numVal := field.Value.(int64)
 			vals := seg.numericDocValues[field.Name]
 			if len(vals) <= docID {
 				vals = append(vals, make([]int64, docID+1-len(vals))...)
 			}
-			vals[docID] = field.NumericValue
+			vals[docID] = numVal
 			seg.numericDocValues[field.Name] = vals
 			seg.pointFields[field.Name] = struct{}{}
 			if seg.numericDocIDs[field.Name] == nil {
@@ -134,10 +139,11 @@ func (dwpt *DocumentsWriterPerThread) addDocument(doc *document.Document) (int64
 				seg.storedFields[docID] = make(map[string][]byte)
 			}
 			var storedValue []byte
-			if field.BytesValue != nil {
-				storedValue = field.BytesValue
-			} else {
-				storedValue = []byte(field.Value)
+			switch v := field.Value.(type) {
+			case []byte:
+				storedValue = v
+			case string:
+				storedValue = []byte(v)
 			}
 			seg.storedFields[docID][field.Name] = storedValue
 			bytesAdded += int64(len(field.Name) + len(storedValue))
@@ -186,6 +192,7 @@ func (dwpt *DocumentsWriterPerThread) flush(dir store.Directory) (*SegmentCommit
 	}
 
 	if !dwpt.pendingUpdates.any() {
+		dwpt.segment = nil // release InMemorySegment for GC
 		return info, nil
 	}
 
@@ -195,6 +202,7 @@ func (dwpt *DocumentsWriterPerThread) flush(dir store.Directory) (*SegmentCommit
 	}
 	dwpt.pendingUpdates.clear()
 
+	dwpt.segment = nil // release InMemorySegment for GC
 	return info, nil
 }
 

@@ -1,6 +1,10 @@
 package index
 
-import "sync"
+import (
+	"fmt"
+	"sync"
+	"time"
+)
 
 // FlushControl tracks RAM usage across all DWPTs and decides when to flush.
 // It also implements backpressure by stalling indexing goroutines when
@@ -16,6 +20,8 @@ type FlushControl struct {
 	stalled         bool
 	flushQueue      []*DocumentsWriterPerThread
 	pool            *perThreadPool
+	infoStream      InfoStream
+	metrics         *IndexWriterMetrics
 }
 
 func newFlushControl(ramBufferSize int64, maxBufferedDocs int, pool *perThreadPool) *FlushControl {
@@ -24,6 +30,7 @@ func newFlushControl(ramBufferSize int64, maxBufferedDocs int, pool *perThreadPo
 		maxBufferedDocs: maxBufferedDocs,
 		stallLimit:      2 * ramBufferSize,
 		pool:            pool,
+		infoStream:      &NoOpInfoStream{},
 	}
 	fc.stallCond = sync.NewCond(&fc.mu)
 	return fc
@@ -31,13 +38,17 @@ func newFlushControl(ramBufferSize int64, maxBufferedDocs int, pool *perThreadPo
 
 // doAfterDocument is called after a document is indexed.
 // If total active bytes exceed the RAM buffer threshold or the DWPT has
-// reached the max buffered doc count, the DWPT is marked as flush-pending.
-// Returns the DWPT if it should be flushed, or nil otherwise.
-func (fc *FlushControl) doAfterDocument(dwpt *DocumentsWriterPerThread, bytesAdded int64) *DocumentsWriterPerThread {
+// reached the max buffered doc count, the DWPT is marked as flush-pending
+// and added to the flush queue. Returns true if the DWPT is now flush-pending
+// (and should NOT be returned to the free pool by the caller).
+func (fc *FlushControl) doAfterDocument(dwpt *DocumentsWriterPerThread, bytesAdded int64) bool {
 	fc.mu.Lock()
 	defer fc.mu.Unlock()
 
 	fc.activeBytes += bytesAdded
+	if fc.metrics != nil {
+		fc.metrics.ActiveBytes.Store(fc.activeBytes)
+	}
 
 	shouldFlush := false
 	if fc.activeBytes >= fc.ramBufferSize && !dwpt.flushPending {
@@ -53,18 +64,29 @@ func (fc *FlushControl) doAfterDocument(dwpt *DocumentsWriterPerThread, bytesAdd
 		fc.activeBytes -= dwptBytes
 		fc.flushBytes += dwptBytes
 		fc.flushQueue = append(fc.flushQueue, dwpt)
+		if fc.metrics != nil {
+			fc.metrics.FlushPendingBytes.Store(fc.flushBytes)
+			fc.metrics.ActiveBytes.Store(fc.activeBytes)
+		}
+		if fc.infoStream.IsEnabled("DWFC") {
+			fc.infoStream.Message("DWFC", fmt.Sprintf(
+				"flush triggered: ramBytes=%.1f MB > limit=%.1f MB",
+				float64(fc.activeBytes+fc.flushBytes)/(1024*1024),
+				float64(fc.ramBufferSize)/(1024*1024)))
+		}
 
 		if fc.activeBytes+fc.flushBytes >= fc.stallLimit {
 			fc.stalled = true
 		}
 
-		return dwpt
+		return true
 	}
 
-	return nil
+	return false
 }
 
 // nextPendingFlush returns the next DWPT that needs flushing, or nil.
+// The DWPT is dequeued from the flush queue and removed from the pool.
 func (fc *FlushControl) nextPendingFlush() *DocumentsWriterPerThread {
 	fc.mu.Lock()
 	defer fc.mu.Unlock()
@@ -74,6 +96,7 @@ func (fc *FlushControl) nextPendingFlush() *DocumentsWriterPerThread {
 	}
 	dwpt := fc.flushQueue[0]
 	fc.flushQueue = fc.flushQueue[1:]
+	fc.pool.remove(dwpt)
 	return dwpt
 }
 
@@ -87,6 +110,9 @@ func (fc *FlushControl) doAfterFlush(dwpt *DocumentsWriterPerThread) {
 	if fc.flushBytes < 0 {
 		fc.flushBytes = 0
 	}
+	if fc.metrics != nil {
+		fc.metrics.FlushPendingBytes.Store(fc.flushBytes)
+	}
 
 	if fc.stalled && fc.activeBytes+fc.flushBytes < fc.stallLimit {
 		fc.stalled = false
@@ -99,8 +125,31 @@ func (fc *FlushControl) waitIfStalled() {
 	fc.mu.Lock()
 	defer fc.mu.Unlock()
 
+	if !fc.stalled {
+		return
+	}
+
+	if fc.metrics != nil {
+		fc.metrics.StallCount.Add(1)
+	}
+	if fc.infoStream.IsEnabled("DW") {
+		fc.infoStream.Message("DW", fmt.Sprintf(
+			"now stalling: activeBytes=%.1f MB flushBytes=%.1f MB",
+			float64(fc.activeBytes)/(1024*1024),
+			float64(fc.flushBytes)/(1024*1024)))
+	}
+
+	start := time.Now()
 	for fc.stalled {
 		fc.stallCond.Wait()
+	}
+	elapsed := time.Since(start)
+
+	if fc.metrics != nil {
+		fc.metrics.StallTimeNanos.Add(elapsed.Nanoseconds())
+	}
+	if fc.infoStream.IsEnabled("DW") {
+		fc.infoStream.Message("DW", fmt.Sprintf("done stalling for %.1f ms", float64(elapsed.Nanoseconds())/1e6))
 	}
 }
 

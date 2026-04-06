@@ -1,18 +1,15 @@
 package bkd
 
 import (
-	"fmt"
 	"sort"
 	"testing"
 
 	"gosearch/store"
 )
 
-// openBKDReaderForTest opens a .kd file via store.Directory for testing.
+// openBKDReaderForTest opens a BKD index via store.Directory for testing.
 func openBKDReaderForTest(dir store.Directory, segName, field string) (*BKDReader, error) {
-	fileName := fmt.Sprintf("%s.%s.kd", segName, field)
-	path := dir.FilePath(fileName)
-	return openBKDReaderFromFile(path, segName, field)
+	return OpenBKDReader(dir, segName, field)
 }
 
 // collectVisitor collects document IDs that match a range query.
@@ -63,8 +60,11 @@ func TestBKDWriter_SmallDataset(t *testing.T) {
 		t.Fatalf("Finish failed: %v", err)
 	}
 
-	if !dir.FileExists("seg0.price.kd") {
-		t.Fatal("expected seg0.price.kd to exist")
+	if !dir.FileExists("seg0.price.kdm") {
+		t.Fatal("expected seg0.price.kdm to exist")
+	}
+	if !dir.FileExists("seg0.price.kdd") {
+		t.Fatal("expected seg0.price.kdd to exist")
 	}
 }
 
@@ -79,8 +79,11 @@ func TestBKDWriter_LargeDataset(t *testing.T) {
 		t.Fatalf("Finish failed: %v", err)
 	}
 
-	if !dir.FileExists("seg1.score.kd") {
-		t.Fatal("expected seg1.score.kd to exist")
+	if !dir.FileExists("seg1.score.kdm") {
+		t.Fatal("expected seg1.score.kdm to exist")
+	}
+	if !dir.FileExists("seg1.score.kdd") {
+		t.Fatal("expected seg1.score.kdd to exist")
 	}
 }
 
@@ -92,8 +95,11 @@ func TestBKDWriter_EmptyDataset(t *testing.T) {
 		t.Fatalf("Finish failed: %v", err)
 	}
 
-	if !dir.FileExists("seg2.empty.kd") {
-		t.Fatal("expected seg2.empty.kd to exist")
+	if !dir.FileExists("seg2.empty.kdm") {
+		t.Fatal("expected seg2.empty.kdm to exist")
+	}
+	if !dir.FileExists("seg2.empty.kdd") {
+		t.Fatal("expected seg2.empty.kdd to exist")
 	}
 }
 
@@ -108,8 +114,11 @@ func TestBKDWriter_DuplicateValues(t *testing.T) {
 		t.Fatalf("Finish failed: %v", err)
 	}
 
-	if !dir.FileExists("seg3.dup.kd") {
-		t.Fatal("expected seg3.dup.kd to exist")
+	if !dir.FileExists("seg3.dup.kdm") {
+		t.Fatal("expected seg3.dup.kdm to exist")
+	}
+	if !dir.FileExists("seg3.dup.kdd") {
+		t.Fatal("expected seg3.dup.kdd to exist")
 	}
 }
 
@@ -253,5 +262,27 @@ func TestBKDWriter_Roundtrip_Empty(t *testing.T) {
 	}
 	if tree.MoveToChild() {
 		t.Fatal("MoveToChild should return false for empty tree")
+	}
+}
+
+func TestBKDWriter_TwoFileOutput(t *testing.T) {
+	dir := mustDir(t)
+	w := NewBKDWriter()
+	w.Add(0, 10)
+	w.Add(1, 30)
+	w.Add(2, 20)
+
+	if err := w.Finish(dir, "seg0", "f"); err != nil {
+		t.Fatalf("Finish: %v", err)
+	}
+
+	if !dir.FileExists("seg0.f.kdm") {
+		t.Fatal("expected seg0.f.kdm to exist")
+	}
+	if !dir.FileExists("seg0.f.kdd") {
+		t.Fatal("expected seg0.f.kdd to exist")
+	}
+	if dir.FileExists("seg0.f.kd") {
+		t.Fatal("old single .kd file should not exist")
 	}
 }

@@ -23,12 +23,14 @@ const (
 )
 
 // Field represents a single field within a document.
+// Value holds the field's data and its concrete type depends on Type:
+//   - FieldTypeText, FieldTypeKeyword, FieldTypeSortedDocValues: string
+//   - FieldTypeStored: string or []byte
+//   - FieldTypeNumericDocValues, FieldTypeLongPoint, FieldTypeDoublePoint: int64
 type Field struct {
-	Name         string
-	Value        string
-	BytesValue   []byte // used for binary stored fields (e.g. _source)
-	Type         FieldType
-	NumericValue int64 // used when Type == FieldTypeNumericDocValues
+	Name  string
+	Value any
+	Type  FieldType
 }
 
 // Document represents a single document to be indexed.
@@ -50,17 +52,17 @@ func (d *Document) AddField(name, value string, fieldType FieldType) {
 
 func (d *Document) AddNumericDocValuesField(name string, value int64) {
 	d.Fields = append(d.Fields, Field{
-		Name:         name,
-		Type:         FieldTypeNumericDocValues,
-		NumericValue: value,
+		Name:  name,
+		Type:  FieldTypeNumericDocValues,
+		Value: value,
 	})
 }
 
 func (d *Document) AddBytesField(name string, value []byte, fieldType FieldType) {
 	d.Fields = append(d.Fields, Field{
-		Name:       name,
-		BytesValue: value,
-		Type:       fieldType,
+		Name:  name,
+		Value: value,
+		Type:  fieldType,
 	})
 }
 
@@ -76,9 +78,9 @@ func (d *Document) AddSortedDocValuesField(name string, value string) {
 // and as numeric doc values for sorting. Mirrors Lucene's LongPoint + SortedNumericDocValuesField.
 func (d *Document) AddLongPoint(name string, value int64) {
 	d.Fields = append(d.Fields, Field{
-		Name:         name,
-		Type:         FieldTypeLongPoint,
-		NumericValue: value,
+		Name:  name,
+		Type:  FieldTypeLongPoint,
+		Value: value,
 	})
 }
 
@@ -87,9 +89,9 @@ func (d *Document) AddLongPoint(name string, value int64) {
 // using the same encoding as Lucene's NumericUtils.doubleToSortableLong.
 func (d *Document) AddDoublePoint(name string, value float64) {
 	d.Fields = append(d.Fields, Field{
-		Name:         name,
-		Type:         FieldTypeDoublePoint,
-		NumericValue: DoubleToSortableLong(value),
+		Name:  name,
+		Type:  FieldTypeDoublePoint,
+		Value: DoubleToSortableLong(value),
 	})
 }
 

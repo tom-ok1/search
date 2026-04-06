@@ -103,7 +103,8 @@ func WriteSegmentV2(dir store.Directory, seg *InMemorySegment) ([]string, []stri
 			if err := w.Finish(dir, seg.name, fieldName); err != nil {
 				return nil, nil, err
 			}
-			files = append(files, fmt.Sprintf("%s.%s.kd", seg.name, fieldName))
+			files = append(files, fmt.Sprintf("%s.%s.kdm", seg.name, fieldName))
+			files = append(files, fmt.Sprintf("%s.%s.kdd", seg.name, fieldName))
 		} else {
 			if err := writeNumericDocValuesSkipIndexFromNDV(dir, seg.name, fieldName, len(values)); err != nil {
 				return nil, nil, err
