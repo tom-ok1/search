@@ -255,3 +255,25 @@ func TestBKDWriter_Roundtrip_Empty(t *testing.T) {
 		t.Fatal("MoveToChild should return false for empty tree")
 	}
 }
+
+func TestBKDWriter_TwoFileOutput(t *testing.T) {
+	dir := mustDir(t)
+	w := NewBKDWriter()
+	w.Add(0, 10)
+	w.Add(1, 30)
+	w.Add(2, 20)
+
+	if err := w.Finish(dir, "seg0", "f"); err != nil {
+		t.Fatalf("Finish: %v", err)
+	}
+
+	if !dir.FileExists("seg0.f.kdm") {
+		t.Fatal("expected seg0.f.kdm to exist")
+	}
+	if !dir.FileExists("seg0.f.kdd") {
+		t.Fatal("expected seg0.f.kdd to exist")
+	}
+	if dir.FileExists("seg0.f.kd") {
+		t.Fatal("old single .kd file should not exist")
+	}
+}

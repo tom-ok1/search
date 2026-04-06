@@ -30,28 +30,34 @@ func (w *BKDWriter) Add(docID int, value int64) {
 	w.points = append(w.points, point{docID: docID, value: value})
 }
 
-// Finish builds the BKD tree from buffered points and writes the .kd file.
+// Finish builds the BKD tree from buffered points and writes the .kdm and .kdd files.
 func (w *BKDWriter) Finish(dir store.Directory, segName, field string) error {
-	fileName := fmt.Sprintf("%s.%s.kd", segName, field)
-	out, err := dir.CreateOutput(fileName)
+	metaName := fmt.Sprintf("%s.%s.kdm", segName, field)
+	dataName := fmt.Sprintf("%s.%s.kdd", segName, field)
+
+	metaOut, err := dir.CreateOutput(metaName)
 	if err != nil {
 		return err
 	}
-	defer out.Close()
+	defer metaOut.Close()
+
+	dataOut, err := dir.CreateOutput(dataName)
+	if err != nil {
+		return err
+	}
+	defer dataOut.Close()
 
 	numPoints := len(w.points)
 
-	// Empty dataset: write 32 bytes of zeros.
+	// Empty dataset: write 32 bytes of zeros to .kdm, empty .kdd.
 	if numPoints == 0 {
-		for range 32 {
-			if _, err := out.Write([]byte{0}); err != nil {
-				return err
-			}
+		if _, err := metaOut.Write(make([]byte, 32)); err != nil {
+			return err
 		}
 		return nil
 	}
 
-	// Sort points by value.
+	// Sort points by value, then docID.
 	sort.Slice(w.points, func(i, j int) bool {
 		if w.points[i].value != w.points[j].value {
 			return w.points[i].value < w.points[j].value
@@ -77,91 +83,73 @@ func (w *BKDWriter) Finish(dir store.Directory, segName, field string) error {
 	leaves := make([][]point, numLeaves)
 	w.buildLeaves(w.points, 1, numInnerNodes, leaves)
 
-	// Compute inner node metadata (heap-ordered, 1-indexed).
-	innerNodes := make([]innerNode, numInnerNodes+1) // 1-indexed
+	// Compute inner node metadata.
+	innerNodes := make([]innerNode, numInnerNodes+1)
 	w.computeInnerNodes(1, numInnerNodes, leaves, innerNodes)
 
-	// --- Write .kd file ---
+	// --- Write .kdd (leaf data) ---
+	buf := make([]byte, 8)
+	leafOffsets := make([]uint64, numLeaves)
+	leafCounts := make([]int, numLeaves)
+	var offset uint64
+	for i := range numLeaves {
+		leafOffsets[i] = offset
+		leafCounts[i] = len(leaves[i])
+		for _, p := range leaves[i] {
+			binary.LittleEndian.PutUint32(buf[:4], uint32(p.docID))
+			if _, err := dataOut.Write(buf[:4]); err != nil {
+				return err
+			}
+		}
+		for _, p := range leaves[i] {
+			binary.LittleEndian.PutUint64(buf, uint64(p.value))
+			if _, err := dataOut.Write(buf); err != nil {
+				return err
+			}
+		}
+		n := len(leaves[i])
+		offset += uint64(n)*4 + uint64(n)*8
+	}
+
+	// --- Write .kdm (header + inner nodes + leaf directory) ---
 
 	// Header (32 bytes).
-	if err := out.WriteUint32(MaxPointsInLeafNode); err != nil {
+	if err := metaOut.WriteUint32(MaxPointsInLeafNode); err != nil {
 		return err
 	}
-	if err := out.WriteUint32(uint32(numLeaves)); err != nil {
+	if err := metaOut.WriteUint32(uint32(numLeaves)); err != nil {
 		return err
 	}
-	if err := out.WriteUint32(uint32(numPoints)); err != nil {
+	if err := metaOut.WriteUint32(uint32(numPoints)); err != nil {
 		return err
 	}
-	if err := out.WriteUint32(uint32(docCount)); err != nil {
+	if err := metaOut.WriteUint32(uint32(docCount)); err != nil {
 		return err
 	}
-	if err := out.WriteUint64(uint64(globalMinValue)); err != nil {
+	if err := metaOut.WriteUint64(uint64(globalMinValue)); err != nil {
 		return err
 	}
-	if err := out.WriteUint64(uint64(globalMaxValue)); err != nil {
+	if err := metaOut.WriteUint64(uint64(globalMaxValue)); err != nil {
 		return err
 	}
 
 	// Inner nodes (12 bytes each, heap-ordered 1-indexed).
 	for i := 1; i <= numInnerNodes; i++ {
-		if err := out.WriteUint64(uint64(innerNodes[i].splitValue)); err != nil {
+		if err := metaOut.WriteUint64(uint64(innerNodes[i].splitValue)); err != nil {
 			return err
 		}
-		if err := out.WriteUint32(uint32(innerNodes[i].numPoints)); err != nil {
-			return err
-		}
-	}
-
-	// Compute leaf data offsets (relative to start of leaf data section).
-	leafOffsets := make([]uint64, numLeaves)
-	var offset uint64
-	for i := range numLeaves {
-		leafOffsets[i] = offset
-		n := len(leaves[i])
-		// docIDs: n × uint32 = n*4 bytes, values: n × uint64 = n*8 bytes
-		offset += uint64(n)*4 + uint64(n)*8
-	}
-
-	// Leaf directory (28 bytes each).
-	for i := range numLeaves {
-		leaf := leaves[i]
-		if err := out.WriteUint64(leafOffsets[i]); err != nil {
-			return err
-		}
-		if err := out.WriteUint32(uint32(len(leaf))); err != nil {
-			return err
-		}
-		var minVal, maxVal int64
-		if len(leaf) > 0 {
-			minVal = leaf[0].value
-			maxVal = leaf[len(leaf)-1].value
-		}
-		if err := out.WriteUint64(uint64(minVal)); err != nil {
-			return err
-		}
-		if err := out.WriteUint64(uint64(maxVal)); err != nil {
+		if err := metaOut.WriteUint32(uint32(innerNodes[i].numPoints)); err != nil {
 			return err
 		}
 	}
 
-	// Leaf data.
-	buf := make([]byte, 8)
+	// Leaf directory (12 bytes each: offset u64 + numPts u32).
 	for i := range numLeaves {
-		leaf := leaves[i]
-		// Write docIDs as uint32.
-		for _, p := range leaf {
-			binary.LittleEndian.PutUint32(buf[:4], uint32(p.docID))
-			if _, err := out.Write(buf[:4]); err != nil {
-				return err
-			}
+		if err := metaOut.WriteUint64(leafOffsets[i]); err != nil {
+			return err
 		}
-		// Write values as uint64.
-		for _, p := range leaf {
-			binary.LittleEndian.PutUint64(buf, uint64(p.value))
-			if _, err := out.Write(buf); err != nil {
-				return err
-			}
+		if err := metaOut.WriteUint32(uint32(leafCounts[i])); err != nil {
+			return err
 		}
 	}
 
