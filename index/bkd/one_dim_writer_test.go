@@ -107,6 +107,44 @@ func TestOneDimensionBKDWriter_Empty(t *testing.T) {
 	}
 }
 
+func TestComputeInnerNodesFromMetas(t *testing.T) {
+	// 4 leaves → padded to 4 (already power of 2) → 3 inner nodes
+	metas := []leafMeta{
+		{numPts: 2, maxValue: 10},
+		{numPts: 3, maxValue: 30},
+		{numPts: 1, maxValue: 50},
+		{numPts: 4, maxValue: 80},
+	}
+	numInnerNodes := 3
+	allMetas := make([]leafMeta, 4)
+	copy(allMetas, metas)
+
+	innerNodes := make([]innerNode, numInnerNodes+1)
+	computeInnerNodesFromMetas(1, numInnerNodes, allMetas, innerNodes)
+
+	// Node 1 (root): splitValue = max of left subtree (leaves 0,1) = 30
+	if innerNodes[1].splitValue != 30 {
+		t.Fatalf("root splitValue = %d, want 30", innerNodes[1].splitValue)
+	}
+	if innerNodes[1].numPoints != 10 {
+		t.Fatalf("root numPoints = %d, want 10", innerNodes[1].numPoints)
+	}
+	// Node 2 (left inner): splitValue = max of leaf 0 = 10
+	if innerNodes[2].splitValue != 10 {
+		t.Fatalf("left inner splitValue = %d, want 10", innerNodes[2].splitValue)
+	}
+	if innerNodes[2].numPoints != 5 {
+		t.Fatalf("left inner numPoints = %d, want 5", innerNodes[2].numPoints)
+	}
+	// Node 3 (right inner): splitValue = max of leaf 2 = 50
+	if innerNodes[3].splitValue != 50 {
+		t.Fatalf("right inner splitValue = %d, want 50", innerNodes[3].splitValue)
+	}
+	if innerNodes[3].numPoints != 5 {
+		t.Fatalf("right inner numPoints = %d, want 5", innerNodes[3].numPoints)
+	}
+}
+
 func TestOneDimensionBKDWriter_Duplicates(t *testing.T) {
 	dir := mustDir(t)
 	odw, err := NewOneDimensionBKDWriter(dir, "seg0", "dup")

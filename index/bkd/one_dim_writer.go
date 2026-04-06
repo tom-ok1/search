@@ -13,6 +13,15 @@ type leafBlock struct {
 	points []point
 }
 
+// leafMeta holds lightweight metadata for a completed leaf.
+// The actual leaf data lives in a temp file on disk.
+type leafMeta struct {
+	offset   uint64 // byte offset within the temp file
+	numPts   int
+	minValue int64
+	maxValue int64
+}
+
 // OneDimensionBKDWriter builds a BKD tree from a pre-sorted stream of points.
 // Points must be added in ascending order of (value, docID).
 // Memory usage is O(MaxPointsInLeafNode) for the active buffer plus metadata
@@ -209,6 +218,29 @@ func computeInnerNodesFromLeaves(nodeID, numInnerNodes int, leaves [][]point, in
 
 	leftMax, leftCount := computeInnerNodesFromLeaves(nodeID*2, numInnerNodes, leaves, innerNodes)
 	rightMax, rightCount := computeInnerNodesFromLeaves(nodeID*2+1, numInnerNodes, leaves, innerNodes)
+
+	innerNodes[nodeID].splitValue = leftMax
+	innerNodes[nodeID].numPoints = leftCount + rightCount
+
+	if rightMax > leftMax {
+		return rightMax, leftCount + rightCount
+	}
+	return leftMax, leftCount + rightCount
+}
+
+// computeInnerNodesFromMetas computes splitValue and numPoints for inner nodes
+// using only leaf metadata (no point data needed).
+func computeInnerNodesFromMetas(nodeID, numInnerNodes int, metas []leafMeta, innerNodes []innerNode) (maxVal int64, total int) {
+	if nodeID > numInnerNodes {
+		leafIdx := nodeID - numInnerNodes - 1
+		if leafIdx >= len(metas) || metas[leafIdx].numPts == 0 {
+			return math.MinInt64, 0
+		}
+		return metas[leafIdx].maxValue, metas[leafIdx].numPts
+	}
+
+	leftMax, leftCount := computeInnerNodesFromMetas(nodeID*2, numInnerNodes, metas, innerNodes)
+	rightMax, rightCount := computeInnerNodesFromMetas(nodeID*2+1, numInnerNodes, metas, innerNodes)
 
 	innerNodes[nodeID].splitValue = leftMax
 	innerNodes[nodeID].numPoints = leftCount + rightCount
