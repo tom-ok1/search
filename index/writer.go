@@ -81,6 +81,9 @@ func NewIndexWriter(dir store.Directory, fieldAnalyzers *analysis.FieldAnalyzers
 		defer w.mu.Unlock()
 		w.segmentInfos.Segments = append(w.segmentInfos.Segments, info)
 		w.segmentInfos.Version++
+		if w.metrics != nil {
+			w.metrics.SegmentCount.Store(int64(len(w.segmentInfos.Segments)))
+		}
 	}
 	w.docWriter.onGlobalUpdates = func(updates *FrozenBufferedUpdates) {
 		w.mu.Lock()
