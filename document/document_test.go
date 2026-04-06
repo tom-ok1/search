@@ -113,10 +113,10 @@ func TestDocument_SetSeqNoFields(t *testing.T) {
 	var seqNo, primaryTerm int64
 	for _, f := range doc.Fields {
 		if f.Name == "_seq_no" {
-			seqNo = f.NumericValue
+			seqNo = f.Value.(int64)
 		}
 		if f.Name == "_primary_term" {
-			primaryTerm = f.NumericValue
+			primaryTerm = f.Value.(int64)
 		}
 	}
 	if seqNo != 42 {

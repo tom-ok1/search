@@ -103,9 +103,9 @@ func (d *Document) SetSeqNoFields(seqNo, primaryTerm int64) {
 	for i := range d.Fields {
 		switch d.Fields[i].Name {
 		case "_seq_no":
-			d.Fields[i].NumericValue = seqNo
+			d.Fields[i].Value = seqNo
 		case "_primary_term":
-			d.Fields[i].NumericValue = primaryTerm
+			d.Fields[i].Value = primaryTerm
 		}
 	}
 }
