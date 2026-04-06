@@ -2,6 +2,7 @@ package index
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"gosearch/analysis"
@@ -238,5 +239,82 @@ func TestMetricsDeleteDocuments(t *testing.T) {
 	w.DeleteDocuments("title", "test")
 	if m.DocsDeleted.Load() != 1 {
 		t.Errorf("DocsDeleted = %d, want 1", m.DocsDeleted.Load())
+	}
+}
+
+func TestMetricsConcurrentAccess(t *testing.T) {
+	dir, err := store.NewFSDirectory(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	fa := analysis.NewFieldAnalyzers(
+		analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), analysis.NewLowerCaseFilter()),
+	)
+	w := NewIndexWriter(dir, fa, 1000)
+	defer w.Close()
+
+	const goroutines = 4
+	const docsPerGoroutine = 250
+
+	errs := make(chan error, goroutines)
+	for g := range goroutines {
+		go func(offset int) {
+			for i := range docsPerGoroutine {
+				doc := document.NewDocument()
+				doc.AddField("body", fmt.Sprintf("goroutine %d doc %d", offset, i), document.FieldTypeText)
+				if err := w.AddDocument(doc); err != nil {
+					errs <- err
+					return
+				}
+			}
+			errs <- nil
+		}(g)
+	}
+	for range goroutines {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	m := w.Metrics()
+	expected := int64(goroutines * docsPerGoroutine)
+	if m.DocsAdded.Load() != expected {
+		t.Errorf("DocsAdded = %d, want %d", m.DocsAdded.Load(), expected)
+	}
+}
+
+func TestInfoStreamComponentFiltering(t *testing.T) {
+	dir, err := store.NewFSDirectory(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	fa := analysis.NewFieldAnalyzers(
+		analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), analysis.NewLowerCaseFilter()),
+	)
+	w := NewIndexWriter(dir, fa, 10)
+	defer w.Close()
+
+	// Only enable "IW" component
+	capture := newCapturingInfoStream("IW")
+	w.SetInfoStream(capture)
+
+	for i := range 30 {
+		doc := document.NewDocument()
+		doc.AddField("body", fmt.Sprintf("doc %d for filtering test", i), document.FieldTypeText)
+		if err := w.AddDocument(doc); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, msg := range capture.Messages() {
+		if strings.HasPrefix(msg, "DWFC:") {
+			t.Errorf("unexpected DWFC message when only IW enabled: %s", msg)
+		}
+		if strings.HasPrefix(msg, "DWPT:") {
+			t.Errorf("unexpected DWPT message when only IW enabled: %s", msg)
+		}
 	}
 }
