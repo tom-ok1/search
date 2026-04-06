@@ -92,14 +92,19 @@ func (EmptyPostingsIterator) Advance(int) bool { return false }
 // ---------------------------------------------------------------------------
 
 // DiskPostingsIterator reads postings from a mmap'd .tdat slice using delta decoding.
+// Positions are decoded lazily: Next() skips position bytes, and Positions()
+// seeks back to decode them on demand.
 type DiskPostingsIterator struct {
 	input     *store.MMapIndexInput
 	remaining int // remaining postings to read
 	prevDocID int // for delta decoding
 
-	docID     int
-	freq      int
-	positions []int
+	docID            int
+	freq             int
+	positions        []int
+	posCount         int  // number of position VInts to decode
+	posStartOffset   int  // file offset where position data begins
+	positionsDecoded bool // true after Positions() has been called for current posting
 }
 
 func (it *DiskPostingsIterator) Next() bool {
@@ -124,30 +129,59 @@ func (it *DiskPostingsIterator) Next() bool {
 	}
 	it.freq = freq
 
-	// Read positions (delta-encoded)
+	// Read position count, save offset, skip position VInts
 	posCount, err := it.input.ReadVInt()
 	if err != nil {
 		it.remaining = 0
 		return false
 	}
-	it.positions = make([]int, posCount)
-	prevPos := 0
-	for i := range posCount {
-		posDelta, err := it.input.ReadVInt()
-		if err != nil {
+	it.posCount = posCount
+	it.posStartOffset = it.input.Position()
+	it.positions = nil
+	it.positionsDecoded = false
+
+	// Skip past position VInts without decoding
+	for range posCount {
+		if _, err := it.input.ReadVInt(); err != nil {
 			it.remaining = 0
 			return false
 		}
-		it.positions[i] = prevPos + posDelta
-		prevPos = it.positions[i]
 	}
 
 	return true
 }
 
-func (it *DiskPostingsIterator) DocID() int       { return it.docID }
-func (it *DiskPostingsIterator) Freq() int        { return it.freq }
-func (it *DiskPostingsIterator) Positions() []int { return it.positions }
+func (it *DiskPostingsIterator) DocID() int { return it.docID }
+func (it *DiskPostingsIterator) Freq() int  { return it.freq }
+func (it *DiskPostingsIterator) Positions() []int {
+	if it.positionsDecoded {
+		return it.positions
+	}
+	it.positionsDecoded = true
+
+	if it.posCount == 0 {
+		return nil
+	}
+
+	// Save current position, seek back to position data, decode, restore
+	savedPos := it.input.Position()
+	it.input.Seek(it.posStartOffset)
+
+	it.positions = make([]int, it.posCount)
+	prevPos := 0
+	for i := range it.posCount {
+		posDelta, err := it.input.ReadVInt()
+		if err != nil {
+			it.input.Seek(savedPos)
+			return it.positions[:i]
+		}
+		it.positions[i] = prevPos + posDelta
+		prevPos = it.positions[i]
+	}
+
+	it.input.Seek(savedPos)
+	return it.positions
+}
 
 func (it *DiskPostingsIterator) Advance(target int) bool {
 	for it.Next() {
