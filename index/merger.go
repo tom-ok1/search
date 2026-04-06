@@ -357,6 +357,7 @@ func mergePointFieldToDisk(dir store.Directory, segName, field string, inputs []
 	if err != nil {
 		return err
 	}
+	defer odw.Abort()
 
 	// Seed the heap: advance each reader to its first live doc.
 	var h pointHeap

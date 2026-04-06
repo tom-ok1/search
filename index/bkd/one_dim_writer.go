@@ -56,6 +56,19 @@ func NewOneDimensionBKDWriter(dir store.Directory, segName, field string) (*OneD
 	}, nil
 }
 
+// Abort cleans up the temp file without writing the .kd file.
+// Safe to call multiple times or after Finish.
+func (w *OneDimensionBKDWriter) Abort() {
+	if w.tmpOut != nil {
+		w.tmpOut.Close()
+		w.tmpOut = nil
+	}
+	if w.tmpName != "" {
+		w.dir.DeleteFile(w.tmpName)
+		w.tmpName = ""
+	}
+}
+
 // Add appends a point. Points must arrive in sorted order (value asc, docID asc).
 func (w *OneDimensionBKDWriter) Add(docID int, value int64) error {
 	w.leafBuf = append(w.leafBuf, point{docID: docID, value: value})
@@ -114,6 +127,7 @@ func (w *OneDimensionBKDWriter) Finish() error {
 	if err := w.tmpOut.Close(); err != nil {
 		return err
 	}
+	w.tmpOut = nil
 
 	fileName := fmt.Sprintf("%s.%s.kd", w.segName, w.field)
 	out, err := w.dir.CreateOutput(fileName)
@@ -126,12 +140,13 @@ func (w *OneDimensionBKDWriter) Finish() error {
 
 	// Empty dataset: write 32 bytes of zeros.
 	if numPoints == 0 {
-		for range 32 {
-			if _, err := out.Write([]byte{0}); err != nil {
-				return err
-			}
+		if _, err := out.Write(make([]byte, 32)); err != nil {
+			return err
 		}
-		w.dir.DeleteFile(w.tmpName)
+		if err := w.dir.DeleteFile(w.tmpName); err != nil {
+			return fmt.Errorf("bkd: delete temp file: %w", err)
+		}
+		w.tmpName = ""
 		return nil
 	}
 
@@ -218,7 +233,10 @@ func (w *OneDimensionBKDWriter) Finish() error {
 	}
 
 	// Clean up temp file.
-	w.dir.DeleteFile(w.tmpName)
+	if err := w.dir.DeleteFile(w.tmpName); err != nil {
+		return fmt.Errorf("bkd: delete temp file: %w", err)
+	}
+	w.tmpName = ""
 
 	return nil
 }
