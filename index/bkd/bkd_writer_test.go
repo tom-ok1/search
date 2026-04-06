@@ -1,18 +1,15 @@
 package bkd
 
 import (
-	"fmt"
 	"sort"
 	"testing"
 
 	"gosearch/store"
 )
 
-// openBKDReaderForTest opens a .kd file via store.Directory for testing.
+// openBKDReaderForTest opens a BKD index via store.Directory for testing.
 func openBKDReaderForTest(dir store.Directory, segName, field string) (*BKDReader, error) {
-	fileName := fmt.Sprintf("%s.%s.kd", segName, field)
-	path := dir.FilePath(fileName)
-	return openBKDReaderFromFile(path, segName, field)
+	return OpenBKDReader(dir, segName, field)
 }
 
 // collectVisitor collects document IDs that match a range query.
