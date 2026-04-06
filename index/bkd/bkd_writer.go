@@ -1,7 +1,6 @@
 package bkd
 
 import (
-	"encoding/binary"
 	"fmt"
 	"math"
 	"sort"
@@ -88,7 +87,6 @@ func (w *BKDWriter) Finish(dir store.Directory, segName, field string) error {
 	w.computeInnerNodes(1, numInnerNodes, leaves, innerNodes)
 
 	// --- Write .kdd (leaf data) ---
-	buf := make([]byte, 8)
 	leafOffsets := make([]uint64, numLeaves)
 	leafCounts := make([]int, numLeaves)
 	var offset uint64
@@ -96,14 +94,12 @@ func (w *BKDWriter) Finish(dir store.Directory, segName, field string) error {
 		leafOffsets[i] = offset
 		leafCounts[i] = len(leaves[i])
 		for _, p := range leaves[i] {
-			binary.LittleEndian.PutUint32(buf[:4], uint32(p.docID))
-			if _, err := dataOut.Write(buf[:4]); err != nil {
+			if err := dataOut.WriteUint32(uint32(p.docID)); err != nil {
 				return err
 			}
 		}
 		for _, p := range leaves[i] {
-			binary.LittleEndian.PutUint64(buf, uint64(p.value))
-			if _, err := dataOut.Write(buf); err != nil {
+			if err := dataOut.WriteUint64(uint64(p.value)); err != nil {
 				return err
 			}
 		}

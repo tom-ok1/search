@@ -1,7 +1,6 @@
 package bkd
 
 import (
-	"encoding/binary"
 	"fmt"
 	"math"
 
@@ -92,18 +91,13 @@ func (w *OneDimensionBKDWriter) flushLeaf() error {
 		maxValue: leaf[n-1].value,
 	})
 
-	buf := make([]byte, 8)
-	// Write docIDs (4 bytes each).
 	for _, p := range leaf {
-		binary.LittleEndian.PutUint32(buf[:4], uint32(p.docID))
-		if _, err := w.dataOut.Write(buf[:4]); err != nil {
+		if err := w.dataOut.WriteUint32(uint32(p.docID)); err != nil {
 			return err
 		}
 	}
-	// Write values (8 bytes each).
 	for _, p := range leaf {
-		binary.LittleEndian.PutUint64(buf, uint64(p.value))
-		if _, err := w.dataOut.Write(buf); err != nil {
+		if err := w.dataOut.WriteUint64(uint64(p.value)); err != nil {
 			return err
 		}
 	}
