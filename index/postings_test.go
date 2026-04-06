@@ -110,3 +110,89 @@ func TestSlicePostingsIteratorMultipleCallsAfterExhaustion(t *testing.T) {
 		}
 	}
 }
+
+func TestDiskPostingsIteratorLazyPositions(t *testing.T) {
+	seg := buildTestSegment(t)
+	ds, _ := writeAndOpenDiskSegment(t, seg)
+	defer ds.Close()
+
+	// Use "the" which appears in multiple docs
+	iter := ds.PostingsIterator("title", "the")
+
+	// Advance through all postings, only calling Positions() on some
+	var count int
+	for iter.Next() {
+		// Always check docID and freq are valid
+		if iter.DocID() < 0 {
+			t.Fatalf("posting %d: invalid DocID %d", count, iter.DocID())
+		}
+		if iter.Freq() <= 0 {
+			t.Fatalf("posting %d: invalid Freq %d", count, iter.Freq())
+		}
+
+		// Only call Positions() on even-numbered postings
+		if count%2 == 0 {
+			positions := iter.Positions()
+			if len(positions) != iter.Freq() {
+				t.Errorf("posting %d: Positions length %d != Freq %d",
+					count, len(positions), iter.Freq())
+			}
+		}
+		count++
+	}
+
+	if count == 0 {
+		t.Fatal("expected at least one posting for term 'the'")
+	}
+}
+
+func TestDiskPostingsIteratorSkipPositionsCorrectness(t *testing.T) {
+	seg := buildTestSegment(t)
+	ds, _ := writeAndOpenDiskSegment(t, seg)
+	defer ds.Close()
+
+	terms := []string{"the", "quick", "brown", "fox", "lazy", "dog"}
+
+	for _, term := range terms {
+		// Reference: read all postings with positions
+		refIter := ds.PostingsIterator("title", term)
+		var refPostings []Posting
+		for refIter.Next() {
+			refPostings = append(refPostings, Posting{
+				DocID:     refIter.DocID(),
+				Freq:      refIter.Freq(),
+				Positions: refIter.Positions(),
+			})
+		}
+
+		// Test: skip Positions() on odd postings, verify even postings match
+		testIter := ds.PostingsIterator("title", term)
+		idx := 0
+		for testIter.Next() {
+			if testIter.DocID() != refPostings[idx].DocID {
+				t.Errorf("term %q posting[%d]: DocID got %d, want %d",
+					term, idx, testIter.DocID(), refPostings[idx].DocID)
+			}
+			if testIter.Freq() != refPostings[idx].Freq {
+				t.Errorf("term %q posting[%d]: Freq got %d, want %d",
+					term, idx, testIter.Freq(), refPostings[idx].Freq)
+			}
+
+			// Call Positions() only on even postings
+			if idx%2 == 0 {
+				positions := testIter.Positions()
+				for j, pos := range positions {
+					if pos != refPostings[idx].Positions[j] {
+						t.Errorf("term %q posting[%d] pos[%d]: got %d, want %d",
+							term, idx, j, pos, refPostings[idx].Positions[j])
+					}
+				}
+			}
+			idx++
+		}
+
+		if idx != len(refPostings) {
+			t.Errorf("term %q: got %d postings, want %d", term, idx, len(refPostings))
+		}
+	}
+}
