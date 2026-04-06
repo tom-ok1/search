@@ -1,7 +1,9 @@
 package index
 
 import (
+	"fmt"
 	"sync"
+	"time"
 
 	"gosearch/analysis"
 	"gosearch/document"
@@ -87,12 +89,33 @@ func (dw *DocumentsWriter) addDocument(doc *document.Document) error {
 func (dw *DocumentsWriter) doFlush(dwpt *DocumentsWriterPerThread) error {
 	ticket := dw.ticketQueue.addTicket()
 	globalUpdates := dwpt.prepareFlush()
+
+	start := time.Now()
 	info, err := dwpt.flush(dw.dir)
+	elapsed := time.Since(start)
+
 	dw.flushControl.doAfterFlush(dwpt)
 	dw.ticketQueue.markDone(ticket, info, globalUpdates, err)
+
 	if err != nil {
 		return err
 	}
+
+	if dw.metrics != nil {
+		dw.metrics.FlushCount.Add(1)
+		dw.metrics.FlushTimeNanos.Add(elapsed.Nanoseconds())
+		if info != nil {
+			dw.metrics.FlushBytes.Add(dwpt.estimateBytesUsed())
+		}
+	}
+	if dw.infoStream.IsEnabled("DWPT") && info != nil {
+		dw.infoStream.Message("DWPT", fmt.Sprintf(
+			"flush %s: %d docs, %.1f MB, took %dms",
+			info.Name, info.MaxDoc,
+			float64(dwpt.estimateBytesUsed())/(1024*1024),
+			elapsed.Milliseconds()))
+	}
+
 	return nil
 }
 
