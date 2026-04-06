@@ -287,20 +287,22 @@ func (e *Engine) docExistsInIndex(id string) bool {
 	return len(results) > 0
 }
 
-// Flush flushes buffered documents, syncs the translog, rolls the generation,
-// and trims unreferenced readers.
+// Flush commits all buffered documents to durable segment storage, then rolls
+// the translog generation and trims unreferenced readers. This mirrors
+// Elasticsearch's flush semantics, which calls Lucene's IndexWriter.commit()
+// (not IndexWriter.flush()) to persist segment metadata (segments_N) to disk.
 func (e *Engine) Flush() error {
-	if err := e.writer.Flush(); err != nil {
+	if e.translog != nil {
+		if err := e.translog.RollGeneration(); err != nil {
+			return fmt.Errorf("translog roll: %w", err)
+		}
+	}
+
+	if err := e.writer.Commit(); err != nil {
 		return err
 	}
 
 	if e.translog != nil {
-		if err := e.translog.Sync(); err != nil {
-			return fmt.Errorf("translog sync: %w", err)
-		}
-		if err := e.translog.RollGeneration(); err != nil {
-			return fmt.Errorf("translog roll: %w", err)
-		}
 		e.translog.SetMinRequiredGeneration(e.translog.CurrentGeneration())
 		if err := e.translog.TrimUnreferencedReaders(); err != nil {
 			return fmt.Errorf("translog trim: %w", err)
