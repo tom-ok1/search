@@ -77,7 +77,9 @@ func (rau *ReadersAndUpdates) HasPendingDeletes() bool {
 // Close releases the underlying DiskSegment.
 func (rau *ReadersAndUpdates) Close() error {
 	if rau.reader != nil {
-		return rau.reader.Close()
+		err := rau.reader.Close()
+		rau.reader = nil
+		return err
 	}
 	return nil
 }

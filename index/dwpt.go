@@ -192,6 +192,7 @@ func (dwpt *DocumentsWriterPerThread) flush(dir store.Directory) (*SegmentCommit
 	}
 
 	if !dwpt.pendingUpdates.any() {
+		dwpt.segment = nil // release InMemorySegment for GC
 		return info, nil
 	}
 
@@ -201,6 +202,7 @@ func (dwpt *DocumentsWriterPerThread) flush(dir store.Directory) (*SegmentCommit
 	}
 	dwpt.pendingUpdates.clear()
 
+	dwpt.segment = nil // release InMemorySegment for GC
 	return info, nil
 }
 
