@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"gosearch/analysis"
 	"gosearch/document"
@@ -103,6 +104,7 @@ func (w *IndexWriter) SetInfoStream(infoStream InfoStream) {
 	defer w.mu.Unlock()
 	w.infoStream = infoStream
 	w.docWriter.setInfoStream(infoStream)
+	w.fileDeleter.infoStream = infoStream
 }
 
 // Metrics returns the IndexWriterMetrics for monitoring.
@@ -146,6 +148,8 @@ func (w *IndexWriter) Flush() error {
 // Commit flushes any buffered data, resolves pending deletes, and writes
 // the segment metadata (segments_N) to disk.
 func (w *IndexWriter) Commit() error {
+	commitStart := time.Now()
+
 	// 1. Flush all threads
 	if err := w.docWriter.flushAllThreads(); err != nil {
 		return err
@@ -153,6 +157,10 @@ func (w *IndexWriter) Commit() error {
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
+
+	if w.infoStream.IsEnabled("IW") {
+		w.infoStream.Message("IW", fmt.Sprintf("commit start: %d segments", len(w.segmentInfos.Segments)))
+	}
 
 	// 2. Freeze and apply any remaining global deletes
 	frozen := w.docWriter.freezeGlobalBuffer()
@@ -206,6 +214,14 @@ func (w *IndexWriter) Commit() error {
 
 	// 9. Best-effort cleanup of stale files
 	w.deleteStaleFiles()
+
+	if w.metrics != nil {
+		w.metrics.SegmentCount.Store(int64(len(w.segmentInfos.Segments)))
+	}
+	if w.infoStream.IsEnabled("IW") {
+		w.infoStream.Message("IW", fmt.Sprintf("commit done: %d segments, took %dms",
+			len(w.segmentInfos.Segments), time.Since(commitStart).Milliseconds()))
+	}
 
 	// 10. Trigger auto-merge
 	return w.autoMerge()
@@ -298,6 +314,9 @@ func (w *IndexWriter) nrtSegments() ([]SegmentReader, []string, error) {
 // DeleteDocuments buffers a delete-by-term operation.
 func (w *IndexWriter) DeleteDocuments(field, term string) error {
 	w.docWriter.deleteDocuments(field, term)
+	if w.metrics != nil {
+		w.metrics.DocsDeleted.Add(1)
+	}
 	return nil
 }
 
@@ -305,6 +324,10 @@ func (w *IndexWriter) DeleteDocuments(field, term string) error {
 // Caller must hold w.mu.
 func (w *IndexWriter) MaybeMerge(policy MergePolicy) error {
 	candidates := policy.FindMerges(w.segmentInfos.Segments)
+	if w.infoStream.IsEnabled("IW") && len(candidates) > 0 {
+		w.infoStream.Message("IW", fmt.Sprintf("maybeMerge: %d candidates from %d segments",
+			len(candidates), len(w.segmentInfos.Segments)))
+	}
 	for _, candidate := range candidates {
 		if err := w.executeMerge(candidate); err != nil {
 			return err
