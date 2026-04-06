@@ -590,6 +590,35 @@ func TestParseDocument_BooleanHasSortedDocValues(t *testing.T) {
 	t.Fatal("boolean field 'active' missing FieldTypeSortedDocValues")
 }
 
+func TestParseDocument_IncludesSeqNoAndPrimaryTermFields(t *testing.T) {
+	m := &MappingDefinition{
+		Properties: map[string]FieldMapping{
+			"title": {Type: FieldTypeText},
+		},
+	}
+	source := []byte(`{"title": "hello"}`)
+	doc, err := ParseDocument("doc1", source, m)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var hasSeqNo, hasPrimaryTerm bool
+	for _, f := range doc.Fields {
+		if f.Name == "_seq_no" && f.Type == document.FieldTypeNumericDocValues {
+			hasSeqNo = true
+		}
+		if f.Name == "_primary_term" && f.Type == document.FieldTypeNumericDocValues {
+			hasPrimaryTerm = true
+		}
+	}
+	if !hasSeqNo {
+		t.Fatal("expected _seq_no NumericDocValues field in parsed document")
+	}
+	if !hasPrimaryTerm {
+		t.Fatal("expected _primary_term NumericDocValues field in parsed document")
+	}
+}
+
 // --- test helpers ---
 
 func assertHasField(t *testing.T, doc *document.Document, name, value string, ft document.FieldType) {
