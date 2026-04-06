@@ -172,3 +172,98 @@ func TestOneDimensionBKDWriter_Duplicates(t *testing.T) {
 		t.Fatalf("range [42,42]: got %d docs, want 100", len(v.docs))
 	}
 }
+
+func TestOneDimensionBKDWriter_TempFileCleanup(t *testing.T) {
+	dir := mustDir(t)
+	odw, err := NewOneDimensionBKDWriter(dir, "seg0", "price")
+	if err != nil {
+		t.Fatalf("NewOneDimensionBKDWriter: %v", err)
+	}
+
+	// Temp file should exist after construction.
+	if !dir.FileExists("seg0.price.kd.tmp") {
+		t.Fatal("expected temp file to exist after construction")
+	}
+
+	for i := range 1000 {
+		if err := odw.Add(i, int64(i)); err != nil {
+			t.Fatalf("Add: %v", err)
+		}
+	}
+	if err := odw.Finish(); err != nil {
+		t.Fatalf("Finish: %v", err)
+	}
+
+	// Temp file should be cleaned up after Finish.
+	if dir.FileExists("seg0.price.kd.tmp") {
+		t.Fatal("expected temp file to be deleted after Finish")
+	}
+	// Final .kd file should exist.
+	if !dir.FileExists("seg0.price.kd") {
+		t.Fatal("expected .kd file to exist")
+	}
+}
+
+func TestOneDimensionBKDWriter_EmptyTempFileCleanup(t *testing.T) {
+	dir := mustDir(t)
+	odw, err := NewOneDimensionBKDWriter(dir, "seg0", "empty")
+	if err != nil {
+		t.Fatalf("NewOneDimensionBKDWriter: %v", err)
+	}
+
+	if err := odw.Finish(); err != nil {
+		t.Fatalf("Finish: %v", err)
+	}
+
+	if dir.FileExists("seg0.empty.kd.tmp") {
+		t.Fatal("expected temp file to be deleted after empty Finish")
+	}
+}
+
+func TestOneDimensionBKDWriter_LargeMultiLeaf(t *testing.T) {
+	dir := mustDir(t)
+	odw, err := NewOneDimensionBKDWriter(dir, "seg0", "big")
+	if err != nil {
+		t.Fatalf("NewOneDimensionBKDWriter: %v", err)
+	}
+
+	n := 50000
+	for i := range n {
+		if err := odw.Add(i, int64(i*10)); err != nil {
+			t.Fatalf("Add: %v", err)
+		}
+	}
+	if err := odw.Finish(); err != nil {
+		t.Fatalf("Finish: %v", err)
+	}
+
+	r, err := openBKDReaderForTest(dir, "seg0", "big")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer r.Close()
+
+	if r.NumPoints() != n {
+		t.Fatalf("NumPoints = %d, want %d", r.NumPoints(), n)
+	}
+	if r.MinValue() != 0 {
+		t.Fatalf("MinValue = %d, want 0", r.MinValue())
+	}
+	if r.MaxValue() != int64((n-1)*10) {
+		t.Fatalf("MaxValue = %d, want %d", r.MaxValue(), (n-1)*10)
+	}
+
+	// Spot-check a range query.
+	v := &collectVisitor{min: 1000, max: 1090}
+	Intersect(r.PointTree(), v)
+	sort.Ints(v.docs)
+	if len(v.docs) != 10 {
+		t.Fatalf("range [1000,1090]: got %d docs, want 10", len(v.docs))
+	}
+	for i, d := range v.docs {
+		want := 100 + i
+		if d != want {
+			t.Fatalf("docs[%d] = %d, want %d", i, d, want)
+		}
+	}
+}
