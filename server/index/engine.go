@@ -54,6 +54,14 @@ type GetResult struct {
 	Source      []byte
 }
 
+// DocIdAndVersion holds version metadata resolved from a Lucene index lookup.
+// This mirrors Elasticsearch's DocIdAndVersion from VersionsAndSeqNoResolver.
+type DocIdAndVersion struct {
+	Found       bool
+	SeqNo       int64
+	PrimaryTerm int64
+}
+
 // Engine wraps an IndexWriter and manages the IndexReader/IndexSearcher lifecycle.
 // It mirrors Elasticsearch's InternalEngine.
 type Engine struct {
@@ -141,42 +149,36 @@ func (e *Engine) RecoverFromTranslog(replayIndex func(id string, source []byte) 
 // Index adds or updates a document in the engine. It returns whether the
 // document was newly created and the assigned sequence number.
 func (e *Engine) Index(id string, doc *document.Document, source []byte, ifSeqNo *int64, ifPrimaryTerm *int64) (IndexResult, error) {
-	var created bool
+	vv, vmExists := e.versionMap.Get(id)
 
-	vv, exists := e.versionMap.Get(id)
-	if !exists {
-		if e.docExistsInIndex(id) {
-			created = false
-		} else {
-			created = true
-		}
+	var docExists bool
+	var curSeqNo, curTerm int64
+
+	if vmExists {
+		docExists = !vv.Deleted
+		curSeqNo = vv.SeqNo
+		curTerm = vv.PrimaryTerm
 	} else {
-		created = vv.Deleted
+		dv := e.loadDocIdAndVersion(id)
+		docExists = dv.Found
+		curSeqNo = dv.SeqNo
+		curTerm = dv.PrimaryTerm
 	}
+
+	created := !docExists
 
 	// CAS check: if_seq_no / if_primary_term
 	if ifSeqNo != nil && ifPrimaryTerm != nil {
-		if !exists {
-			// Fall back to Lucene doc values
-			luceneSeqNo, luceneTerm, found := e.loadSeqNoFromIndex(id)
-			if !found {
-				return IndexResult{}, &VersionConflictEngineError{
-					ID: id, ExpectedSeqNo: *ifSeqNo, ExpectedTerm: *ifPrimaryTerm,
-					CurrentSeqNo: 0, CurrentTerm: 0,
-				}
+		if !docExists {
+			return IndexResult{}, &VersionConflictEngineError{
+				ID: id, ExpectedSeqNo: *ifSeqNo, ExpectedTerm: *ifPrimaryTerm,
+				CurrentSeqNo: 0, CurrentTerm: 0,
 			}
-			if luceneSeqNo != *ifSeqNo || luceneTerm != *ifPrimaryTerm {
-				return IndexResult{}, &VersionConflictEngineError{
-					ID: id, ExpectedSeqNo: *ifSeqNo, ExpectedTerm: *ifPrimaryTerm,
-					CurrentSeqNo: luceneSeqNo, CurrentTerm: luceneTerm,
-				}
-			}
-		} else {
-			if vv.SeqNo != *ifSeqNo || vv.PrimaryTerm != *ifPrimaryTerm {
-				return IndexResult{}, &VersionConflictEngineError{
-					ID: id, ExpectedSeqNo: *ifSeqNo, ExpectedTerm: *ifPrimaryTerm,
-					CurrentSeqNo: vv.SeqNo, CurrentTerm: vv.PrimaryTerm,
-				}
+		}
+		if curSeqNo != *ifSeqNo || curTerm != *ifPrimaryTerm {
+			return IndexResult{}, &VersionConflictEngineError{
+				ID: id, ExpectedSeqNo: *ifSeqNo, ExpectedTerm: *ifPrimaryTerm,
+				CurrentSeqNo: curSeqNo, CurrentTerm: curTerm,
 			}
 		}
 	}
@@ -212,30 +214,34 @@ func (e *Engine) Index(id string, doc *document.Document, source []byte, ifSeqNo
 // Delete removes a document by its _id. It returns whether the document
 // was found and the assigned sequence number.
 func (e *Engine) Delete(id string, ifSeqNo *int64, ifPrimaryTerm *int64) (DeleteResult, error) {
-	vv, exists := e.versionMap.Get(id)
-	found := exists || e.docExistsInIndex(id)
+	vv, vmExists := e.versionMap.Get(id)
 
+	var found bool
+	var curSeqNo, curTerm int64
+
+	if vmExists {
+		found = true // entry exists in version map (even if deleted)
+		curSeqNo = vv.SeqNo
+		curTerm = vv.PrimaryTerm
+	} else {
+		dv := e.loadDocIdAndVersion(id)
+		found = dv.Found
+		curSeqNo = dv.SeqNo
+		curTerm = dv.PrimaryTerm
+	}
+
+	// CAS check: if_seq_no / if_primary_term
 	if ifSeqNo != nil && ifPrimaryTerm != nil {
-		if !exists {
-			luceneSeqNo, luceneTerm, found := e.loadSeqNoFromIndex(id)
-			if !found {
-				return DeleteResult{}, &VersionConflictEngineError{
-					ID: id, ExpectedSeqNo: *ifSeqNo, ExpectedTerm: *ifPrimaryTerm,
-					CurrentSeqNo: 0, CurrentTerm: 0,
-				}
+		if !found {
+			return DeleteResult{}, &VersionConflictEngineError{
+				ID: id, ExpectedSeqNo: *ifSeqNo, ExpectedTerm: *ifPrimaryTerm,
+				CurrentSeqNo: 0, CurrentTerm: 0,
 			}
-			if luceneSeqNo != *ifSeqNo || luceneTerm != *ifPrimaryTerm {
-				return DeleteResult{}, &VersionConflictEngineError{
-					ID: id, ExpectedSeqNo: *ifSeqNo, ExpectedTerm: *ifPrimaryTerm,
-					CurrentSeqNo: luceneSeqNo, CurrentTerm: luceneTerm,
-				}
-			}
-		} else {
-			if vv.SeqNo != *ifSeqNo || vv.PrimaryTerm != *ifPrimaryTerm {
-				return DeleteResult{}, &VersionConflictEngineError{
-					ID: id, ExpectedSeqNo: *ifSeqNo, ExpectedTerm: *ifPrimaryTerm,
-					CurrentSeqNo: vv.SeqNo, CurrentTerm: vv.PrimaryTerm,
-				}
+		}
+		if curSeqNo != *ifSeqNo || curTerm != *ifPrimaryTerm {
+			return DeleteResult{}, &VersionConflictEngineError{
+				ID: id, ExpectedSeqNo: *ifSeqNo, ExpectedTerm: *ifPrimaryTerm,
+				CurrentSeqNo: curSeqNo, CurrentTerm: curTerm,
 			}
 		}
 	}
@@ -300,55 +306,32 @@ func (e *Engine) Get(id string) GetResult {
 	return GetResult{Found: true, SeqNo: seqNo, PrimaryTerm: primaryTerm, Source: []byte(source)}
 }
 
-// docExistsInIndex checks whether a document with the given _id exists
-// in the current Lucene searcher.
-func (e *Engine) docExistsInIndex(id string) bool {
+// loadDocIdAndVersion performs a single Lucene lookup to resolve whether a
+// document exists and its _seq_no/_primary_term from doc values.
+// This mirrors Elasticsearch's VersionsAndSeqNoResolver.loadDocIdAndVersion().
+func (e *Engine) loadDocIdAndVersion(id string) DocIdAndVersion {
 	e.mu.RLock()
 	s := e.searcher
 	e.mu.RUnlock()
 
 	if s == nil {
-		return false
-	}
-
-	query := search.NewTermQuery("_id", id)
-	collector := search.NewTopKCollector(1)
-	results := s.Search(query, collector)
-	return len(results) > 0
-}
-
-// loadSeqNoFromIndex looks up _seq_no and _primary_term from Lucene doc values
-// for the given document _id. Returns (seqNo, primaryTerm, found).
-// This is the Lucene fallback used when the LiveVersionMap has no entry.
-func (e *Engine) loadSeqNoFromIndex(id string) (int64, int64, bool) {
-	e.mu.RLock()
-	s := e.searcher
-	e.mu.RUnlock()
-
-	if s == nil {
-		return 0, 0, false
+		return DocIdAndVersion{}
 	}
 
 	query := search.NewTermQuery("_id", id)
 	collector := search.NewTopKCollector(1)
 	results := s.Search(query, collector)
 	if len(results) == 0 {
-		return 0, 0, false
+		return DocIdAndVersion{}
 	}
 
 	reader := s.Reader()
 	docID := results[0].DocID
 
-	seqNo, ok := reader.GetNumericDocValue(docID, "_seq_no")
-	if !ok {
-		return 0, 0, false
-	}
-	primaryTerm, ok := reader.GetNumericDocValue(docID, "_primary_term")
-	if !ok {
-		return 0, 0, false
-	}
+	seqNo, _ := reader.GetNumericDocValue(docID, "_seq_no")
+	primaryTerm, _ := reader.GetNumericDocValue(docID, "_primary_term")
 
-	return seqNo, primaryTerm, true
+	return DocIdAndVersion{Found: true, SeqNo: seqNo, PrimaryTerm: primaryTerm}
 }
 
 // Flush flushes buffered documents, syncs the translog, rolls the generation,
