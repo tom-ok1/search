@@ -102,6 +102,31 @@ func TestDoubleEncodingOrdering(t *testing.T) {
 	}
 }
 
+func TestDocument_SetSeqNoFields(t *testing.T) {
+	doc := NewDocument()
+	doc.AddField("_id", "1", FieldTypeKeyword)
+	doc.AddNumericDocValuesField("_seq_no", 0)
+	doc.AddNumericDocValuesField("_primary_term", 0)
+
+	doc.SetSeqNoFields(42, 3)
+
+	var seqNo, primaryTerm int64
+	for _, f := range doc.Fields {
+		if f.Name == "_seq_no" {
+			seqNo = f.Value.(int64)
+		}
+		if f.Name == "_primary_term" {
+			primaryTerm = f.Value.(int64)
+		}
+	}
+	if seqNo != 42 {
+		t.Fatalf("expected _seq_no=42, got %d", seqNo)
+	}
+	if primaryTerm != 3 {
+		t.Fatalf("expected _primary_term=3, got %d", primaryTerm)
+	}
+}
+
 func TestAddLongPoint(t *testing.T) {
 	doc := NewDocument()
 	doc.AddLongPoint("price", 42)

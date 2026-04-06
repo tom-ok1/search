@@ -181,7 +181,8 @@ func (w *TranslogWriter) Generation() int64 {
 	return w.generation
 }
 
-// Close flushes the buffer and closes the underlying file.
+// Close syncs the checkpoint and closes the underlying file, ensuring
+// all buffered operations are durable and recoverable.
 func (w *TranslogWriter) Close() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -190,7 +191,7 @@ func (w *TranslogWriter) Close() error {
 		return nil
 	}
 
-	if err := w.buf.Flush(); err != nil {
+	if err := w.syncLocked(); err != nil {
 		_ = w.file.Close()
 		return err
 	}

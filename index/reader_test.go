@@ -524,3 +524,48 @@ func TestNRTReaderProtectsFilesFromDeletion(t *testing.T) {
 
 	writer.Close()
 }
+
+func TestIndexReader_GetNumericDocValue(t *testing.T) {
+	dir, err := store.NewFSDirectory(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	fa := analysis.NewFieldAnalyzers(
+		analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), &analysis.LowerCaseFilter{}),
+	)
+	w := NewIndexWriter(dir, fa, 100)
+	defer w.Close()
+
+	doc := document.NewDocument()
+	doc.AddField("_id", "doc1", document.FieldTypeKeyword)
+	doc.AddNumericDocValuesField("_seq_no", 42)
+	if err := w.AddDocument(doc); err != nil {
+		t.Fatal(err)
+	}
+
+	reader, err := OpenNRTReader(w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+
+	// We added exactly one document, so its global docID is 0.
+	if reader.TotalDocCount() != 1 {
+		t.Fatalf("expected 1 doc, got %d", reader.TotalDocCount())
+	}
+	globalDocID := 0
+
+	val, ok := reader.GetNumericDocValue(globalDocID, "_seq_no")
+	if !ok {
+		t.Fatal("expected to find numeric doc value for _seq_no")
+	}
+	if val != 42 {
+		t.Fatalf("expected _seq_no=42, got %d", val)
+	}
+
+	// Non-existent field
+	_, ok = reader.GetNumericDocValue(globalDocID, "_nonexistent")
+	if ok {
+		t.Fatal("expected false for non-existent field")
+	}
+}
