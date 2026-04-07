@@ -20,11 +20,12 @@ type DiskSegment struct {
 	fieldList []string
 
 	// Per-field mmap'd files
-	termIndex    map[string]*store.MMapIndexInput // field → .tidx (metadata array)
-	termFSTFiles map[string]*store.MMapIndexInput // field → .tfst (FST file)
-	termData     map[string]*store.MMapIndexInput // field → .tdat
-	fieldLens    map[string]*store.MMapIndexInput // field → .flen
-	termFSTs     map[string]*fst.FST              // field → FST (term → ordinal)
+	termIndex     map[string]*store.MMapIndexInput // field → .tidx (metadata array)
+	termFSTFiles  map[string]*store.MMapIndexInput // field → .tfst (FST file)
+	termData      map[string]*store.MMapIndexInput // field → .tdat (doc/freq)
+	termPositions map[string]*store.MMapIndexInput // field → .tpos (positions)
+	fieldLens     map[string]*store.MMapIndexInput // field → .flen
+	termFSTs      map[string]*fst.FST              // field → FST (term → ordinal)
 
 	// Segment-level mmap'd files
 	stored *store.MMapIndexInput // .stored
@@ -60,6 +61,7 @@ func OpenDiskSegment(dirPath string, segName string) (*DiskSegment, error) {
 		termIndex:       make(map[string]*store.MMapIndexInput),
 		termFSTFiles:    make(map[string]*store.MMapIndexInput),
 		termData:        make(map[string]*store.MMapIndexInput),
+		termPositions:   make(map[string]*store.MMapIndexInput),
 		fieldLens:       make(map[string]*store.MMapIndexInput),
 		termFSTs:        make(map[string]*fst.FST),
 		numericDV:       make(map[string]*store.MMapIndexInput),
@@ -107,6 +109,13 @@ func OpenDiskSegment(dirPath string, segName string) (*DiskSegment, error) {
 			return nil, fmt.Errorf("mmap tdat for %s: %w", field, err)
 		}
 		ds.termData[field] = tdat
+
+		tpos, err := store.OpenMMap(fmt.Sprintf("%s/%s.%s.tpos", dirPath, segName, field))
+		if err != nil {
+			ds.Close()
+			return nil, fmt.Errorf("mmap tpos for %s: %w", field, err)
+		}
+		ds.termPositions[field] = tpos
 
 		flen, err := store.OpenMMap(fmt.Sprintf("%s/%s.%s.flen", dirPath, segName, field))
 		if err != nil {
@@ -210,6 +219,9 @@ func (ds *DiskSegment) Close() error {
 	for _, m := range ds.termData {
 		m.Close()
 	}
+	for _, m := range ds.termPositions {
+		m.Close()
+	}
 	for _, m := range ds.fieldLens {
 		m.Close()
 	}
@@ -252,32 +264,42 @@ func (ds *DiskSegment) DocFreq(field, term string) int {
 		return 0
 	}
 
-	_, docFreq, _, _ := ds.lookupTerm(tidx, termFST, term)
-	return docFreq
+	meta, found := ds.lookupTerm(tidx, termFST, term)
+	if !found {
+		return 0
+	}
+	return meta.docFreq
 }
 
-// PostingsIterator returns an iterator that reads postings from the mmap'd .tdat file.
+// PostingsIterator returns an iterator that reads postings from the mmap'd .tdat and .tpos files.
 func (ds *DiskSegment) PostingsIterator(field, term string) PostingsIterator {
 	tidx := ds.termIndex[field]
 	tdat := ds.termData[field]
+	tpos := ds.termPositions[field]
 	termFST := ds.termFSTs[field]
-	if tidx == nil || tdat == nil || termFST == nil {
+	if tidx == nil || tdat == nil || tpos == nil || termFST == nil {
 		return EmptyPostingsIterator{}
 	}
 
-	found, docFreq, postingsOffset, postingsLength := ds.lookupTerm(tidx, termFST, term)
+	meta, found := ds.lookupTerm(tidx, termFST, term)
 	if !found {
 		return EmptyPostingsIterator{}
 	}
 
-	slice, err := tdat.Slice(int(postingsOffset), int(postingsLength))
+	tdatSlice, err := tdat.Slice(int(meta.tdatOffset), int(meta.tdatLength))
+	if err != nil {
+		return EmptyPostingsIterator{}
+	}
+
+	posSlice, err := tpos.Slice(int(meta.tposOffset), int(meta.tposLength))
 	if err != nil {
 		return EmptyPostingsIterator{}
 	}
 
 	return &DiskPostingsIterator{
-		input:     slice,
-		remaining: docFreq,
+		input:     tdatSlice,
+		posInput:  posSlice,
+		remaining: meta.docFreq,
 	}
 }
 
@@ -362,37 +384,60 @@ func (ds *DiskSegment) StoredFields(docID int) (map[string][]byte, error) {
 	return fields, nil
 }
 
+// termMeta holds the metadata for a single term looked up from .tidx.
+type termMeta struct {
+	docFreq    int
+	tdatOffset uint64
+	tdatLength uint32
+	tposOffset uint64
+	tposLength uint32
+}
+
 // lookupTerm uses the FST to find a term's ordinal, then reads metadata
 // from the flat array in the .tidx file.
-// Returns (found, docFreq, postingsOffset, postingsLength).
-func (ds *DiskSegment) lookupTerm(tidx *store.MMapIndexInput, termFST *fst.FST, term string) (bool, int, uint64, uint32) {
+func (ds *DiskSegment) lookupTerm(tidx *store.MMapIndexInput, termFST *fst.FST, term string) (termMeta, bool) {
 	ordinal, found := termFST.Get([]byte(term))
 	if !found {
-		return false, 0, 0, 0
+		return termMeta{}, false
 	}
 
-	// Read metadata at: ord*16
-	// Each entry: doc_freq(4) + postings_offset(8) + postings_length(4) = 16 bytes
-	offset := int(ordinal) * 16
+	// Read metadata at: ord*28
+	// Each entry: doc_freq(4) + tdat_offset(8) + tdat_length(4) + tpos_offset(8) + tpos_length(4) = 28 bytes
+	const entrySize = 28
+	offset := int(ordinal) * entrySize
 
-	if offset+16 > tidx.Length() {
-		return false, 0, 0, 0
+	if offset+entrySize > tidx.Length() {
+		return termMeta{}, false
 	}
 
 	docFreq32, err := tidx.ReadUint32At(offset)
 	if err != nil {
-		return false, 0, 0, 0
+		return termMeta{}, false
 	}
-	postingsOffset, err := tidx.ReadUint64At(offset + 4)
+	tdatOffset, err := tidx.ReadUint64At(offset + 4)
 	if err != nil {
-		return false, 0, 0, 0
+		return termMeta{}, false
 	}
-	postingsLength, err := tidx.ReadUint32At(offset + 12)
+	tdatLength, err := tidx.ReadUint32At(offset + 12)
 	if err != nil {
-		return false, 0, 0, 0
+		return termMeta{}, false
+	}
+	tposOffset, err := tidx.ReadUint64At(offset + 16)
+	if err != nil {
+		return termMeta{}, false
+	}
+	tposLength, err := tidx.ReadUint32At(offset + 24)
+	if err != nil {
+		return termMeta{}, false
 	}
 
-	return true, int(docFreq32), postingsOffset, postingsLength
+	return termMeta{
+		docFreq:    int(docFreq32),
+		tdatOffset: tdatOffset,
+		tdatLength: tdatLength,
+		tposOffset: tposOffset,
+		tposLength: tposLength,
+	}, true
 }
 
 // Fields returns the list of indexed fields.
