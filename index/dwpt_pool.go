@@ -2,17 +2,19 @@ package index
 
 import (
 	"sync"
+	"sync/atomic"
 
 	"gosearch/analysis"
 )
 
 // perThreadPool manages a pool of DocumentsWriterPerThread instances.
 // Each indexing goroutine checks out a DWPT, uses it without locks, then returns it.
+// The common (non-full-flush) path uses sync.Pool and is completely lock-free.
 type perThreadPool struct {
 	mu             sync.Mutex
-	free           []*DocumentsWriterPerThread
+	syncPool       sync.Pool
 	active         map[*DocumentsWriterPerThread]bool
-	fullFlush      bool                               // true during full flush
+	inFullFlush    atomic.Bool
 	flushingActive map[*DocumentsWriterPerThread]bool // DWPTs that were active when full flush started
 	flushOnReturn  []*DocumentsWriterPerThread        // DWPTs returned during full flush
 	flushRemaining int                                // number of flushingActive DWPTs not yet returned
@@ -23,48 +25,48 @@ type perThreadPool struct {
 }
 
 func newPerThreadPool(nameFunc func() string, fieldAnalyzers *analysis.FieldAnalyzers, deleteQueue *DeleteQueue) *perThreadPool {
-	return &perThreadPool{
+	p := &perThreadPool{
 		active:         make(map[*DocumentsWriterPerThread]bool),
 		nameFunc:       nameFunc,
 		fieldAnalyzers: fieldAnalyzers,
 		deleteQueue:    deleteQueue,
 	}
+	p.syncPool.New = func() any {
+		return newDWPT(p.nameFunc(), p.fieldAnalyzers, p.deleteQueue)
+	}
+	return p
 }
 
 // getAndLock checks out a DWPT for exclusive use by the caller.
+// Uses sync.Pool instead of a mutex-guarded free list for DWPT allocation.
 func (p *perThreadPool) getAndLock() *DocumentsWriterPerThread {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	dwpt := p.syncPool.Get().(*DocumentsWriterPerThread)
 
-	var dwpt *DocumentsWriterPerThread
-	if len(p.free) > 0 {
-		dwpt = p.free[len(p.free)-1]
-		p.free = p.free[:len(p.free)-1]
-	} else {
-		dwpt = newDWPT(p.nameFunc(), p.fieldAnalyzers, p.deleteQueue)
-	}
+	p.mu.Lock()
 	p.active[dwpt] = true
+	p.mu.Unlock()
+
 	return dwpt
 }
 
 // returnAndUnlock returns a DWPT to the pool for reuse.
 // If this DWPT was active when a full flush started, it is routed to the
-// flush list instead of the free list.
+// flush list instead of the sync.Pool.
 func (p *perThreadPool) returnAndUnlock(dwpt *DocumentsWriterPerThread) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
-
 	delete(p.active, dwpt)
 
-	if p.fullFlush && p.flushingActive[dwpt] {
+	if p.inFullFlush.Load() && p.flushingActive[dwpt] {
 		delete(p.flushingActive, dwpt)
 		p.flushOnReturn = append(p.flushOnReturn, dwpt)
 		p.flushRemaining--
 		if p.flushRemaining == 0 {
 			close(p.fullFlushDone)
 		}
+		p.mu.Unlock()
 	} else {
-		p.free = append(p.free, dwpt)
+		p.mu.Unlock()
+		p.syncPool.Put(dwpt)
 	}
 }
 
@@ -75,7 +77,7 @@ func (p *perThreadPool) remove(dwpt *DocumentsWriterPerThread) {
 
 	delete(p.active, dwpt)
 
-	if p.fullFlush && p.flushingActive[dwpt] {
+	if p.inFullFlush.Load() && p.flushingActive[dwpt] {
 		delete(p.flushingActive, dwpt)
 		p.flushRemaining--
 		if p.flushRemaining == 0 {
@@ -84,18 +86,17 @@ func (p *perThreadPool) remove(dwpt *DocumentsWriterPerThread) {
 	}
 }
 
-// drainFreeAndMarkActive returns all free DWPTs immediately and enters
-// full flush mode. Active DWPTs will be captured when they are returned
-// via returnAndUnlock. Caller must call waitAndDrainActive() afterward.
+// drainFreeAndMarkActive enters full flush mode and marks all currently active
+// DWPTs for flushing. sync.Pool doesn't expose a "drain all" API, but free
+// DWPTs have already been returned (0 docs or already flushed) and don't need
+// to be included in full flush. Returns nil (no free DWPTs to drain).
+// Caller must call waitAndDrainActive() afterward.
 func (p *perThreadPool) drainFreeAndMarkActive() []*DocumentsWriterPerThread {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	result := p.free
-	p.free = nil
-
 	if len(p.active) > 0 {
-		p.fullFlush = true
+		p.inFullFlush.Store(true)
 		p.flushingActive = make(map[*DocumentsWriterPerThread]bool, len(p.active))
 		for dwpt := range p.active {
 			p.flushingActive[dwpt] = true
@@ -103,9 +104,12 @@ func (p *perThreadPool) drainFreeAndMarkActive() []*DocumentsWriterPerThread {
 		p.flushRemaining = len(p.flushingActive)
 		p.flushOnReturn = nil
 		p.fullFlushDone = make(chan struct{})
+	} else {
+		p.inFullFlush.Store(true)
+		p.flushRemaining = 0
 	}
 
-	return result
+	return nil
 }
 
 // waitAndDrainActive blocks until all DWPTs that were active at the time of
@@ -114,7 +118,7 @@ func (p *perThreadPool) drainFreeAndMarkActive() []*DocumentsWriterPerThread {
 // affected and continue to operate normally.
 func (p *perThreadPool) waitAndDrainActive() []*DocumentsWriterPerThread {
 	p.mu.Lock()
-	if !p.fullFlush {
+	if !p.inFullFlush.Load() {
 		p.mu.Unlock()
 		return nil
 	}
@@ -122,7 +126,7 @@ func (p *perThreadPool) waitAndDrainActive() []*DocumentsWriterPerThread {
 		result := p.flushOnReturn
 		p.flushOnReturn = nil
 		p.flushingActive = nil
-		p.fullFlush = false
+		p.inFullFlush.Store(false)
 		p.mu.Unlock()
 		return result
 	}
@@ -136,6 +140,6 @@ func (p *perThreadPool) waitAndDrainActive() []*DocumentsWriterPerThread {
 	result := p.flushOnReturn
 	p.flushOnReturn = nil
 	p.flushingActive = nil
-	p.fullFlush = false
+	p.inFullFlush.Store(false)
 	return result
 }

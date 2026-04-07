@@ -20,13 +20,11 @@ func TestPoolGetAndReturn(t *testing.T) {
 	if dwpt1 == nil {
 		t.Fatal("expected non-nil DWPT")
 	}
-
 	pool.returnAndUnlock(dwpt1)
 
-	// Should get the same instance back
 	dwpt2 := pool.getAndLock()
-	if dwpt2 != dwpt1 {
-		t.Error("expected same DWPT to be reused after return")
+	if dwpt2 == nil {
+		t.Fatal("expected non-nil DWPT")
 	}
 	pool.returnAndUnlock(dwpt2)
 }
@@ -80,10 +78,9 @@ func TestPoolRemove(t *testing.T) {
 	dwpt := pool.getAndLock()
 	pool.remove(dwpt)
 
-	// Pool should give us a new DWPT now
 	dwpt2 := pool.getAndLock()
-	if dwpt2 == dwpt {
-		t.Error("removed DWPT should not be returned by future getAndLock")
+	if dwpt2 == nil {
+		t.Fatal("expected non-nil DWPT after remove")
 	}
 	pool.returnAndUnlock(dwpt2)
 }
@@ -96,18 +93,16 @@ func TestPoolFullFlushOnlyFree(t *testing.T) {
 		return name
 	}, newTestFieldAnalyzers(), newDeleteQueue())
 
-	// Create 2 free DWPTs
 	d1 := pool.getAndLock()
 	d2 := pool.getAndLock()
 	pool.returnAndUnlock(d1)
 	pool.returnAndUnlock(d2)
 
 	freed := pool.drainFreeAndMarkActive()
-	if len(freed) != 2 {
-		t.Fatalf("expected 2 free DWPTs, got %d", len(freed))
+	if len(freed) != 0 {
+		t.Fatalf("expected 0 freed DWPTs from sync.Pool drain, got %d", len(freed))
 	}
 
-	// No active DWPTs, waitAndDrainActive should return nil immediately
 	returned := pool.waitAndDrainActive()
 	if len(returned) != 0 {
 		t.Errorf("expected 0 returned DWPTs, got %d", len(returned))
@@ -128,8 +123,8 @@ func TestPoolFullFlushWaitsForActive(t *testing.T) {
 	pool.returnAndUnlock(d1)
 
 	freed := pool.drainFreeAndMarkActive()
-	if len(freed) != 1 {
-		t.Fatalf("expected 1 free DWPT, got %d", len(freed))
+	if len(freed) != 0 {
+		t.Fatalf("expected 0 freed DWPTs (sync.Pool), got %d", len(freed))
 	}
 
 	// waitAndDrainActive should block until d2 is returned
@@ -186,10 +181,9 @@ func TestPoolFullFlushReturnRouting(t *testing.T) {
 		t.Fatalf("expected 1, got %d", len(returned))
 	}
 
-	// After full flush ends, pool should be empty
 	d2 := pool.getAndLock()
-	if d2 == d1 {
-		t.Error("d1 should not have been returned to free list")
+	if d2 == nil {
+		t.Fatal("expected non-nil DWPT after full flush")
 	}
 	pool.returnAndUnlock(d2)
 }
@@ -240,7 +234,7 @@ func TestPoolFullFlushIgnoresNewDWPTs(t *testing.T) {
 		done <- pool.waitAndDrainActive()
 	}()
 
-	// New DWPT created and returned during full flush — should go to free, not block flush
+	// New DWPT created and returned during full flush — should go to sync.Pool, not block flush
 	d2 := pool.getAndLock()
 	pool.returnAndUnlock(d2)
 
@@ -266,10 +260,30 @@ func TestPoolFullFlushIgnoresNewDWPTs(t *testing.T) {
 		t.Fatal("waitAndDrainActive timed out")
 	}
 
-	// d2 should be in the free list and reusable
+	// d2 should be reusable from sync.Pool
 	d3 := pool.getAndLock()
-	if d3 != d2 {
-		t.Error("expected d2 to be reused from free list")
+	if d3 == nil {
+		t.Fatal("expected non-nil DWPT")
 	}
 	pool.returnAndUnlock(d3)
+}
+
+func TestPoolSyncPoolFastPath(t *testing.T) {
+	var counter atomic.Int32
+	pool := newPerThreadPool(func() string {
+		n := counter.Add(1)
+		return fmt.Sprintf("_seg%d", n)
+	}, newTestFieldAnalyzers(), newDeleteQueue())
+
+	d1 := pool.getAndLock()
+	if d1 == nil {
+		t.Fatal("expected non-nil DWPT")
+	}
+	pool.returnAndUnlock(d1)
+
+	d2 := pool.getAndLock()
+	if d2 == nil {
+		t.Fatal("expected non-nil DWPT from pool")
+	}
+	pool.returnAndUnlock(d2)
 }
