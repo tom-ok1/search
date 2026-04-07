@@ -16,9 +16,10 @@ import (
 //
 // Files written per segment:
 //   - {seg}.meta          — JSON metadata with format_version=2
-//   - {seg}.{field}.tidx  — term metadata array (16 bytes per term)
+//   - {seg}.{field}.tidx  — term metadata array (28 bytes per term)
 //   - {seg}.{field}.tfst  — FST mapping term → ordinal
-//   - {seg}.{field}.tdat  — delta-encoded postings data
+//   - {seg}.{field}.tdat  — delta-encoded doc/freq data
+//   - {seg}.{field}.tpos  — delta-encoded position data
 //   - {seg}.{field}.flen  — fixed-width field lengths
 //   - {seg}.stored        — stored fields with doc offset table
 func WriteSegmentV2(dir store.Directory, seg *InMemorySegment) ([]string, []string, error) {
@@ -65,6 +66,7 @@ func WriteSegmentV2(dir store.Directory, seg *InMemorySegment) ([]string, []stri
 			fmt.Sprintf("%s.%s.tidx", seg.name, fieldName),
 			fmt.Sprintf("%s.%s.tfst", seg.name, fieldName),
 			fmt.Sprintf("%s.%s.tdat", seg.name, fieldName),
+			fmt.Sprintf("%s.%s.tpos", seg.name, fieldName),
 		)
 	}
 
@@ -132,15 +134,25 @@ func WriteSegmentV2(dir store.Directory, seg *InMemorySegment) ([]string, []stri
 	return files, meta.Fields, nil
 }
 
-// writePostingsToBuffer encodes a slice of postings using delta-encoding and
+// writePostingsDocFreq encodes doc IDs and frequencies using delta-encoding and
 // appends them to buf. Returns the start offset and length written.
-func writePostingsToBuffer(buf *bytes.Buffer, postings []Posting) (startOffset uint64, length uint32) {
+func writePostingsDocFreq(buf *bytes.Buffer, postings []Posting) (startOffset uint64, length uint32) {
 	startOffset = uint64(buf.Len())
 	prevDocID := 0
 	for _, posting := range postings {
 		writeVIntToBuffer(buf, posting.DocID-prevDocID)
 		prevDocID = posting.DocID
 		writeVIntToBuffer(buf, posting.Freq)
+	}
+	length = uint32(uint64(buf.Len()) - startOffset)
+	return
+}
+
+// writePostingsPositions encodes position data and appends it to buf.
+// Returns the start offset and length written.
+func writePostingsPositions(buf *bytes.Buffer, postings []Posting) (startOffset uint64, length uint32) {
+	startOffset = uint64(buf.Len())
+	for _, posting := range postings {
 		writeVIntToBuffer(buf, len(posting.Positions))
 		prevPos := 0
 		for _, pos := range posting.Positions {
@@ -239,20 +251,27 @@ func writeStoredFieldsEntry(out store.IndexOutput, fields map[string][]byte, scr
 // .tidx format (flat metadata array, term count inferred from file size):
 //
 //	[term_metadata: N × {
-//	    doc_freq:         uint32   (4 bytes)
-//	    postings_offset:  uint64   (8 bytes)
-//	    postings_length:  uint32   (4 bytes)
-//	}]                            — 16 bytes per entry, indexed by ordinal
+//	    doc_freq:           uint32   (4 bytes)
+//	    postings_offset:    uint64   (8 bytes)
+//	    postings_length:    uint32   (4 bytes)
+//	    positions_offset:   uint64   (8 bytes)
+//	    positions_length:   uint32   (4 bytes)
+//	}]                              — 28 bytes per entry, indexed by ordinal
 //
 // .tfst format (raw FST bytes):
 //
 //	[fst_bytes]                   — FST mapping term → ordinal
 //
-// .tdat format:
+// .tdat format (doc/freq only):
 //
 //	[per term's postings:
 //	  doc_id_delta: VInt
 //	  freq: VInt
+//	]
+//
+// .tpos format (positions only):
+//
+//	[per term's postings:
 //	  position_count: VInt
 //	  position_delta: VInt × N
 //	]
@@ -267,6 +286,7 @@ func writeFieldPostingsV2(dir store.Directory, segName, fieldName string, fi *Fi
 	sort.Strings(terms)
 
 	tdatBuf := &bytes.Buffer{}
+	tposBuf := &bytes.Buffer{}
 	tidxOut, err := dir.CreateOutput(fmt.Sprintf("%s.%s.tidx", segName, fieldName))
 	if err != nil {
 		return err
@@ -284,16 +304,23 @@ func writeFieldPostingsV2(dir store.Directory, segName, fieldName string, fi *Fi
 
 	for i, term := range terms {
 		pl := fi.postings[term]
-		startOffset, length := writePostingsToBuffer(tdatBuf, pl.Postings)
+		tdatOffset, tdatLen := writePostingsDocFreq(tdatBuf, pl.Postings)
+		tposOffset, tposLen := writePostingsPositions(tposBuf, pl.Postings)
 
-		// Stream metadata to .tidx
+		// Stream metadata to .tidx (28 bytes per term)
 		if err := tidxOut.WriteUint32(uint32(len(pl.Postings))); err != nil {
 			return fmt.Errorf("write tidx: %w", err)
 		}
-		if err := tidxOut.WriteUint64(startOffset); err != nil {
+		if err := tidxOut.WriteUint64(tdatOffset); err != nil {
 			return fmt.Errorf("write tidx: %w", err)
 		}
-		if err := tidxOut.WriteUint32(length); err != nil {
+		if err := tidxOut.WriteUint32(tdatLen); err != nil {
+			return fmt.Errorf("write tidx: %w", err)
+		}
+		if err := tidxOut.WriteUint64(tposOffset); err != nil {
+			return fmt.Errorf("write tidx: %w", err)
+		}
+		if err := tidxOut.WriteUint32(tposLen); err != nil {
 			return fmt.Errorf("write tidx: %w", err)
 		}
 
@@ -311,6 +338,17 @@ func writeFieldPostingsV2(dir store.Directory, segName, fieldName string, fi *Fi
 
 	if _, err := tdatOut.Write(tdatBuf.Bytes()); err != nil {
 		return fmt.Errorf("write tdat: %w", err)
+	}
+
+	// Write .tpos
+	tposOut, err := dir.CreateOutput(fmt.Sprintf("%s.%s.tpos", segName, fieldName))
+	if err != nil {
+		return err
+	}
+	defer tposOut.Close()
+
+	if _, err := tposOut.Write(tposBuf.Bytes()); err != nil {
+		return fmt.Errorf("write tpos: %w", err)
 	}
 
 	// Finish writes the trailer to .tfst.

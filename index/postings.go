@@ -91,21 +91,25 @@ func (EmptyPostingsIterator) Advance(int) bool { return false }
 // DiskPostingsIterator (mmap-based)
 // ---------------------------------------------------------------------------
 
-// DiskPostingsIterator reads postings from a mmap'd .tdat slice using delta decoding.
+// DiskPostingsIterator reads postings from mmap'd .tdat and .tpos slices.
+// Doc IDs and frequencies are read from .tdat; positions from .tpos.
 //
 // The slice returned by Positions() is reused across Next() calls.
 // Callers that need positions to outlive the next Next() call must copy the slice.
 type DiskPostingsIterator struct {
-	input     *store.MMapIndexInput
+	input    *store.MMapIndexInput // .tdat slice (doc/freq)
+	posInput *store.MMapIndexInput // .tpos slice (positions)
+
 	remaining int // remaining postings to read
 	prevDocID int // for delta decoding
 
 	docID            int
 	freq             int
 	positions        []int
-	posCount         int  // number of position VInts to decode
-	posStartOffset   int  // file offset where position data begins
+	posCount         int  // number of position VInts for current posting
 	positionsDecoded bool // true after Positions() has been called for current posting
+	posSkipPending   bool // true if previous posting's positions were not consumed
+	prevPosCount     int  // position count from previous posting (for skipping)
 }
 
 func (it *DiskPostingsIterator) Next() bool {
@@ -114,7 +118,17 @@ func (it *DiskPostingsIterator) Next() bool {
 	}
 	it.remaining--
 
-	// Read delta-encoded doc ID
+	// Skip unconsumed positions from the previous posting in .tpos
+	if it.posInput != nil && it.posSkipPending {
+		for range it.prevPosCount {
+			if _, err := it.posInput.ReadVInt(); err != nil {
+				it.remaining = 0
+				return false
+			}
+		}
+	}
+
+	// Read delta-encoded doc ID from .tdat
 	delta, err := it.input.ReadVInt()
 	if err != nil {
 		return false
@@ -122,7 +136,7 @@ func (it *DiskPostingsIterator) Next() bool {
 	it.docID = it.prevDocID + delta
 	it.prevDocID = it.docID
 
-	// Read frequency
+	// Read frequency from .tdat
 	freq, err := it.input.ReadVInt()
 	if err != nil {
 		it.remaining = 0
@@ -130,23 +144,20 @@ func (it *DiskPostingsIterator) Next() bool {
 	}
 	it.freq = freq
 
-	// Read position count, save offset, skip position VInts
-	posCount, err := it.input.ReadVInt()
-	if err != nil {
-		it.remaining = 0
-		return false
-	}
-	it.posCount = posCount
-	it.posStartOffset = it.input.Position()
+	// Read position count from .tpos (if available)
+	it.posCount = 0
 	it.positions = nil
 	it.positionsDecoded = false
-
-	// Skip past position VInts without decoding
-	for range posCount {
-		if _, err := it.input.ReadVInt(); err != nil {
+	it.posSkipPending = false
+	if it.posInput != nil {
+		posCount, err := it.posInput.ReadVInt()
+		if err != nil {
 			it.remaining = 0
 			return false
 		}
+		it.posCount = posCount
+		it.posSkipPending = true
+		it.prevPosCount = posCount
 	}
 
 	return true
@@ -159,14 +170,11 @@ func (it *DiskPostingsIterator) Positions() []int {
 		return it.positions
 	}
 	it.positionsDecoded = true
+	it.posSkipPending = false
 
-	if it.posCount == 0 {
+	if it.posInput == nil || it.posCount == 0 {
 		return nil
 	}
-
-	// Save current position, seek back to position data, decode, restore
-	savedPos := it.input.Position()
-	it.input.Seek(it.posStartOffset)
 
 	if cap(it.positions) >= it.posCount {
 		it.positions = it.positions[:it.posCount]
@@ -175,16 +183,14 @@ func (it *DiskPostingsIterator) Positions() []int {
 	}
 	prevPos := 0
 	for i := range it.posCount {
-		posDelta, err := it.input.ReadVInt()
+		posDelta, err := it.posInput.ReadVInt()
 		if err != nil {
-			it.input.Seek(savedPos)
 			return it.positions[:i]
 		}
 		it.positions[i] = prevPos + posDelta
 		prevPos = it.positions[i]
 	}
 
-	it.input.Seek(savedPos)
 	return it.positions
 }
 

@@ -131,6 +131,7 @@ func MergeSegmentsToDisk(dir store.Directory, inputs []MergeInput, newName strin
 			fmt.Sprintf("%s.%s.tidx", newName, field),
 			fmt.Sprintf("%s.%s.tfst", newName, field),
 			fmt.Sprintf("%s.%s.tdat", newName, field),
+			fmt.Sprintf("%s.%s.tpos", newName, field),
 		)
 	}
 
@@ -438,12 +439,18 @@ func mergeFieldPostingsToDisk(
 	}
 	heap.Init(&h)
 
-	// Open .tdat and .tidx files for streaming writes.
+	// Open .tdat, .tpos, and .tidx files for streaming writes.
 	tdatOut, err := dir.CreateOutput(fmt.Sprintf("%s.%s.tdat", segName, field))
 	if err != nil {
 		return err
 	}
 	defer tdatOut.Close()
+
+	tposOut, err := dir.CreateOutput(fmt.Sprintf("%s.%s.tpos", segName, field))
+	if err != nil {
+		return err
+	}
+	defer tposOut.Close()
 
 	tidxOut, err := dir.CreateOutput(fmt.Sprintf("%s.%s.tidx", segName, field))
 	if err != nil {
@@ -460,9 +467,11 @@ func mergeFieldPostingsToDisk(
 
 	fstBuilder := fst.NewBuilderWithWriter(tfstOut)
 	var ordinal uint64
-	var globalOffset uint64
+	var globalTdatOffset uint64
+	var globalTposOffset uint64
 	var postings []Posting
-	termBuf := &bytes.Buffer{}
+	tdatBuf := &bytes.Buffer{}
+	tposBuf := &bytes.Buffer{}
 
 	// Flat arena for position data, reused across terms.
 	// Each Posting.Positions is a sub-slice of this arena.
@@ -510,22 +519,34 @@ func mergeFieldPostingsToDisk(
 			return postings[i].DocID < postings[j].DocID
 		})
 
-		// Write postings to a small per-term buffer, then flush to disk.
-		termBuf.Reset()
-		writePostingsToBuffer(termBuf, postings)
-		length := uint32(termBuf.Len())
-		if _, err := tdatOut.Write(termBuf.Bytes()); err != nil {
+		// Write doc/freq to .tdat buffer, positions to .tpos buffer.
+		tdatBuf.Reset()
+		tposBuf.Reset()
+		writePostingsDocFreq(tdatBuf, postings)
+		writePostingsPositions(tposBuf, postings)
+		tdatLen := uint32(tdatBuf.Len())
+		tposLen := uint32(tposBuf.Len())
+		if _, err := tdatOut.Write(tdatBuf.Bytes()); err != nil {
 			return fmt.Errorf("write tdat: %w", err)
 		}
+		if _, err := tposOut.Write(tposBuf.Bytes()); err != nil {
+			return fmt.Errorf("write tpos: %w", err)
+		}
 
-		// Stream metadata to .tidx
+		// Stream metadata to .tidx (28 bytes per term)
 		if err := tidxOut.WriteUint32(uint32(len(postings))); err != nil {
 			return fmt.Errorf("write tidx: %w", err)
 		}
-		if err := tidxOut.WriteUint64(globalOffset); err != nil {
+		if err := tidxOut.WriteUint64(globalTdatOffset); err != nil {
 			return fmt.Errorf("write tidx: %w", err)
 		}
-		if err := tidxOut.WriteUint32(length); err != nil {
+		if err := tidxOut.WriteUint32(tdatLen); err != nil {
+			return fmt.Errorf("write tidx: %w", err)
+		}
+		if err := tidxOut.WriteUint64(globalTposOffset); err != nil {
+			return fmt.Errorf("write tidx: %w", err)
+		}
+		if err := tidxOut.WriteUint32(tposLen); err != nil {
 			return fmt.Errorf("write tidx: %w", err)
 		}
 
@@ -533,7 +554,8 @@ func mergeFieldPostingsToDisk(
 			return fmt.Errorf("fst build: %w", err)
 		}
 		ordinal++
-		globalOffset += uint64(length)
+		globalTdatOffset += uint64(tdatLen)
+		globalTposOffset += uint64(tposLen)
 	}
 
 	// Finish writes the trailer to .tfst.
