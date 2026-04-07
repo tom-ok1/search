@@ -163,7 +163,7 @@ func BenchmarkMemoryStability(b *testing.B) {
 
 // --- Large segment merge benchmark ---
 // Tests merging segments with 100K+ docs each, which is the boundary
-// where TieredMergePolicy stops merging (MaxMergedSegmentDocs=100K).
+// where TieredMergePolicy stops merging (MaxMergedSegmentDocs=5M).
 
 func BenchmarkLargeSegmentMerge(b *testing.B) {
 	for _, docsPerSeg := range []int{50_000, 100_000} {
