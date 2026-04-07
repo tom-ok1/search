@@ -87,7 +87,7 @@ type Header struct {
 //	Status (1 byte)
 //	VarHeaderLength (4 bytes, big-endian)
 //	Variable Header: Action (string, request only) + ParentTaskID (string)
-func (h *Header) WriteTo(w io.Writer) error {
+func (h *Header) Encode(w io.Writer) error {
 	// Write marker
 	marker := []byte{markerByte1, markerByte2}
 	if _, err := w.Write(marker); err != nil {

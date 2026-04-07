@@ -86,7 +86,7 @@ func TestHeaderRequestRoundtrip(t *testing.T) {
 
 	// Write to buffer
 	var buf bytes.Buffer
-	if err := original.WriteTo(&buf); err != nil {
+	if err := original.Encode(&buf); err != nil {
 		t.Fatalf("failed to write header: %v", err)
 	}
 
@@ -141,7 +141,7 @@ func TestHeaderResponseRoundtrip(t *testing.T) {
 
 	// Write to buffer
 	var buf bytes.Buffer
-	if err := original.WriteTo(&buf); err != nil {
+	if err := original.Encode(&buf); err != nil {
 		t.Fatalf("failed to write header: %v", err)
 	}
 
@@ -196,7 +196,7 @@ func TestHeaderMarkerVerification(t *testing.T) {
 
 	// Write to buffer
 	var buf bytes.Buffer
-	if err := header.WriteTo(&buf); err != nil {
+	if err := header.Encode(&buf); err != nil {
 		t.Fatalf("failed to write header: %v", err)
 	}
 
