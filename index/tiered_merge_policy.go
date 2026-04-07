@@ -16,7 +16,7 @@ func NewTieredMergePolicy() *TieredMergePolicy {
 	return &TieredMergePolicy{
 		MaxMergeAtOnce:        10,
 		SegmentsPerTier:       10,
-		MaxMergedSegmentDocs:  100000,
+		MaxMergedSegmentDocs:  5000000,
 		DeletedDocsPctAllowed: 0.33,
 	}
 }
