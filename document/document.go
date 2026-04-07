@@ -95,6 +95,21 @@ func (d *Document) AddDoublePoint(name string, value float64) {
 	})
 }
 
+// SetSeqNoFields updates the _seq_no and _primary_term numeric doc values
+// fields in the document. These fields must have been added previously
+// (e.g., by ParseDocument). This mirrors Elasticsearch's
+// ParsedDocument.updateSeqID().
+func (d *Document) SetSeqNoFields(seqNo, primaryTerm int64) {
+	for i := range d.Fields {
+		switch d.Fields[i].Name {
+		case "_seq_no":
+			d.Fields[i].Value = seqNo
+		case "_primary_term":
+			d.Fields[i].Value = primaryTerm
+		}
+	}
+}
+
 // DoubleToSortableLong converts a float64 to an int64 that sorts in the same order.
 // This is equivalent to Lucene's NumericUtils.doubleToSortableLong.
 func DoubleToSortableLong(value float64) int64 {

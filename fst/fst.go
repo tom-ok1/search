@@ -103,6 +103,7 @@ func (f *FST) readArcsAt(nodeAddr int64) []arcInfo {
 
 // Get performs an exact lookup for the given key.
 // Returns the output value and true if found, or (0, false) if not found.
+// This method scans arcs inline to avoid allocating []arcInfo slices.
 func (f *FST) Get(key []byte) (uint64, bool) {
 	if f.input.Length() == 0 {
 		return 0, false
@@ -112,27 +113,115 @@ func (f *FST) Get(key []byte) (uint64, bool) {
 	nodeAddr := f.startNode
 
 	for _, b := range key {
-		arcs := f.readArcsAt(nodeAddr)
-		found := false
-		for _, arc := range arcs {
-			if !arc.isFinal && arc.label == b {
-				output = outputAdd(output, arc.output)
-				nodeAddr = arc.target
-				found = true
-				break
-			}
-		}
-		if !found {
+		target, arcOutput, ok := f.findArc(nodeAddr, b)
+		if !ok {
 			return 0, false
 		}
+		output = outputAdd(output, arcOutput)
+		nodeAddr = target
 	}
 
-	// Check if current node is final (has a final arc)
-	arcs := f.readArcsAt(nodeAddr)
-	for _, arc := range arcs {
-		if arc.isFinal {
-			output = outputAdd(output, arc.output)
-			return output, true
+	// Check if current node has a final arc.
+	finalOutput, ok := f.findFinalOutput(nodeAddr)
+	if !ok {
+		return 0, false
+	}
+	return outputAdd(output, finalOutput), true
+}
+
+// findArc scans arcs at nodeAddr for a regular arc with the given label.
+// Returns (target, output, true) if found, or (0, 0, false) if not.
+func (f *FST) findArc(nodeAddr int64, label byte) (int64, uint64, bool) {
+	input := f.input
+	input.Seek(int(nodeAddr))
+
+	for input.Position() < input.Length() {
+		flags, err := input.ReadByte()
+		if err != nil {
+			return 0, 0, false
+		}
+
+		if flags&bitFinalArc != 0 {
+			// Skip final arc output.
+			if flags&bitHasOutput != 0 {
+				if _, err := input.ReadUvarint(); err != nil {
+					return 0, 0, false
+				}
+			}
+			if flags&bitLastArc != 0 {
+				return 0, 0, false
+			}
+			continue
+		}
+
+		arcLabel, err := input.ReadByte()
+		if err != nil {
+			return 0, 0, false
+		}
+
+		var arcOutput uint64
+		if flags&bitHasOutput != 0 {
+			val, err := input.ReadUvarint()
+			if err != nil {
+				return 0, 0, false
+			}
+			arcOutput = val
+		}
+
+		target, err := input.ReadUvarint()
+		if err != nil {
+			return 0, 0, false
+		}
+
+		if arcLabel == label {
+			return int64(target), arcOutput, true
+		}
+
+		if flags&bitLastArc != 0 {
+			return 0, 0, false
+		}
+	}
+	return 0, 0, false
+}
+
+// findFinalOutput checks if the node at nodeAddr has a final arc and returns its output.
+func (f *FST) findFinalOutput(nodeAddr int64) (uint64, bool) {
+	input := f.input
+	input.Seek(int(nodeAddr))
+
+	for input.Position() < input.Length() {
+		flags, err := input.ReadByte()
+		if err != nil {
+			return 0, false
+		}
+
+		if flags&bitFinalArc != 0 {
+			var finalOutput uint64
+			if flags&bitHasOutput != 0 {
+				val, err := input.ReadUvarint()
+				if err != nil {
+					return 0, false
+				}
+				finalOutput = val
+			}
+			return finalOutput, true
+		}
+
+		// Skip regular arc fields.
+		if _, err := input.ReadByte(); err != nil { // label
+			return 0, false
+		}
+		if flags&bitHasOutput != 0 {
+			if _, err := input.ReadUvarint(); err != nil { // output
+				return 0, false
+			}
+		}
+		if _, err := input.ReadUvarint(); err != nil { // target
+			return 0, false
+		}
+
+		if flags&bitLastArc != 0 {
+			return 0, false
 		}
 	}
 	return 0, false

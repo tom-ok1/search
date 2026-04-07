@@ -162,10 +162,12 @@ func TestDiskSegmentPostingsIterator(t *testing.T) {
 		diskIter := ds.PostingsIterator("title", term)
 		var diskPostings []Posting
 		for diskIter.Next() {
+			// Copy positions since DiskPostingsIterator reuses the slice.
+			pos := append([]int(nil), diskIter.Positions()...)
 			diskPostings = append(diskPostings, Posting{
 				DocID:     diskIter.DocID(),
 				Freq:      diskIter.Freq(),
-				Positions: diskIter.Positions(),
+				Positions: pos,
 			})
 		}
 

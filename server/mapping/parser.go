@@ -27,6 +27,12 @@ func ParseDocument(id string, source []byte, m *MappingDefinition) (*document.Do
 	// Add _source as stored field (raw JSON bytes)
 	doc.AddBytesField("_source", source, document.FieldTypeStored)
 
+	// Add _seq_no and _primary_term as numeric doc values fields.
+	// The actual values are set by the engine after seqNo assignment;
+	// these are placeholders that will be overwritten.
+	doc.AddNumericDocValuesField("_seq_no", 0)
+	doc.AddNumericDocValuesField("_primary_term", 0)
+
 	// Process each mapped field
 	for fieldName, fieldMapping := range m.Properties {
 		value, ok := fields[fieldName]
