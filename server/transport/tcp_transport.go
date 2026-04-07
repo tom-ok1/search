@@ -195,8 +195,8 @@ func (t *TcpTransport) OpenConnection(node DiscoveryNode, profile ConnectionProf
 
 func (t *TcpTransport) performHandshake(conn net.Conn, profile ConnectionProfile) (int32, error) {
 	if profile.HandshakeTimeout > 0 {
-		conn.SetDeadline(deadlineFromTimeout(profile.HandshakeTimeout))
-		defer conn.SetDeadline(zeroTime)
+		conn.SetDeadline(time.Now().Add(profile.HandshakeTimeout))
+		defer conn.SetDeadline(time.Time{})
 	}
 
 	req := &HandshakeRequest{Version: CurrentTransportVersion}
