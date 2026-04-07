@@ -167,7 +167,11 @@ func (it *DiskPostingsIterator) Positions() []int {
 	savedPos := it.input.Position()
 	it.input.Seek(it.posStartOffset)
 
-	it.positions = make([]int, it.posCount)
+	if cap(it.positions) >= it.posCount {
+		it.positions = it.positions[:it.posCount]
+	} else {
+		it.positions = make([]int, it.posCount)
+	}
 	prevPos := 0
 	for i := range it.posCount {
 		posDelta, err := it.input.ReadVInt()
