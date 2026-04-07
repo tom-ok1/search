@@ -637,3 +637,28 @@ func TestNode_RecoveryAfterRestart(t *testing.T) {
 		t.Errorf("search result does not contain document: %s", searchResult)
 	}
 }
+
+func TestNode_TransportServiceStarts(t *testing.T) {
+	dir := t.TempDir()
+	node, err := NewNode(NodeConfig{
+		DataPath:      dir,
+		HTTPPort:      0,
+		TransportPort: 0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer node.Stop()
+
+	_, err = node.Start()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if node.TransportService() == nil {
+		t.Error("TransportService should not be nil")
+	}
+	if node.TransportService().LocalNode().Address == "" {
+		t.Error("transport address should be set")
+	}
+}
