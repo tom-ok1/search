@@ -150,6 +150,22 @@ func TestDeleteQueueFreezeAdvancesCallerSlice(t *testing.T) {
 	}
 }
 
+func TestDeleteQueueAtomicTailRead(t *testing.T) {
+	dq := newDeleteQueue()
+	sentinel := dq.tail.Load()
+	if sentinel == nil {
+		t.Fatal("expected non-nil sentinel tail")
+	}
+	dq.addDelete("f", "t1")
+	newTail := dq.tail.Load()
+	if newTail == sentinel {
+		t.Fatal("tail should have advanced after addDelete")
+	}
+	if newTail.field != "f" || newTail.term != "t1" {
+		t.Errorf("unexpected tail node: field=%s term=%s", newTail.field, newTail.term)
+	}
+}
+
 func TestDeleteQueueAnyChanges(t *testing.T) {
 	dq := newDeleteQueue()
 	if dq.anyChanges() {
