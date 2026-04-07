@@ -3,6 +3,7 @@ package index
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -11,8 +12,8 @@ import (
 // too much RAM is pending flush.
 type FlushControl struct {
 	mu              sync.Mutex
-	activeBytes     int64 // bytes in actively indexing DWPTs
-	flushBytes      int64 // bytes in DWPTs that are pending flush
+	activeBytes     atomic.Int64 // bytes in actively indexing DWPTs
+	flushBytes      int64        // bytes in DWPTs that are pending flush
 	ramBufferSize   int64
 	maxBufferedDocs int   // max docs per DWPT before flush (0 = no limit)
 	stallLimit      int64 // 2x ramBufferSize
@@ -42,47 +43,51 @@ func newFlushControl(ramBufferSize int64, maxBufferedDocs int, pool *perThreadPo
 // and added to the flush queue. Returns true if the DWPT is now flush-pending
 // (and should NOT be returned to the free pool by the caller).
 func (fc *FlushControl) doAfterDocument(dwpt *DocumentsWriterPerThread, bytesAdded int64) bool {
+	newActive := fc.activeBytes.Add(bytesAdded)
+
+	// Fast path: no flush needed (common case — lock-free)
+	byDocCount := fc.maxBufferedDocs > 0 && dwpt.segment.docCount >= fc.maxBufferedDocs
+	if newActive < fc.ramBufferSize && !byDocCount {
+		return false
+	}
+
+	// Slow path: flush may be needed — acquire lock
 	fc.mu.Lock()
 	defer fc.mu.Unlock()
 
-	fc.activeBytes += bytesAdded
+	if dwpt.flushPending {
+		return false
+	}
+
+	// Re-check RAM threshold under lock (another goroutine may have flushed)
+	shouldFlush := fc.activeBytes.Load() >= fc.ramBufferSize || byDocCount
+	if !shouldFlush {
+		return false
+	}
+
+	dwpt.flushPending = true
+	dwptBytes := dwpt.estimateBytesUsed()
+	fc.activeBytes.Add(-dwptBytes)
+	fc.flushBytes += dwptBytes
+	fc.flushQueue = append(fc.flushQueue, dwpt)
+
 	if fc.metrics != nil {
-		fc.metrics.ActiveBytes.Store(fc.activeBytes)
+		fc.metrics.FlushPendingBytes.Store(fc.flushBytes)
+	}
+	if fc.infoStream.IsEnabled("DWFC") {
+		activeBytes := fc.activeBytes.Load()
+		fc.infoStream.Message("DWFC", fmt.Sprintf(
+			"flush triggered: ramBytes=%.1f MB > limit=%.1f MB",
+			float64(activeBytes+fc.flushBytes)/(1024*1024),
+			float64(fc.ramBufferSize)/(1024*1024)))
 	}
 
-	shouldFlush := false
-	if fc.activeBytes >= fc.ramBufferSize && !dwpt.flushPending {
-		shouldFlush = true
-	}
-	if fc.maxBufferedDocs > 0 && dwpt.segment.docCount >= fc.maxBufferedDocs && !dwpt.flushPending {
-		shouldFlush = true
+	activeBytes := fc.activeBytes.Load()
+	if activeBytes+fc.flushBytes >= fc.stallLimit {
+		fc.stalled = true
 	}
 
-	if shouldFlush {
-		dwpt.flushPending = true
-		dwptBytes := dwpt.estimateBytesUsed()
-		fc.activeBytes -= dwptBytes
-		fc.flushBytes += dwptBytes
-		fc.flushQueue = append(fc.flushQueue, dwpt)
-		if fc.metrics != nil {
-			fc.metrics.FlushPendingBytes.Store(fc.flushBytes)
-			fc.metrics.ActiveBytes.Store(fc.activeBytes)
-		}
-		if fc.infoStream.IsEnabled("DWFC") {
-			fc.infoStream.Message("DWFC", fmt.Sprintf(
-				"flush triggered: ramBytes=%.1f MB > limit=%.1f MB",
-				float64(fc.activeBytes+fc.flushBytes)/(1024*1024),
-				float64(fc.ramBufferSize)/(1024*1024)))
-		}
-
-		if fc.activeBytes+fc.flushBytes >= fc.stallLimit {
-			fc.stalled = true
-		}
-
-		return true
-	}
-
-	return false
+	return true
 }
 
 // nextPendingFlush returns the next DWPT that needs flushing, or nil.
@@ -114,7 +119,8 @@ func (fc *FlushControl) doAfterFlush(dwpt *DocumentsWriterPerThread) {
 		fc.metrics.FlushPendingBytes.Store(fc.flushBytes)
 	}
 
-	if fc.stalled && fc.activeBytes+fc.flushBytes < fc.stallLimit {
+	activeBytes := fc.activeBytes.Load()
+	if fc.stalled && activeBytes+fc.flushBytes < fc.stallLimit {
 		fc.stalled = false
 		fc.stallCond.Broadcast()
 	}
@@ -135,7 +141,7 @@ func (fc *FlushControl) waitIfStalled() {
 	if fc.infoStream.IsEnabled("DW") {
 		fc.infoStream.Message("DW", fmt.Sprintf(
 			"now stalling: activeBytes=%.1f MB flushBytes=%.1f MB",
-			float64(fc.activeBytes)/(1024*1024),
+			float64(fc.activeBytes.Load())/(1024*1024),
 			float64(fc.flushBytes)/(1024*1024)))
 	}
 
@@ -173,7 +179,7 @@ func (fc *FlushControl) markForFullFlush() []*DocumentsWriterPerThread {
 		if dwpt.segment.docCount > 0 {
 			if !dwpt.flushPending {
 				dwptBytes := dwpt.estimateBytesUsed()
-				fc.activeBytes -= dwptBytes
+				fc.activeBytes.Add(-dwptBytes)
 				fc.flushBytes += dwptBytes
 				dwpt.flushPending = true
 			}

@@ -112,6 +112,32 @@ func TestFlushControlStallAndUnstall(t *testing.T) {
 	}
 }
 
+func TestFlushControlDoAfterDocumentFastPath(t *testing.T) {
+	counter := 0
+	pool := newPerThreadPool(func() string {
+		name := fmt.Sprintf("_seg%d", counter)
+		counter++
+		return name
+	}, newTestFieldAnalyzers(), newDeleteQueue())
+
+	fc := newFlushControl(1<<30, 0, pool)
+	dwpt := pool.getAndLock()
+
+	doc := document.NewDocument()
+	doc.AddField("body", "hello world", document.FieldTypeText)
+	bytesAdded, _ := dwpt.addDocument(doc)
+
+	flushPending := fc.doAfterDocument(dwpt, bytesAdded)
+	if flushPending {
+		t.Fatal("expected no flush with large buffer")
+	}
+
+	if fc.activeBytes.Load() != bytesAdded {
+		t.Errorf("activeBytes: got %d, want %d", fc.activeBytes.Load(), bytesAdded)
+	}
+	pool.returnAndUnlock(dwpt)
+}
+
 func TestFlushControlMarkForFullFlush(t *testing.T) {
 	counter := 0
 	pool := newPerThreadPool(func() string {
