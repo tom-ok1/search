@@ -190,6 +190,18 @@ func (t *TcpTransport) OpenConnection(node DiscoveryNode, profile ConnectionProf
 		version:  negotiatedVersion,
 		counters: counters,
 	}
+
+	// Start read loops on outbound connections to receive responses.
+	for _, conns := range channels {
+		for _, conn := range conns {
+			t.wg.Add(1)
+			go func(c net.Conn) {
+				defer t.wg.Done()
+				t.handleConn(c)
+			}(conn)
+		}
+	}
+
 	return nc, nil
 }
 
