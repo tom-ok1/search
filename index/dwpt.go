@@ -18,6 +18,7 @@ type DocumentsWriterPerThread struct {
 	deleteQueue    *DeleteQueue
 	deleteSlice    *DeleteSlice
 	pendingUpdates *BufferedUpdates
+	termInfo       map[string]*Posting // reused across documents
 }
 
 func newDWPT(segmentName string, fieldAnalyzers *analysis.FieldAnalyzers, deleteQueue *DeleteQueue) *DocumentsWriterPerThread {
@@ -27,6 +28,7 @@ func newDWPT(segmentName string, fieldAnalyzers *analysis.FieldAnalyzers, delete
 		deleteQueue:    deleteQueue,
 		deleteSlice:    deleteQueue.newSlice(),
 		pendingUpdates: newBufferedUpdates(),
+		termInfo:       make(map[string]*Posting),
 	}
 }
 
@@ -58,26 +60,31 @@ func (dwpt *DocumentsWriterPerThread) addDocument(doc *document.Document) (int64
 			seg.fieldLengths[field.Name][docID] = len(tokens)
 			bytesAdded += 4 // fieldLengths entry
 
-			termInfo := make(map[string]*Posting)
+			clear(dwpt.termInfo)
 			for _, token := range tokens {
-				posting, exists := termInfo[token.Term]
+				posting, exists := dwpt.termInfo[token.Term]
 				if !exists {
 					posting = &Posting{DocID: docID}
-					termInfo[token.Term] = posting
+					dwpt.termInfo[token.Term] = posting
 				}
 				posting.Freq++
 				posting.Positions = append(posting.Positions, token.Position)
 			}
 
-			for term, posting := range termInfo {
+			for term, posting := range dwpt.termInfo {
 				pl, exists := fi.postings[term]
 				if !exists {
-					pl = &PostingsList{Term: term}
+					pl = &PostingsList{Term: term, Postings: make([]Posting, 0, 8)}
 					fi.postings[term] = pl
 				}
 				pl.Postings = append(pl.Postings, *posting)
 				// term string + DocID(8) + Freq(8) + positions
 				bytesAdded += int64(len(term) + 16 + 8*len(posting.Positions))
+				// Reset the posting for reuse: keep the pointer in the map
+				// but clear fields so it's ready for the next document.
+				posting.DocID = 0
+				posting.Freq = 0
+				posting.Positions = nil
 			}
 
 		case document.FieldTypeKeyword:
@@ -261,6 +268,7 @@ func (dwpt *DocumentsWriterPerThread) reset(name string) {
 	dwpt.flushPending = false
 	dwpt.deleteSlice = dwpt.deleteQueue.newSlice()
 	dwpt.pendingUpdates = newBufferedUpdates()
+	clear(dwpt.termInfo)
 }
 
 func (dwpt *DocumentsWriterPerThread) getOrCreateFieldIndex(fieldName string) *FieldIndex {
