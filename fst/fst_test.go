@@ -489,3 +489,75 @@ func TestManyKeys(t *testing.T) {
 		t.Error("Get(term9999): should not exist")
 	}
 }
+
+func TestBuilderReset(t *testing.T) {
+	// Build first FST
+	buf1 := &bytes.Buffer{}
+	b := NewBuilderWithWriter(buf1)
+	b.Add([]byte("alpha"), 1)
+	b.Add([]byte("beta"), 2)
+	if err := b.Finish(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Load first FST
+	path1 := filepath.Join(t.TempDir(), "fst1.bin")
+	if err := os.WriteFile(path1, buf1.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	input1, err := store.OpenMMap(path1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input1.Close()
+	fst1, err := FSTFromInput(input1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Reset and build second FST
+	buf2 := &bytes.Buffer{}
+	b.Reset(buf2)
+	b.Add([]byte("delta"), 3)
+	b.Add([]byte("gamma"), 4)
+	if err := b.Finish(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Load second FST
+	path2 := filepath.Join(t.TempDir(), "fst2.bin")
+	if err := os.WriteFile(path2, buf2.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	input2, err := store.OpenMMap(path2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input2.Close()
+	fst2, err := FSTFromInput(input2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify first FST
+	if v, ok := fst1.Get([]byte("alpha")); !ok || v != 1 {
+		t.Errorf("fst1.Get(alpha) = %d, %v; want 1, true", v, ok)
+	}
+	if v, ok := fst1.Get([]byte("beta")); !ok || v != 2 {
+		t.Errorf("fst1.Get(beta) = %d, %v; want 2, true", v, ok)
+	}
+	if _, ok := fst1.Get([]byte("gamma")); ok {
+		t.Error("fst1 should not contain gamma")
+	}
+
+	// Verify second FST
+	if v, ok := fst2.Get([]byte("delta")); !ok || v != 3 {
+		t.Errorf("fst2.Get(delta) = %d, %v; want 3, true", v, ok)
+	}
+	if v, ok := fst2.Get([]byte("gamma")); !ok || v != 4 {
+		t.Errorf("fst2.Get(gamma) = %d, %v; want 4, true", v, ok)
+	}
+	if _, ok := fst2.Get([]byte("alpha")); ok {
+		t.Error("fst2 should not contain alpha")
+	}
+}

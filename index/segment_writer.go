@@ -57,9 +57,10 @@ func WriteSegmentV2(dir store.Directory, seg *InMemorySegment) ([]string, []stri
 	files = append(files, metaFileName)
 
 	// 2. Write postings (tidx + tfst + tdat) for each field
+	fstBuilder := fst.NewBuilderWithWriter(nil) // will be Reset per field
 	for _, fieldName := range meta.Fields {
 		fi := seg.fields[fieldName]
-		if err := writeFieldPostingsV2(dir, seg.name, fieldName, fi); err != nil {
+		if err := writeFieldPostingsV2(dir, seg.name, fieldName, fi, fstBuilder); err != nil {
 			return nil, nil, err
 		}
 		files = append(files,
@@ -275,7 +276,7 @@ func writeStoredFieldsEntry(out store.IndexOutput, fields map[string][]byte, scr
 //	  position_count: VInt
 //	  position_delta: VInt × N
 //	]
-func writeFieldPostingsV2(dir store.Directory, segName, fieldName string, fi *FieldIndex) error {
+func writeFieldPostingsV2(dir store.Directory, segName, fieldName string, fi *FieldIndex, fstBuilder *fst.Builder) error {
 	if len(fi.postings) == 0 {
 		return nil
 	}
@@ -300,7 +301,7 @@ func writeFieldPostingsV2(dir store.Directory, segName, fieldName string, fi *Fi
 	}
 	defer tfstOut.Close()
 
-	fstBuilder := fst.NewBuilderWithWriter(tfstOut)
+	fstBuilder.Reset(tfstOut)
 
 	for i, term := range terms {
 		pl := fi.postings[term]

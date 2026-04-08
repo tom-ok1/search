@@ -123,8 +123,9 @@ func MergeSegmentsToDisk(dir store.Directory, inputs []MergeInput, newName strin
 	files = append(files, newName+".stored")
 
 	// Merge postings per field.
+	fstBuilder := fst.NewBuilderWithWriter(nil)
 	for _, field := range allFields {
-		if err := mergeFieldPostingsToDisk(dir, newName, field, inputs, mapper); err != nil {
+		if err := mergeFieldPostingsToDisk(dir, newName, field, inputs, mapper, fstBuilder); err != nil {
 			return nil, err
 		}
 		files = append(files,
@@ -421,6 +422,7 @@ func mergeFieldPostingsToDisk(
 	segName, field string,
 	inputs []MergeInput,
 	mapper *DocIDMapper,
+	fstBuilder *fst.Builder,
 ) error {
 	// Initialize the heap with one entry per segment that has this field.
 	var h termHeap
@@ -465,7 +467,7 @@ func mergeFieldPostingsToDisk(
 	}
 	defer tfstOut.Close()
 
-	fstBuilder := fst.NewBuilderWithWriter(tfstOut)
+	fstBuilder.Reset(tfstOut)
 	var ordinal uint64
 	var globalTdatOffset uint64
 	var globalTposOffset uint64

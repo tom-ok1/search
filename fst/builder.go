@@ -39,6 +39,11 @@ func newNodeCache(limit int) nodeCache {
 	}
 }
 
+func (c *nodeCache) reset() {
+	clear(c.m)
+	c.cursor = 0
+}
+
 func (c *nodeCache) get(h uint64) (int64, bool) {
 	addr, ok := c.m[h]
 	return addr, ok
@@ -99,6 +104,23 @@ func NewBuilderWithWriter(w io.Writer) *Builder {
 	}
 	b.frontier = append(b.frontier, newUncompiledNode())
 	return b
+}
+
+// Reset resets the builder for reuse with a new writer, avoiding reallocation
+// of internal structures (frontier, cache).
+func (b *Builder) Reset(w io.Writer) {
+	b.w = w
+	b.written = 0
+	b.lastKey = b.lastKey[:0]
+	b.cache.reset()
+	b.count = 0
+	// Keep frontier slice but reset the root node
+	if len(b.frontier) > 0 {
+		b.frontier[0].clear()
+		b.frontier = b.frontier[:1]
+	} else {
+		b.frontier = append(b.frontier, newUncompiledNode())
+	}
 }
 
 // Add adds a key-value pair to the FST. Keys must be added in strictly sorted order.
