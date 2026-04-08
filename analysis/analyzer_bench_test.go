@@ -13,7 +13,7 @@ func BenchmarkWhitespaceTokenizer(b *testing.B) {
 
 	b.ReportAllocs()
 	for b.Loop() {
-		tokens, err := tokenizer.Tokenize(strings.NewReader(text))
+		tokens, err := tokenizer.Tokenize(text)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -27,7 +27,7 @@ func BenchmarkNGramTokenizer(b *testing.B) {
 
 	b.ReportAllocs()
 	for b.Loop() {
-		tokens, err := tokenizer.Tokenize(strings.NewReader(text))
+		tokens, err := tokenizer.Tokenize(text)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -39,7 +39,7 @@ func BenchmarkLowerCaseFilter(b *testing.B) {
 	tokenizer := NewWhitespaceTokenizer()
 	filter := NewLowerCaseFilter()
 	text := "The Quick Brown Fox Jumps Over The Lazy Dog"
-	tokens, err := tokenizer.Tokenize(strings.NewReader(text))
+	tokens, err := tokenizer.Tokenize(text)
 	if err != nil {
 		b.Fatal(err)
 	}

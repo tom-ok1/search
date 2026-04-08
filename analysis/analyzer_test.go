@@ -1,7 +1,6 @@
 package analysis
 
 import (
-	"strings"
 	"testing"
 )
 
@@ -32,7 +31,7 @@ func TestAnalyzer(t *testing.T) {
 
 func TestWhitespaceTokenizerPositions(t *testing.T) {
 	tokenizer := NewWhitespaceTokenizer()
-	tokens, _ := tokenizer.Tokenize(strings.NewReader("hello world"))
+	tokens, _ := tokenizer.Tokenize("hello world")
 
 	if tokens[0].StartOffset != 0 || tokens[0].EndOffset != 5 {
 		t.Errorf("token 0 offsets: expected [0,5], got [%d,%d]",
@@ -47,7 +46,7 @@ func TestWhitespaceTokenizerPositions(t *testing.T) {
 func TestWhitespaceTokenizerJapanese(t *testing.T) {
 	tokenizer := NewWhitespaceTokenizer()
 	// "東京 大阪" = 6 bytes + 1 byte space + 6 bytes = 13 bytes
-	tokens, err := tokenizer.Tokenize(strings.NewReader("東京 大阪"))
+	tokens, err := tokenizer.Tokenize("東京 大阪")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +72,7 @@ func TestWhitespaceTokenizerJapanese(t *testing.T) {
 
 func TestWhitespaceTokenizerMultipleSpaces(t *testing.T) {
 	tokenizer := NewWhitespaceTokenizer()
-	tokens, err := tokenizer.Tokenize(strings.NewReader("hello   world"))
+	tokens, err := tokenizer.Tokenize("hello   world")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +92,7 @@ func TestWhitespaceTokenizerMultipleSpaces(t *testing.T) {
 
 func TestWhitespaceTokenizerTabsAndMixed(t *testing.T) {
 	tokenizer := NewWhitespaceTokenizer()
-	tokens, err := tokenizer.Tokenize(strings.NewReader("hello\tworld\nhello"))
+	tokens, err := tokenizer.Tokenize("hello\tworld\nhello")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +109,7 @@ func TestWhitespaceTokenizerTabsAndMixed(t *testing.T) {
 
 func TestWhitespaceTokenizerLeadingTrailing(t *testing.T) {
 	tokenizer := NewWhitespaceTokenizer()
-	tokens, err := tokenizer.Tokenize(strings.NewReader("  hello world  "))
+	tokens, err := tokenizer.Tokenize("  hello world  ")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +132,7 @@ func TestWhitespaceTokenizerLeadingTrailing(t *testing.T) {
 
 func TestWhitespaceTokenizerOnlyWhitespace(t *testing.T) {
 	tokenizer := NewWhitespaceTokenizer()
-	tokens, err := tokenizer.Tokenize(strings.NewReader("   "))
+	tokens, err := tokenizer.Tokenize("   ")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +143,7 @@ func TestWhitespaceTokenizerOnlyWhitespace(t *testing.T) {
 
 func TestWhitespaceTokenizerEmpty(t *testing.T) {
 	tokenizer := NewWhitespaceTokenizer()
-	tokens, err := tokenizer.Tokenize(strings.NewReader(""))
+	tokens, err := tokenizer.Tokenize("")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +154,7 @@ func TestWhitespaceTokenizerEmpty(t *testing.T) {
 
 func TestWhitespaceTokenizerSingleChar(t *testing.T) {
 	tokenizer := NewWhitespaceTokenizer()
-	tokens, err := tokenizer.Tokenize(strings.NewReader("a"))
+	tokens, err := tokenizer.Tokenize("a")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +172,7 @@ func TestWhitespaceTokenizerSingleChar(t *testing.T) {
 func TestWhitespaceTokenizerEmoji(t *testing.T) {
 	tokenizer := NewWhitespaceTokenizer()
 	// 🔍 is 4 bytes in UTF-8
-	tokens, err := tokenizer.Tokenize(strings.NewReader("hello 🔍 world"))
+	tokens, err := tokenizer.Tokenize("hello 🔍 world")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +201,7 @@ func TestWhitespaceTokenizerSpecialChars(t *testing.T) {
 	tokenizer := NewWhitespaceTokenizer()
 
 	// Hyphens, dots, underscores should not split
-	tokens, err := tokenizer.Tokenize(strings.NewReader("state-of-the-art node.js hello_world"))
+	tokens, err := tokenizer.Tokenize("state-of-the-art node.js hello_world")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,7 +218,7 @@ func TestWhitespaceTokenizerSpecialChars(t *testing.T) {
 
 func TestWhitespaceTokenizerAtSignsAndHashes(t *testing.T) {
 	tokenizer := NewWhitespaceTokenizer()
-	tokens, err := tokenizer.Tokenize(strings.NewReader("user@example.com #tag"))
+	tokens, err := tokenizer.Tokenize("user@example.com #tag")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,7 +235,7 @@ func TestWhitespaceTokenizerAtSignsAndHashes(t *testing.T) {
 
 func TestWhitespaceTokenizerSymbolsOnly(t *testing.T) {
 	tokenizer := NewWhitespaceTokenizer()
-	tokens, err := tokenizer.Tokenize(strings.NewReader("@#$%"))
+	tokens, err := tokenizer.Tokenize("@#$%")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,7 +250,7 @@ func TestWhitespaceTokenizerSymbolsOnly(t *testing.T) {
 func TestWhitespaceTokenizerAccentedChars(t *testing.T) {
 	tokenizer := NewWhitespaceTokenizer()
 	// é is 2 bytes, ï is 2 bytes in UTF-8
-	tokens, err := tokenizer.Tokenize(strings.NewReader("café résumé naïve"))
+	tokens, err := tokenizer.Tokenize("café résumé naïve")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,7 +272,7 @@ func TestWhitespaceTokenizerAccentedChars(t *testing.T) {
 func TestWhitespaceTokenizerLongToken(t *testing.T) {
 	tokenizer := NewWhitespaceTokenizer()
 	long := "superlongwordwithoutanyspaces"
-	tokens, err := tokenizer.Tokenize(strings.NewReader(long))
+	tokens, err := tokenizer.Tokenize(long)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -287,7 +286,7 @@ func TestWhitespaceTokenizerLongToken(t *testing.T) {
 
 func TestWhitespaceTokenizerMixedScripts(t *testing.T) {
 	tokenizer := NewWhitespaceTokenizer()
-	tokens, err := tokenizer.Tokenize(strings.NewReader("hello 東京 world café"))
+	tokens, err := tokenizer.Tokenize("hello 東京 world café")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -305,7 +304,7 @@ func TestWhitespaceTokenizerMixedScripts(t *testing.T) {
 func TestWhitespaceTokenizerUnicodePunctuation(t *testing.T) {
 	tokenizer := NewWhitespaceTokenizer()
 	// 「」『』 are not whitespace, should stay as part of token
-	tokens, err := tokenizer.Tokenize(strings.NewReader("「東京」の『タワー』"))
+	tokens, err := tokenizer.Tokenize("「東京」の『タワー』")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -321,7 +320,7 @@ func TestWhitespaceTokenizerUnicodePunctuation(t *testing.T) {
 func TestWhitespaceTokenizerFullWidth(t *testing.T) {
 	tokenizer := NewWhitespaceTokenizer()
 	// Each full-width char is 3 bytes in UTF-8
-	tokens, err := tokenizer.Tokenize(strings.NewReader("ＨＥＬＬＯ"))
+	tokens, err := tokenizer.Tokenize("ＨＥＬＬＯ")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -339,7 +338,7 @@ func TestWhitespaceTokenizerFullWidth(t *testing.T) {
 
 func TestWhitespaceTokenizerBackslashes(t *testing.T) {
 	tokenizer := NewWhitespaceTokenizer()
-	tokens, err := tokenizer.Tokenize(strings.NewReader("path\\to\\file"))
+	tokens, err := tokenizer.Tokenize("path\\to\\file")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -354,7 +353,7 @@ func TestWhitespaceTokenizerBackslashes(t *testing.T) {
 func TestWhitespaceTokenizerCJKExtensionB(t *testing.T) {
 	tokenizer := NewWhitespaceTokenizer()
 	// 𠮷 is 4 bytes in UTF-8 (CJK Extension B)
-	tokens, err := tokenizer.Tokenize(strings.NewReader("𠮷野家"))
+	tokens, err := tokenizer.Tokenize("𠮷野家")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -372,7 +371,7 @@ func TestWhitespaceTokenizerCJKExtensionB(t *testing.T) {
 
 func TestWhitespaceTokenizerSlashes(t *testing.T) {
 	tokenizer := NewWhitespaceTokenizer()
-	tokens, err := tokenizer.Tokenize(strings.NewReader("TCP/IP input/output"))
+	tokens, err := tokenizer.Tokenize("TCP/IP input/output")
 	if err != nil {
 		t.Fatal(err)
 	}

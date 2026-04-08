@@ -1,10 +1,8 @@
 package analysis
 
-import "io"
-
 // Tokenizer splits text into a sequence of tokens.
 type Tokenizer interface {
-	Tokenize(reader io.Reader) ([]Token, error)
+	Tokenize(text string) ([]Token, error)
 }
 
 // WhitespaceTokenizer splits text by whitespace characters.
@@ -14,14 +12,8 @@ func NewWhitespaceTokenizer() *WhitespaceTokenizer {
 	return &WhitespaceTokenizer{}
 }
 
-func (t *WhitespaceTokenizer) Tokenize(reader io.Reader) ([]Token, error) {
-	data, err := io.ReadAll(reader)
-	if err != nil {
-		return nil, err
-	}
-	text := string(data)
-
-	var tokens []Token
+func (t *WhitespaceTokenizer) Tokenize(text string) ([]Token, error) {
+	tokens := make([]Token, 0, len(text)/5)
 	position := 0
 	start := 0
 	inToken := false

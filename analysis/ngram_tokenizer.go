@@ -1,7 +1,5 @@
 package analysis
 
-import "io"
-
 // NGramTokenizer generates all character n-grams of sizes minGram to maxGram.
 type NGramTokenizer struct {
 	minGram int
@@ -15,12 +13,7 @@ func NewNGramTokenizer(minGram, maxGram int) *NGramTokenizer {
 	}
 }
 
-func (t *NGramTokenizer) Tokenize(reader io.Reader) ([]Token, error) {
-	data, err := io.ReadAll(reader)
-	if err != nil {
-		return nil, err
-	}
-	text := string(data)
+func (t *NGramTokenizer) Tokenize(text string) ([]Token, error) {
 	runes := []rune(text)
 
 	var tokens []Token

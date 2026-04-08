@@ -1,7 +1,5 @@
 package analysis
 
-import "strings"
-
 // Analyzer combines a Tokenizer and a chain of TokenFilters into a pipeline.
 type Analyzer struct {
 	tokenizer Tokenizer
@@ -17,7 +15,7 @@ func NewAnalyzer(tokenizer Tokenizer, filters ...TokenFilter) *Analyzer {
 
 // Analyze converts text into a sequence of tokens by running the full pipeline.
 func (a *Analyzer) Analyze(text string) ([]Token, error) {
-	tokens, err := a.tokenizer.Tokenize(strings.NewReader(text))
+	tokens, err := a.tokenizer.Tokenize(text)
 	if err != nil {
 		return nil, err
 	}

@@ -1,13 +1,12 @@
 package analysis
 
 import (
-	"strings"
 	"testing"
 )
 
 func TestNGramTokenizer(t *testing.T) {
 	tokenizer := NewNGramTokenizer(2, 3)
-	tokens, err := tokenizer.Tokenize(strings.NewReader("abc"))
+	tokens, err := tokenizer.Tokenize("abc")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -28,7 +27,7 @@ func TestNGramTokenizer(t *testing.T) {
 
 func TestNGramTokenizerOffsets(t *testing.T) {
 	tokenizer := NewNGramTokenizer(2, 2)
-	tokens, err := tokenizer.Tokenize(strings.NewReader("abcd"))
+	tokens, err := tokenizer.Tokenize("abcd")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +49,7 @@ func TestNGramTokenizerOffsets(t *testing.T) {
 
 func TestNGramTokenizerShortInput(t *testing.T) {
 	tokenizer := NewNGramTokenizer(2, 3)
-	tokens, err := tokenizer.Tokenize(strings.NewReader("a"))
+	tokens, err := tokenizer.Tokenize("a")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +60,7 @@ func TestNGramTokenizerShortInput(t *testing.T) {
 
 func TestNGramTokenizerEmpty(t *testing.T) {
 	tokenizer := NewNGramTokenizer(2, 3)
-	tokens, err := tokenizer.Tokenize(strings.NewReader(""))
+	tokens, err := tokenizer.Tokenize("")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +71,7 @@ func TestNGramTokenizerEmpty(t *testing.T) {
 
 func TestNGramTokenizerJapanese(t *testing.T) {
 	tokenizer := NewNGramTokenizer(2, 3)
-	tokens, err := tokenizer.Tokenize(strings.NewReader("東京都"))
+	tokens, err := tokenizer.Tokenize("東京都")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +92,7 @@ func TestNGramTokenizerJapanese(t *testing.T) {
 
 func TestNGramTokenizerExactMinGram(t *testing.T) {
 	tokenizer := NewNGramTokenizer(2, 3)
-	tokens, err := tokenizer.Tokenize(strings.NewReader("ab"))
+	tokens, err := tokenizer.Tokenize("ab")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +111,7 @@ func TestNGramTokenizerExactMinGram(t *testing.T) {
 func TestNGramTokenizerMixedByteWidth(t *testing.T) {
 	tokenizer := NewNGramTokenizer(2, 2)
 	// "aあ🔍" = a(1 byte) + あ(3 bytes) + 🔍(4 bytes) = 8 bytes, 3 runes
-	tokens, err := tokenizer.Tokenize(strings.NewReader("aあ🔍"))
+	tokens, err := tokenizer.Tokenize("aあ🔍")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +138,7 @@ func TestNGramTokenizerMixedByteWidth(t *testing.T) {
 func TestNGramTokenizerEmojiOffsets(t *testing.T) {
 	tokenizer := NewNGramTokenizer(2, 2)
 	// "🔍🔎" = 4 + 4 = 8 bytes, 2 runes
-	tokens, err := tokenizer.Tokenize(strings.NewReader("🔍🔎"))
+	tokens, err := tokenizer.Tokenize("🔍🔎")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +156,7 @@ func TestNGramTokenizerEmojiOffsets(t *testing.T) {
 func TestNGramTokenizerCJKExtensionB(t *testing.T) {
 	tokenizer := NewNGramTokenizer(2, 2)
 	// 𠮷(4 bytes) + 野(3 bytes) + 家(3 bytes) = 10 bytes, 3 runes
-	tokens, err := tokenizer.Tokenize(strings.NewReader("𠮷野家"))
+	tokens, err := tokenizer.Tokenize("𠮷野家")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,7 +183,7 @@ func TestNGramTokenizerCJKExtensionB(t *testing.T) {
 func TestNGramTokenizerWhitespaceInInput(t *testing.T) {
 	tokenizer := NewNGramTokenizer(2, 2)
 	// NGram tokenizer doesn't split on whitespace - it generates ngrams of the whole input
-	tokens, err := tokenizer.Tokenize(strings.NewReader("a b"))
+	tokens, err := tokenizer.Tokenize("a b")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +201,7 @@ func TestNGramTokenizerWhitespaceInInput(t *testing.T) {
 
 func TestNGramTokenizerSpecialChars(t *testing.T) {
 	tokenizer := NewNGramTokenizer(2, 2)
-	tokens, err := tokenizer.Tokenize(strings.NewReader("@#$"))
+	tokens, err := tokenizer.Tokenize("@#$")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,7 +218,7 @@ func TestNGramTokenizerJapaneseOffsets(t *testing.T) {
 	tokenizer := NewNGramTokenizer(2, 2)
 	// Each Japanese character is 3 bytes in UTF-8
 	// "東京都" = 9 bytes total
-	tokens, err := tokenizer.Tokenize(strings.NewReader("東京都"))
+	tokens, err := tokenizer.Tokenize("東京都")
 	if err != nil {
 		t.Fatal(err)
 	}
