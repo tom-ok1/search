@@ -84,7 +84,7 @@ func TestFlushControlStallAndUnstall(t *testing.T) {
 	}
 	fc.doAfterDocument(dwpt, bytesAdded)
 
-	if !fc.stalled {
+	if !fc.stalled.Load() {
 		t.Fatal("expected stalled to be true after exceeding stallLimit")
 	}
 

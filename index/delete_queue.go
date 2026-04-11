@@ -1,7 +1,10 @@
 // index/delete_queue.go
 package index
 
-import "sync"
+import (
+	"sync"
+	"sync/atomic"
+)
 
 // deleteNode is a node in the delete queue's linked list.
 type deleteNode struct {
@@ -54,8 +57,8 @@ func (ds *DeleteSlice) reset() {
 //
 // Lucene equivalent: org.apache.lucene.index.DocumentsWriterDeleteQueue
 type DeleteQueue struct {
-	mu   sync.Mutex
-	tail *deleteNode
+	mu   sync.Mutex         // protects tail writes in addDelete
+	tail atomic.Pointer[deleteNode] // atomic for lock-free reads in updateSlice/newSlice
 
 	globalBufferLock      sync.Mutex
 	globalSlice           *DeleteSlice
@@ -64,42 +67,38 @@ type DeleteQueue struct {
 
 func newDeleteQueue() *DeleteQueue {
 	sentinel := &deleteNode{}
-	return &DeleteQueue{
-		tail: sentinel,
+	dq := &DeleteQueue{
 		globalSlice: &DeleteSlice{
 			sliceHead: sentinel,
 			sliceTail: sentinel,
 		},
 		globalBufferedUpdates: newBufferedUpdates(),
 	}
+	dq.tail.Store(sentinel)
+	return dq
 }
 
 // addDelete appends a delete-by-term to the queue. Thread-safe.
 func (dq *DeleteQueue) addDelete(field, term string) {
 	node := &deleteNode{field: field, term: term}
 	dq.mu.Lock()
-	dq.tail.next = node
-	dq.tail = node
+	dq.tail.Load().next = node
+	dq.tail.Store(node)
 	dq.mu.Unlock()
 
 	dq.tryApplyGlobalSlice()
 }
 
-// newSlice creates a new DeleteSlice starting at the current tail.
+// newSlice creates a new DeleteSlice starting at the current tail. Lock-free.
 func (dq *DeleteQueue) newSlice() *DeleteSlice {
-	dq.mu.Lock()
-	t := dq.tail
-	dq.mu.Unlock()
+	t := dq.tail.Load()
 	return &DeleteSlice{sliceHead: t, sliceTail: t}
 }
 
 // updateSlice advances the slice's tail to the queue's current tail.
-// Returns true if new deletes were found.
+// Returns true if new deletes were found. Lock-free.
 func (dq *DeleteQueue) updateSlice(slice *DeleteSlice) bool {
-	dq.mu.Lock()
-	currentTail := dq.tail
-	dq.mu.Unlock()
-
+	currentTail := dq.tail.Load()
 	if slice.sliceTail != currentTail {
 		slice.sliceTail = currentTail
 		return true
@@ -112,10 +111,7 @@ func (dq *DeleteQueue) tryApplyGlobalSlice() {
 	if dq.globalBufferLock.TryLock() {
 		defer dq.globalBufferLock.Unlock()
 
-		dq.mu.Lock()
-		currentTail := dq.tail
-		dq.mu.Unlock()
-
+		currentTail := dq.tail.Load()
 		if dq.globalSlice.sliceTail != currentTail {
 			dq.globalSlice.sliceTail = currentTail
 			dq.globalSlice.apply(dq.globalBufferedUpdates, maxDocIDUpto)
@@ -132,9 +128,7 @@ func (dq *DeleteQueue) freezeGlobalBuffer(callerSlice *DeleteSlice) *FrozenBuffe
 	dq.globalBufferLock.Lock()
 	defer dq.globalBufferLock.Unlock()
 
-	dq.mu.Lock()
-	currentTail := dq.tail
-	dq.mu.Unlock()
+	currentTail := dq.tail.Load()
 
 	if callerSlice != nil {
 		callerSlice.sliceTail = currentTail
@@ -158,10 +152,7 @@ func (dq *DeleteQueue) anyChanges() bool {
 	dq.globalBufferLock.Lock()
 	defer dq.globalBufferLock.Unlock()
 
-	dq.mu.Lock()
-	currentTail := dq.tail
-	dq.mu.Unlock()
-
+	currentTail := dq.tail.Load()
 	return dq.globalBufferedUpdates.any() || !dq.globalSlice.isEmpty() || dq.globalSlice.sliceTail != currentTail
 }
 
