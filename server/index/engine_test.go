@@ -408,6 +408,28 @@ func TestRouteShard(t *testing.T) {
 	if index.RouteShard("anything", 1) != 0 {
 		t.Fatal("single shard must return 0")
 	}
+
+	// ES-compatible shard assignments (Murmur3 + floorMod)
+	esTests := []struct {
+		id        string
+		numShards int
+		want      int
+	}{
+		{"doc1", 5, 2},
+		{"doc2", 5, 4},
+		{"test", 5, 1},
+		{"hello", 5, 1},
+		{"elasticsearch", 5, 0},
+		{"0", 5, 1},
+		{"1", 5, 3},
+		{"12345", 5, 3},
+	}
+	for _, tt := range esTests {
+		got := index.RouteShard(tt.id, tt.numShards)
+		if got != tt.want {
+			t.Errorf("RouteShard(%q, %d) = %d, want %d (ES-compatible)", tt.id, tt.numShards, got, tt.want)
+		}
+	}
 }
 
 func TestEngine_IndexAndSearchSpecialChars(t *testing.T) {

@@ -2,7 +2,6 @@ package index
 
 import (
 	"fmt"
-	"hash/fnv"
 	"path/filepath"
 	"time"
 
@@ -127,9 +126,13 @@ func (is *IndexService) scheduleRefresh(interval time.Duration) {
 	}
 }
 
-// RouteShard returns the shard ID for a given document ID using consistent hashing.
+// RouteShard returns the shard ID for a given document ID using Murmur3 hashing,
+// matching Elasticsearch's shard routing (Murmur3HashFunction + Math.floorMod).
 func RouteShard(id string, numShards int) int {
-	h := fnv.New32a()
-	h.Write([]byte(id))
-	return int(h.Sum32() % uint32(numShards))
+	hash := int(Murmur3Hash([]byte(id), 0))
+	mod := hash % numShards
+	if mod < 0 {
+		mod += numShards
+	}
+	return mod
 }
