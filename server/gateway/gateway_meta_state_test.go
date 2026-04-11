@@ -9,6 +9,7 @@ import (
 
 	"gosearch/analysis"
 	"gosearch/server/cluster"
+	"gosearch/server/index"
 	"gosearch/server/mapping"
 )
 
@@ -58,7 +59,7 @@ func TestGatewayMetaStateRecoverIndex(t *testing.T) {
 
 	// Create index data directory and shard (simulating create index action)
 	indexDataPath := filepath.Join(dataPath, "nodes", "0", "indices", "test_index")
-	svc, err := createIndexService(meta, indexDataPath, registry)
+	svc, err := index.NewIndexService(meta, meta.Mapping, indexDataPath, registry)
 	if err != nil {
 		t.Fatalf("create index service: %v", err)
 	}

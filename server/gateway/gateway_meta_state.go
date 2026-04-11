@@ -86,15 +86,3 @@ func recoverIndexService(meta *cluster.IndexMetadata, indexDataPath string, regi
 
 	return index.NewIndexService(meta, m, indexDataPath, registry)
 }
-
-// createIndexService is a convenience for creating a new IndexService
-// (used by tests that need to create indices).
-func createIndexService(meta *cluster.IndexMetadata, indexDataPath string, registry *analysis.AnalyzerRegistry) (*index.IndexService, error) {
-	m := meta.Mapping
-	if m == nil {
-		m = &mapping.MappingDefinition{
-			Properties: make(map[string]mapping.FieldMapping),
-		}
-	}
-	return index.NewIndexService(meta, m, indexDataPath, registry)
-}
