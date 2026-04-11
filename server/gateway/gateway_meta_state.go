@@ -45,6 +45,15 @@ func (g *GatewayMetaState) Start(dataPath string, registry *analysis.AnalyzerReg
 			removed = append(removed, name)
 			continue
 		}
+
+		// Open readers on all shards so existing data becomes searchable
+		for i := 0; i < svc.NumShards(); i++ {
+			shard := svc.Shard(i)
+			if err := shard.Refresh(); err != nil {
+				log.Printf("WARNING: failed to refresh shard %d of index %q: %v", i, name, err)
+			}
+		}
+
 		services[name] = svc
 	}
 
