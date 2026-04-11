@@ -16,6 +16,7 @@ import (
 	"gosearch/api"
 	"gosearch/server/action"
 	"gosearch/server/cluster"
+	"gosearch/server/gateway"
 	"gosearch/server/handler"
 	"gosearch/server/index"
 )
@@ -37,9 +38,12 @@ type Node struct {
 }
 
 func NewNode(config NodeConfig) (*Node, error) {
-	cs := cluster.NewClusterState()
-	indexServices := make(map[string]*index.IndexService)
 	registry := analysis.DefaultRegistry()
+	gw := gateway.NewGatewayMetaState()
+	cs, indexServices, err := gw.Start(config.DataPath, registry)
+	if err != nil {
+		return nil, fmt.Errorf("recover cluster state: %w", err)
+	}
 
 	n := &Node{
 		config:        config,

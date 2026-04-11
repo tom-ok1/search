@@ -549,3 +549,91 @@ func TestNode_BulkWithDefaultIndex(t *testing.T) {
 		t.Errorf("expected errors=false, got %v", result["errors"])
 	}
 }
+
+func TestNode_RecoveryAfterRestart(t *testing.T) {
+	dataPath := t.TempDir()
+
+	// Phase 1: start node, create index, index document
+	n1, err := NewNode(NodeConfig{DataPath: dataPath, HTTPPort: 0})
+	if err != nil {
+		t.Fatalf("new node 1: %v", err)
+	}
+	addr1, err := n1.Start()
+	if err != nil {
+		t.Fatalf("start node 1: %v", err)
+	}
+
+	baseURL1 := fmt.Sprintf("http://%s", addr1)
+
+	// Create index
+	req, _ := http.NewRequest("PUT", baseURL1+"/test_index",
+		strings.NewReader(`{"settings":{"number_of_shards":1},"mappings":{"properties":{"title":{"type":"text"}}}}`))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("create index: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("create index status = %d", resp.StatusCode)
+	}
+
+	// Index a document
+	req, _ = http.NewRequest("PUT", baseURL1+"/test_index/_doc/1",
+		strings.NewReader(`{"title":"hello world"}`))
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("index doc: %v", err)
+	}
+	resp.Body.Close()
+
+	// Refresh
+	resp, err = http.Post(baseURL1+"/test_index/_refresh", "application/json", nil)
+	if err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	resp.Body.Close()
+
+	// Stop node 1
+	n1.Stop()
+
+	// Phase 2: start new node with same data path
+	n2, err := NewNode(NodeConfig{DataPath: dataPath, HTTPPort: 0})
+	if err != nil {
+		t.Fatalf("new node 2: %v", err)
+	}
+	addr2, err := n2.Start()
+	if err != nil {
+		t.Fatalf("start node 2: %v", err)
+	}
+	defer n2.Stop()
+
+	baseURL2 := fmt.Sprintf("http://%s", addr2)
+
+	// Verify index exists via GET /test_index
+	resp, err = http.Get(baseURL2 + "/test_index")
+	if err != nil {
+		t.Fatalf("get index: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("get index expected 200, got %d: %s", resp.StatusCode, string(body))
+	}
+	var indexResp map[string]any
+	json.Unmarshal(body, &indexResp)
+	if indexResp["test_index"] == nil {
+		t.Errorf("index response should contain test_index, got: %s", string(body))
+	}
+
+	// Verify document is searchable
+	resp, err = http.Post(baseURL2+"/test_index/_search", "application/json",
+		strings.NewReader(`{"query":{"match":{"title":"hello"}}}`))
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	searchResult, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if !strings.Contains(string(searchResult), "hello world") {
+		t.Errorf("search result does not contain document: %s", searchResult)
+	}
+}
