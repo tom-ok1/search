@@ -224,6 +224,56 @@ func BenchmarkLargeSegmentMerge(b *testing.B) {
 	}
 }
 
+// --- Concurrent addDocument throughput benchmark ---
+// Measures pure addDocument throughput (no flush, no merge) to isolate lock contention.
+
+func BenchmarkConcurrentAddDocument(b *testing.B) {
+	for _, goroutines := range []int{1, 2, 4, 8} {
+		b.Run(fmt.Sprintf("Goroutines_%d", goroutines), func(b *testing.B) {
+			const totalDocs = 100_000
+			docsPerGoroutine := totalDocs / goroutines
+
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				b.StopTimer()
+				dir, err := store.NewFSDirectory(b.TempDir())
+				if err != nil {
+					b.Fatal(err)
+				}
+				fa := analysis.NewFieldAnalyzers(
+					analysis.NewAnalyzer(analysis.NewWhitespaceTokenizer(), analysis.NewLowerCaseFilter()),
+				)
+				// Use huge maxBufferedDocs to prevent any flush/merge
+				w := NewIndexWriter(dir, fa, totalDocs+1)
+				b.StartTimer()
+
+				errs := make(chan error, goroutines)
+				for g := range goroutines {
+					go func(offset int) {
+						for j := range docsPerGoroutine {
+							if err := w.AddDocument(makeBenchDoc(offset + j)); err != nil {
+								errs <- err
+								return
+							}
+						}
+						errs <- nil
+					}(g * docsPerGoroutine)
+				}
+				for range goroutines {
+					if err := <-errs; err != nil {
+						b.Fatal(err)
+					}
+				}
+
+				b.StopTimer()
+				b.ReportMetric(float64(totalDocs)/b.Elapsed().Seconds(), "docs/sec")
+				w.Close()
+				b.StartTimer()
+			}
+		})
+	}
+}
+
 // --- Concurrent indexing benchmark ---
 // Tests throughput with multiple goroutines writing simultaneously.
 

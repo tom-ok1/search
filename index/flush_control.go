@@ -3,6 +3,7 @@ package index
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -11,13 +12,13 @@ import (
 // too much RAM is pending flush.
 type FlushControl struct {
 	mu              sync.Mutex
-	activeBytes     int64 // bytes in actively indexing DWPTs
-	flushBytes      int64 // bytes in DWPTs that are pending flush
+	activeBytes     atomic.Int64 // bytes in actively indexing DWPTs (atomic for lock-free fast path)
+	flushBytes      int64        // bytes in DWPTs that are pending flush (protected by mu)
 	ramBufferSize   int64
 	maxBufferedDocs int   // max docs per DWPT before flush (0 = no limit)
 	stallLimit      int64 // 2x ramBufferSize
 	stallCond       *sync.Cond
-	stalled         bool
+	stalled         atomic.Bool // atomic for lock-free fast path check
 	flushQueue      []*DocumentsWriterPerThread
 	pool            *perThreadPool
 	infoStream      InfoStream
@@ -42,47 +43,52 @@ func newFlushControl(ramBufferSize int64, maxBufferedDocs int, pool *perThreadPo
 // and added to the flush queue. Returns true if the DWPT is now flush-pending
 // (and should NOT be returned to the free pool by the caller).
 func (fc *FlushControl) doAfterDocument(dwpt *DocumentsWriterPerThread, bytesAdded int64) bool {
+	newActive := fc.activeBytes.Add(bytesAdded)
+	if fc.metrics != nil {
+		fc.metrics.ActiveBytes.Store(newActive)
+	}
+
+	// Fast path: no flush needed — skip the lock entirely.
+	docCountFlush := fc.maxBufferedDocs > 0 && dwpt.segment.docCount >= fc.maxBufferedDocs
+	if newActive < fc.ramBufferSize && !docCountFlush {
+		return false
+	}
+
+	// Slow path: flush may be needed, take lock for coordination.
 	fc.mu.Lock()
 	defer fc.mu.Unlock()
 
-	fc.activeBytes += bytesAdded
+	if dwpt.flushPending {
+		return false
+	}
+
+	// Re-check threshold under lock (another goroutine may have flushed).
+	shouldFlush := fc.activeBytes.Load() >= fc.ramBufferSize || docCountFlush
+	if !shouldFlush {
+		return false
+	}
+
+	dwpt.flushPending = true
+	dwptBytes := dwpt.estimateBytesUsed()
+	fc.activeBytes.Add(-dwptBytes)
+	fc.flushBytes += dwptBytes
+	fc.flushQueue = append(fc.flushQueue, dwpt)
 	if fc.metrics != nil {
-		fc.metrics.ActiveBytes.Store(fc.activeBytes)
+		fc.metrics.FlushPendingBytes.Store(fc.flushBytes)
+		fc.metrics.ActiveBytes.Store(fc.activeBytes.Load())
+	}
+	if fc.infoStream.IsEnabled("DWFC") {
+		fc.infoStream.Message("DWFC", fmt.Sprintf(
+			"flush triggered: ramBytes=%.1f MB > limit=%.1f MB",
+			float64(fc.activeBytes.Load()+fc.flushBytes)/(1024*1024),
+			float64(fc.ramBufferSize)/(1024*1024)))
 	}
 
-	shouldFlush := false
-	if fc.activeBytes >= fc.ramBufferSize && !dwpt.flushPending {
-		shouldFlush = true
-	}
-	if fc.maxBufferedDocs > 0 && dwpt.segment.docCount >= fc.maxBufferedDocs && !dwpt.flushPending {
-		shouldFlush = true
+	if fc.activeBytes.Load()+fc.flushBytes >= fc.stallLimit {
+		fc.stalled.Store(true)
 	}
 
-	if shouldFlush {
-		dwpt.flushPending = true
-		dwptBytes := dwpt.estimateBytesUsed()
-		fc.activeBytes -= dwptBytes
-		fc.flushBytes += dwptBytes
-		fc.flushQueue = append(fc.flushQueue, dwpt)
-		if fc.metrics != nil {
-			fc.metrics.FlushPendingBytes.Store(fc.flushBytes)
-			fc.metrics.ActiveBytes.Store(fc.activeBytes)
-		}
-		if fc.infoStream.IsEnabled("DWFC") {
-			fc.infoStream.Message("DWFC", fmt.Sprintf(
-				"flush triggered: ramBytes=%.1f MB > limit=%.1f MB",
-				float64(fc.activeBytes+fc.flushBytes)/(1024*1024),
-				float64(fc.ramBufferSize)/(1024*1024)))
-		}
-
-		if fc.activeBytes+fc.flushBytes >= fc.stallLimit {
-			fc.stalled = true
-		}
-
-		return true
-	}
-
-	return false
+	return true
 }
 
 // nextPendingFlush returns the next DWPT that needs flushing, or nil.
@@ -114,18 +120,24 @@ func (fc *FlushControl) doAfterFlush(dwpt *DocumentsWriterPerThread) {
 		fc.metrics.FlushPendingBytes.Store(fc.flushBytes)
 	}
 
-	if fc.stalled && fc.activeBytes+fc.flushBytes < fc.stallLimit {
-		fc.stalled = false
+	if fc.stalled.Load() && fc.activeBytes.Load()+fc.flushBytes < fc.stallLimit {
+		fc.stalled.Store(false)
 		fc.stallCond.Broadcast()
 	}
 }
 
 // waitIfStalled blocks the calling goroutine if backpressure is active.
 func (fc *FlushControl) waitIfStalled() {
+	// Fast path: no stall — skip the lock entirely.
+	if !fc.stalled.Load() {
+		return
+	}
+
 	fc.mu.Lock()
 	defer fc.mu.Unlock()
 
-	if !fc.stalled {
+	// Re-check under lock.
+	if !fc.stalled.Load() {
 		return
 	}
 
@@ -135,12 +147,12 @@ func (fc *FlushControl) waitIfStalled() {
 	if fc.infoStream.IsEnabled("DW") {
 		fc.infoStream.Message("DW", fmt.Sprintf(
 			"now stalling: activeBytes=%.1f MB flushBytes=%.1f MB",
-			float64(fc.activeBytes)/(1024*1024),
+			float64(fc.activeBytes.Load())/(1024*1024),
 			float64(fc.flushBytes)/(1024*1024)))
 	}
 
 	start := time.Now()
-	for fc.stalled {
+	for fc.stalled.Load() {
 		fc.stallCond.Wait()
 	}
 	elapsed := time.Since(start)
@@ -173,7 +185,7 @@ func (fc *FlushControl) markForFullFlush() []*DocumentsWriterPerThread {
 		if dwpt.segment.docCount > 0 {
 			if !dwpt.flushPending {
 				dwptBytes := dwpt.estimateBytesUsed()
-				fc.activeBytes -= dwptBytes
+				fc.activeBytes.Add(-dwptBytes)
 				fc.flushBytes += dwptBytes
 				dwpt.flushPending = true
 			}

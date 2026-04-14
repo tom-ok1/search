@@ -226,9 +226,9 @@ func TestDocumentsWriterFlushQueueDrainedConcurrent(t *testing.T) {
 		t.Fatalf("flush queue is not empty after concurrent adds: leaked DWPT (segment %s)", pending.segment.name)
 	}
 
-	// Pool active map should have no stale entries for flushed DWPTs.
+	// Pool active count should be zero after all goroutines finished.
 	dw.pool.mu.Lock()
-	activeCount := len(dw.pool.active)
+	activeCount := dw.pool.activeCount
 	dw.pool.mu.Unlock()
 	if activeCount != 0 {
 		t.Errorf("expected 0 active DWPTs after all goroutines finished, got %d", activeCount)

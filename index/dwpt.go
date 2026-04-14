@@ -18,6 +18,7 @@ type DocumentsWriterPerThread struct {
 	deleteQueue    *DeleteQueue
 	deleteSlice    *DeleteSlice
 	pendingUpdates *BufferedUpdates
+	checkoutGen    int64 // pool generation when this DWPT was checked out
 }
 
 func newDWPT(segmentName string, fieldAnalyzers *analysis.FieldAnalyzers, deleteQueue *DeleteQueue) *DocumentsWriterPerThread {
