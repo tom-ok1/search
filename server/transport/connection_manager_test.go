@@ -8,12 +8,12 @@ import (
 
 func newTestServer(t *testing.T) *TcpTransport {
 	t.Helper()
-	tp := NewThreadPool(map[string]PoolConfig{"generic": {Workers: 2, QueueSize: 10}})
-	t.Cleanup(tp.Shutdown)
+	wp := NewWorkerPool(map[PoolName]PoolConfig{PoolGeneric: {Workers: 2, QueueSize: 10}})
+	t.Cleanup(wp.Shutdown)
 	rh := NewRequestHandlerMap()
 	resph := NewResponseHandlers()
 	node := DiscoveryNode{ID: "server", Name: "server"}
-	transport := NewTcpTransport(node, rh, resph, tp)
+	transport := NewTcpTransport(node, rh, resph, wp)
 	addr, err := transport.Start("127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -36,10 +36,10 @@ func TestConnectionManager_ConnectAndGet(t *testing.T) {
 	server := newTestServer(t)
 
 	// Create client transport and connection manager
-	clientTP := NewThreadPool(map[string]PoolConfig{"generic": {Workers: 2, QueueSize: 10}})
-	t.Cleanup(clientTP.Shutdown)
+	clientWP := NewWorkerPool(map[PoolName]PoolConfig{PoolGeneric: {Workers: 2, QueueSize: 10}})
+	t.Cleanup(clientWP.Shutdown)
 	clientNode := DiscoveryNode{ID: "client", Name: "client"}
-	clientTransport := NewTcpTransport(clientNode, NewRequestHandlerMap(), NewResponseHandlers(), clientTP)
+	clientTransport := NewTcpTransport(clientNode, NewRequestHandlerMap(), NewResponseHandlers(), clientWP)
 
 	cm := NewConnectionManager(clientTransport, testProfile())
 	t.Cleanup(func() { cm.Close() })
@@ -64,10 +64,10 @@ func TestConnectionManager_ConnectAndGet(t *testing.T) {
 }
 
 func TestConnectionManager_GetConnection_NotConnected(t *testing.T) {
-	clientTP := NewThreadPool(map[string]PoolConfig{"generic": {Workers: 2, QueueSize: 10}})
-	t.Cleanup(clientTP.Shutdown)
+	clientWP := NewWorkerPool(map[PoolName]PoolConfig{PoolGeneric: {Workers: 2, QueueSize: 10}})
+	t.Cleanup(clientWP.Shutdown)
 	clientNode := DiscoveryNode{ID: "client", Name: "client"}
-	clientTransport := NewTcpTransport(clientNode, NewRequestHandlerMap(), NewResponseHandlers(), clientTP)
+	clientTransport := NewTcpTransport(clientNode, NewRequestHandlerMap(), NewResponseHandlers(), clientWP)
 
 	cm := NewConnectionManager(clientTransport, testProfile())
 	t.Cleanup(func() { cm.Close() })
@@ -91,10 +91,10 @@ func TestConnectionManager_Disconnect(t *testing.T) {
 	server := newTestServer(t)
 
 	// Create client transport and connection manager
-	clientTP := NewThreadPool(map[string]PoolConfig{"generic": {Workers: 2, QueueSize: 10}})
-	t.Cleanup(clientTP.Shutdown)
+	clientWP := NewWorkerPool(map[PoolName]PoolConfig{PoolGeneric: {Workers: 2, QueueSize: 10}})
+	t.Cleanup(clientWP.Shutdown)
 	clientNode := DiscoveryNode{ID: "client", Name: "client"}
-	clientTransport := NewTcpTransport(clientNode, NewRequestHandlerMap(), NewResponseHandlers(), clientTP)
+	clientTransport := NewTcpTransport(clientNode, NewRequestHandlerMap(), NewResponseHandlers(), clientWP)
 
 	cm := NewConnectionManager(clientTransport, testProfile())
 	t.Cleanup(func() { cm.Close() })
@@ -130,10 +130,10 @@ func TestConnectionManager_ConnectedNodes(t *testing.T) {
 	server := newTestServer(t)
 
 	// Create client transport and connection manager
-	clientTP := NewThreadPool(map[string]PoolConfig{"generic": {Workers: 2, QueueSize: 10}})
-	t.Cleanup(clientTP.Shutdown)
+	clientWP := NewWorkerPool(map[PoolName]PoolConfig{PoolGeneric: {Workers: 2, QueueSize: 10}})
+	t.Cleanup(clientWP.Shutdown)
 	clientNode := DiscoveryNode{ID: "client", Name: "client"}
-	clientTransport := NewTcpTransport(clientNode, NewRequestHandlerMap(), NewResponseHandlers(), clientTP)
+	clientTransport := NewTcpTransport(clientNode, NewRequestHandlerMap(), NewResponseHandlers(), clientWP)
 
 	cm := NewConnectionManager(clientTransport, testProfile())
 	t.Cleanup(func() { cm.Close() })

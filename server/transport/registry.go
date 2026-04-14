@@ -1,19 +1,24 @@
 package transport
 
 import (
-	"fmt"
+	"context"
 	"sync"
 	"sync/atomic"
-	"time"
 )
+
+// ResponseHandler handles the result of an outbound request.
+type ResponseHandler interface {
+	ReadAndHandle(*StreamInput) error
+	HandleError(*RemoteTransportError)
+}
 
 // ResponseContext holds the state for an in-flight outbound request.
 type ResponseContext struct {
-	Handler   any
-	Action    string
-	NodeID    string
-	Timeout   time.Duration
-	CreatedAt time.Time
+	Handler ResponseHandler
+	Action  string
+	NodeID  string
+	Ctx     context.Context
+	Cancel  context.CancelFunc
 }
 
 // ResponseHandlers tracks in-flight requests by requestID.
@@ -40,17 +45,10 @@ func (rh *ResponseHandlers) Remove(id int64) *ResponseContext {
 	return v.(*ResponseContext)
 }
 
-// Range iterates over all in-flight handlers. Used by timeout reaper.
-func (rh *ResponseHandlers) Range(fn func(id int64, ctx *ResponseContext) bool) {
-	rh.handlers.Range(func(key, value any) bool {
-		return fn(key.(int64), value.(*ResponseContext))
-	})
-}
-
 // requestHandlerEntry stores a registered request handler with a type-erased dispatch closure.
 type requestHandlerEntry struct {
 	action   string
-	executor string
+	executor PoolName
 	dispatch func(payload *StreamInput, channel TransportChannel)
 }
 
@@ -76,28 +74,4 @@ func (m *RequestHandlerMap) Get(action string) *requestHandlerEntry {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.handlers[action]
-}
-
-// RegisterHandler is a typed helper that creates a dispatch closure capturing concrete types.
-func RegisterHandler[T any](
-	m *RequestHandlerMap,
-	action string,
-	executor string,
-	reader Reader[T],
-	handler func(request T, channel TransportChannel) error,
-) {
-	m.Register(&requestHandlerEntry{
-		action:   action,
-		executor: executor,
-		dispatch: func(payload *StreamInput, channel TransportChannel) {
-			req, err := reader(payload)
-			if err != nil {
-				channel.SendError(fmt.Errorf("deserialize request: %w", err))
-				return
-			}
-			if err := handler(req, channel); err != nil {
-				channel.SendError(err)
-			}
-		},
-	})
 }

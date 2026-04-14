@@ -2,11 +2,18 @@ package transport
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"sync"
 	"testing"
 	"time"
 )
+
+// noopResponseHandler is a stub ResponseHandler for registry tests.
+type noopResponseHandler struct{}
+
+func (noopResponseHandler) ReadAndHandle(*StreamInput) error  { return nil }
+func (noopResponseHandler) HandleError(*RemoteTransportError) {}
 
 // Test types for typed dispatch test
 type testMsg struct{ Value string }
@@ -21,12 +28,14 @@ func readTestMsg(in *StreamInput) (*testMsg, error) {
 func TestResponseHandlers_AddAndRemove(t *testing.T) {
 	rh := NewResponseHandlers()
 
+	reqCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 	ctx := &ResponseContext{
-		Handler:   "test-handler",
-		Action:    "test-action",
-		NodeID:    "node-1",
-		Timeout:   5 * time.Second,
-		CreatedAt: time.Now(),
+		Handler: noopResponseHandler{},
+		Action:  "test-action",
+		NodeID:  "node-1",
+		Ctx:     reqCtx,
+		Cancel:  cancel,
 	}
 
 	id := rh.Add(ctx)
@@ -96,7 +105,7 @@ func TestRequestHandlerMap_RegisterAndGet(t *testing.T) {
 
 	entry := &requestHandlerEntry{
 		action:   "test-action",
-		executor: "test-executor",
+		executor: PoolGeneric,
 		dispatch: func(payload *StreamInput, channel TransportChannel) {},
 	}
 
@@ -109,8 +118,8 @@ func TestRequestHandlerMap_RegisterAndGet(t *testing.T) {
 	if retrieved.action != "test-action" {
 		t.Errorf("expected action test-action, got %s", retrieved.action)
 	}
-	if retrieved.executor != "test-executor" {
-		t.Errorf("expected executor test-executor, got %s", retrieved.executor)
+	if retrieved.executor != PoolGeneric {
+		t.Errorf("expected executor %s, got %s", PoolGeneric, retrieved.executor)
 	}
 
 	// Get unknown action
@@ -129,7 +138,7 @@ func TestRegisterHandler_TypedDispatch(t *testing.T) {
 		return channel.SendResponse(&testMsg{Value: "response:" + request.Value})
 	}
 
-	RegisterHandler(m, "test-action", "test-executor", readTestMsg, handler)
+	registerHandler(m, "test-action", PoolGeneric, readTestMsg, handler)
 
 	entry := m.Get("test-action")
 	if entry == nil {

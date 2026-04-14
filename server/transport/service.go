@@ -2,6 +2,7 @@ package transport
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -13,7 +14,7 @@ import (
 type TransportServiceConfig struct {
 	BindAddress string
 	NodeName    string
-	PoolConfigs map[string]PoolConfig
+	PoolConfigs map[PoolName]PoolConfig
 	ConnProfile ConnectionProfile // optional, uses default if zero
 }
 
@@ -24,7 +25,7 @@ type TransportService struct {
 	connectionMgr    *ConnectionManager
 	requestHandlers  *RequestHandlerMap
 	responseHandlers *ResponseHandlers
-	threadPool       *ThreadPool
+	workerPool       *WorkerPool
 	outbound         *OutboundHandler
 }
 
@@ -35,13 +36,13 @@ func NewTransportService(config TransportServiceConfig) (*TransportService, erro
 
 	requestHandlers := NewRequestHandlerMap()
 	responseHandlers := NewResponseHandlers()
-	threadPool := NewThreadPool(config.PoolConfigs)
+	workerPool := NewWorkerPool(config.PoolConfigs)
 
-	transport := NewTcpTransport(localNode, requestHandlers, responseHandlers, threadPool)
+	transport := NewTcpTransport(localNode, requestHandlers, responseHandlers, workerPool)
 
 	addr, err := transport.Start(config.BindAddress)
 	if err != nil {
-		threadPool.Shutdown()
+		workerPool.Shutdown()
 		return nil, err
 	}
 	localNode.Address = addr
@@ -62,7 +63,7 @@ func NewTransportService(config TransportServiceConfig) (*TransportService, erro
 		connectionMgr:    connectionMgr,
 		requestHandlers:  requestHandlers,
 		responseHandlers: responseHandlers,
-		threadPool:       threadPool,
+		workerPool:       workerPool,
 		outbound:         NewOutboundHandler(),
 	}, nil
 }
@@ -70,11 +71,6 @@ func NewTransportService(config TransportServiceConfig) (*TransportService, erro
 // LocalNode returns the local node info.
 func (ts *TransportService) LocalNode() DiscoveryNode {
 	return ts.localNode
-}
-
-// RegisterTypedHandler registers a typed request handler on the service.
-func RegisterTypedHandler[T any](ts *TransportService, action, executor string, reader Reader[T], handler func(T, TransportChannel) error) {
-	RegisterHandler(ts.requestHandlers, action, executor, reader, handler)
 }
 
 // SendRequest sends a request to the given node. If the node is the local node,
@@ -102,11 +98,10 @@ func (ts *TransportService) sendLocalRequest(action string, request Writeable, h
 	in := NewStreamInput(bytes.NewReader(buf.Bytes()))
 	channel := &localTransportChannel{
 		handler:    handler,
-		threadPool: ts.threadPool,
+		workerPool: ts.workerPool,
 	}
 
-	executor := ts.threadPool.Get(entry.executor)
-	return executor.Execute(func() {
+	return ts.workerPool.Submit(entry.executor, func() {
 		entry.dispatch(in, channel)
 	})
 }
@@ -117,22 +112,23 @@ func (ts *TransportService) sendRemoteRequest(node DiscoveryNode, action string,
 		return err
 	}
 
+	reqCtx, cancel := context.WithTimeout(context.Background(), options.Timeout)
 	ctx := &ResponseContext{
-		Handler:   handler,
-		Action:    action,
-		NodeID:    node.ID,
-		Timeout:   options.Timeout,
-		CreatedAt: time.Now(),
+		Handler: handler,
+		Action:  action,
+		NodeID:  node.ID,
+		Ctx:     reqCtx,
+		Cancel:  cancel,
 	}
 	requestID := ts.responseHandlers.Add(ctx)
 
-	tcpConn, err := conn.Conn(options.ConnType)
+	w, err := conn.ConnWriter(options.ConnType)
 	if err != nil {
 		ts.responseHandlers.Remove(requestID)
 		return err
 	}
 
-	if err := ts.outbound.SendRequest(tcpConn, requestID, action, request); err != nil {
+	if err := ts.outbound.SendRequest(w, requestID, action, request); err != nil {
 		ts.responseHandlers.Remove(requestID)
 		return &SendRequestError{Action: action, Cause: err}
 	}
@@ -158,14 +154,14 @@ func (ts *TransportService) Stop() error {
 	if err := ts.transport.Stop(); err != nil {
 		return err
 	}
-	ts.threadPool.Shutdown()
+	ts.workerPool.Shutdown()
 	return nil
 }
 
 // responseHandlerWrapper is a type-erased response callback that implements
 // the interfaces expected by InboundHandler.handleResponse.
 type responseHandlerWrapper struct {
-	executorName  string
+	executorName  PoolName
 	readAndHandle func(in *StreamInput) error
 	onError       func(*RemoteTransportError)
 }
@@ -183,7 +179,7 @@ func (w *responseHandlerWrapper) HandleError(err *RemoteTransportError) {
 }
 
 // TypedResponseHandler creates a type-erased response handler from typed callbacks.
-func TypedResponseHandler[T any](reader Reader[T], executor string, onResponse func(T), onError func(*RemoteTransportError)) *responseHandlerWrapper {
+func TypedResponseHandler[T any](reader Reader[T], executor PoolName, onResponse func(T), onError func(*RemoteTransportError)) *responseHandlerWrapper {
 	return &responseHandlerWrapper{
 		executorName: executor,
 		readAndHandle: func(in *StreamInput) error {
@@ -201,7 +197,7 @@ func TypedResponseHandler[T any](reader Reader[T], executor string, onResponse f
 // localTransportChannel delivers responses locally without going through TCP.
 type localTransportChannel struct {
 	handler    *responseHandlerWrapper
-	threadPool *ThreadPool
+	workerPool *WorkerPool
 	mu         sync.Mutex
 	responded  bool
 }
@@ -224,8 +220,7 @@ func (c *localTransportChannel) SendResponse(response Writeable) error {
 
 	in := NewStreamInput(bytes.NewReader(buf.Bytes()))
 
-	executor := c.threadPool.Get(c.handler.executorName)
-	return executor.Execute(func() {
+	return c.workerPool.Submit(c.handler.executorName, func() {
 		c.handler.readAndHandle(in)
 	})
 }

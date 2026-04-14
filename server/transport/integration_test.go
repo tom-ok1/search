@@ -13,9 +13,9 @@ func TestIntegration_IndexDocumentOverTransport(t *testing.T) {
 	server, err := NewTransportService(TransportServiceConfig{
 		BindAddress: "127.0.0.1:0",
 		NodeName:    "server",
-		PoolConfigs: map[string]PoolConfig{
-			"generic": {Workers: 4, QueueSize: 100},
-			"index":   {Workers: 2, QueueSize: 50},
+		PoolConfigs: map[PoolName]PoolConfig{
+			PoolGeneric: {Workers: 4, QueueSize: 100},
+			PoolIndex:   {Workers: 2, QueueSize: 50},
 		},
 	})
 	if err != nil {
@@ -24,7 +24,7 @@ func TestIntegration_IndexDocumentOverTransport(t *testing.T) {
 	defer server.Stop()
 
 	// Register IndexDocument handler on server
-	RegisterTypedHandler(server, "indices:data/write/index", "index",
+	registerHandler(server.requestHandlers, "indices:data/write/index", PoolIndex,
 		Reader[*IndexDocumentRequest](ReadIndexDocumentRequest),
 		func(req *IndexDocumentRequest, ch TransportChannel) error {
 			resp := &IndexDocumentResponse{
@@ -42,8 +42,8 @@ func TestIntegration_IndexDocumentOverTransport(t *testing.T) {
 	client, err := NewTransportService(TransportServiceConfig{
 		BindAddress: "127.0.0.1:0",
 		NodeName:    "client",
-		PoolConfigs: map[string]PoolConfig{
-			"generic": {Workers: 4, QueueSize: 100},
+		PoolConfigs: map[PoolName]PoolConfig{
+			PoolGeneric: {Workers: 4, QueueSize: 100},
 		},
 	})
 	if err != nil {
@@ -70,7 +70,7 @@ func TestIntegration_IndexDocumentOverTransport(t *testing.T) {
 
 	handler := TypedResponseHandler(
 		Reader[*IndexDocumentResponse](ReadIndexDocumentResponse),
-		"generic",
+		PoolGeneric,
 		func(resp *IndexDocumentResponse) {
 			mu.Lock()
 			result = resp
@@ -114,9 +114,9 @@ func TestIntegration_SearchOverTransport(t *testing.T) {
 	server, err := NewTransportService(TransportServiceConfig{
 		BindAddress: "127.0.0.1:0",
 		NodeName:    "server",
-		PoolConfigs: map[string]PoolConfig{
-			"generic": {Workers: 4, QueueSize: 100},
-			"search":  {Workers: 2, QueueSize: 50},
+		PoolConfigs: map[PoolName]PoolConfig{
+			PoolGeneric: {Workers: 4, QueueSize: 100},
+			PoolSearch:  {Workers: 2, QueueSize: 50},
 		},
 	})
 	if err != nil {
@@ -124,7 +124,7 @@ func TestIntegration_SearchOverTransport(t *testing.T) {
 	}
 	defer server.Stop()
 
-	RegisterTypedHandler(server, "indices:data/read/search", "search",
+	registerHandler(server.requestHandlers, "indices:data/read/search", PoolSearch,
 		Reader[*SearchRequestMsg](ReadSearchRequestMsg),
 		func(req *SearchRequestMsg, ch TransportChannel) error {
 			resp := &SearchResponseMsg{
@@ -143,8 +143,8 @@ func TestIntegration_SearchOverTransport(t *testing.T) {
 	client, err := NewTransportService(TransportServiceConfig{
 		BindAddress: "127.0.0.1:0",
 		NodeName:    "client",
-		PoolConfigs: map[string]PoolConfig{
-			"generic": {Workers: 4, QueueSize: 100},
+		PoolConfigs: map[PoolName]PoolConfig{
+			PoolGeneric: {Workers: 4, QueueSize: 100},
 		},
 	})
 	if err != nil {
@@ -168,7 +168,7 @@ func TestIntegration_SearchOverTransport(t *testing.T) {
 
 	handler := TypedResponseHandler(
 		Reader[*SearchResponseMsg](ReadSearchResponseMsg),
-		"generic",
+		PoolGeneric,
 		func(resp *SearchResponseMsg) {
 			result = resp
 			close(done)

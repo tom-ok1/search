@@ -9,10 +9,10 @@ func TestTcpTransport_ListenAndConnect(t *testing.T) {
 	node := DiscoveryNode{ID: "node-1", Name: "test-node", Address: "127.0.0.1:0"}
 	handlers := NewRequestHandlerMap()
 	respHandlers := NewResponseHandlers()
-	tp := NewThreadPool(map[string]PoolConfig{"generic": {Workers: 0}})
-	defer tp.Shutdown()
+	wp := NewWorkerPool(map[PoolName]PoolConfig{PoolGeneric: {Workers: 0}})
+	defer wp.Shutdown()
 
-	transport := NewTcpTransport(node, handlers, respHandlers, tp)
+	transport := NewTcpTransport(node, handlers, respHandlers, wp)
 
 	addr, err := transport.Start("127.0.0.1:0")
 	if err != nil {
@@ -33,10 +33,10 @@ func TestTcpTransport_Handshake(t *testing.T) {
 	serverNode := DiscoveryNode{ID: "server-1", Name: "server", Address: "127.0.0.1:0"}
 	handlers := NewRequestHandlerMap()
 	respHandlers := NewResponseHandlers()
-	tp := NewThreadPool(map[string]PoolConfig{"generic": {Workers: 0}})
-	defer tp.Shutdown()
+	wp := NewWorkerPool(map[PoolName]PoolConfig{PoolGeneric: {Workers: 0}})
+	defer wp.Shutdown()
 
-	server := NewTcpTransport(serverNode, handlers, respHandlers, tp)
+	server := NewTcpTransport(serverNode, handlers, respHandlers, wp)
 
 	addr, err := server.Start("127.0.0.1:0")
 	if err != nil {
@@ -46,7 +46,7 @@ func TestTcpTransport_Handshake(t *testing.T) {
 
 	// Client transport
 	clientNode := DiscoveryNode{ID: "client-1", Name: "client", Address: "127.0.0.1:0"}
-	client := NewTcpTransport(clientNode, handlers, respHandlers, tp)
+	client := NewTcpTransport(clientNode, handlers, respHandlers, wp)
 
 	profile := ConnectionProfile{
 		ConnPerType:      map[ConnectionType]int{ConnTypeREG: 1},
@@ -65,12 +65,12 @@ func TestTcpTransport_Handshake(t *testing.T) {
 		t.Fatalf("expected negotiated version %d, got %d", CurrentTransportVersion, nc.version)
 	}
 
-	// Verify we can get a connection
-	conn, err := nc.Conn(ConnTypeREG)
+	// Verify we can get a writer
+	w, err := nc.ConnWriter(ConnTypeREG)
 	if err != nil {
-		t.Fatalf("Conn(REG) failed: %v", err)
+		t.Fatalf("ConnWriter(REG) failed: %v", err)
 	}
-	if conn == nil {
-		t.Fatal("expected non-nil connection")
+	if w == nil {
+		t.Fatal("expected non-nil writer")
 	}
 }

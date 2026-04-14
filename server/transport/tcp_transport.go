@@ -1,7 +1,9 @@
 package transport
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -14,34 +16,41 @@ func deadlineFromTimeout(d time.Duration) time.Time {
 	return time.Now().Add(d)
 }
 
-// NodeConnection holds all TCP connections to a single remote node.
-type NodeConnection struct {
-	node     DiscoveryNode
-	channels map[ConnectionType][]net.Conn
-	version  int32 // negotiated transport version
-	closed   atomic.Bool
-	counters map[ConnectionType]*atomic.Uint64 // round-robin counters
+// writerPool is a round-robin pool of mutex-guarded writers.
+type writerPool struct {
+	writers []*SyncWriter
+	counter atomic.Uint64
 }
 
-// Conn round-robins within the pool for the given type.
+func (p *writerPool) next() *SyncWriter {
+	idx := p.counter.Add(1) - 1
+	return p.writers[idx%uint64(len(p.writers))]
+}
+
+// NodeConnection holds all TCP connections to a single remote node.
+type NodeConnection struct {
+	node    DiscoveryNode
+	pools   map[ConnectionType]*writerPool
+	version int32 // negotiated transport version
+	closed  atomic.Bool
+}
+
+// ConnWriter round-robins within the pool for the given type and returns
+// a mutex-guarded writer that serializes writes to the underlying connection.
 // Falls back to ConnTypeREG if the requested type has no connections.
-func (nc *NodeConnection) Conn(ct ConnectionType) (net.Conn, error) {
+func (nc *NodeConnection) ConnWriter(ct ConnectionType) (io.Writer, error) {
 	if nc.closed.Load() {
 		return nil, fmt.Errorf("node connection closed")
 	}
-	conns := nc.channels[ct]
-	if len(conns) == 0 {
-		conns = nc.channels[ConnTypeREG]
+	pool := nc.pools[ct]
+	if pool == nil || len(pool.writers) == 0 {
+		ct = ConnTypeREG
+		pool = nc.pools[ct]
 	}
-	if len(conns) == 0 {
+	if pool == nil || len(pool.writers) == 0 {
 		return nil, fmt.Errorf("no connections available for type %d", ct)
 	}
-	counter := nc.counters[ct]
-	if counter == nil {
-		counter = nc.counters[ConnTypeREG]
-	}
-	idx := counter.Add(1) - 1
-	return conns[idx%uint64(len(conns))], nil
+	return pool.next(), nil
 }
 
 // Close closes all connections in the NodeConnection.
@@ -50,9 +59,9 @@ func (nc *NodeConnection) Close() error {
 		return nil
 	}
 	var firstErr error
-	for _, conns := range nc.channels {
-		for _, c := range conns {
-			if err := c.Close(); err != nil && firstErr == nil {
+	for _, p := range nc.pools {
+		for _, w := range p.writers {
+			if err := w.Close(); err != nil && firstErr == nil {
 				firstErr = err
 			}
 		}
@@ -66,7 +75,7 @@ type TcpTransport struct {
 	listener         net.Listener
 	requestHandlers  *RequestHandlerMap
 	responseHandlers *ResponseHandlers
-	threadPool       *ThreadPool
+	workerPool       *WorkerPool
 	outbound         *OutboundHandler
 	inbound          *InboundHandler
 	stopCh           chan struct{}
@@ -74,14 +83,14 @@ type TcpTransport struct {
 }
 
 // NewTcpTransport creates a new TcpTransport.
-func NewTcpTransport(localNode DiscoveryNode, requestHandlers *RequestHandlerMap, responseHandlers *ResponseHandlers, threadPool *ThreadPool) *TcpTransport {
+func NewTcpTransport(localNode DiscoveryNode, requestHandlers *RequestHandlerMap, responseHandlers *ResponseHandlers, workerPool *WorkerPool) *TcpTransport {
 	return &TcpTransport{
 		localNode:        localNode,
 		requestHandlers:  requestHandlers,
 		responseHandlers: responseHandlers,
-		threadPool:       threadPool,
+		workerPool:       workerPool,
 		outbound:         NewOutboundHandler(),
-		inbound:          NewInboundHandler(requestHandlers, responseHandlers, threadPool, localNode.ID),
+		inbound:          NewInboundHandler(requestHandlers, responseHandlers, workerPool, localNode.ID),
 		stopCh:           make(chan struct{}),
 	}
 }
@@ -134,13 +143,14 @@ func (t *TcpTransport) acceptLoop() {
 }
 
 func (t *TcpTransport) handleConn(conn net.Conn) {
+	w := NewSyncWriter(conn)
 	for {
 		select {
 		case <-t.stopCh:
 			return
 		default:
 		}
-		if err := t.inbound.HandleMessage(conn, conn); err != nil {
+		if err := t.inbound.HandleMessage(conn, w); err != nil {
 			return
 		}
 	}
@@ -149,8 +159,7 @@ func (t *TcpTransport) handleConn(conn net.Conn) {
 // OpenConnection dials TCP connections per the profile, performs handshake on each,
 // and returns a NodeConnection. On any failure, closes all already-opened connections.
 func (t *TcpTransport) OpenConnection(node DiscoveryNode, profile ConnectionProfile) (*NodeConnection, error) {
-	channels := make(map[ConnectionType][]net.Conn)
-	counters := make(map[ConnectionType]*atomic.Uint64)
+	pools := make(map[ConnectionType]*writerPool)
 	var allConns []net.Conn
 
 	cleanup := func() {
@@ -159,10 +168,8 @@ func (t *TcpTransport) OpenConnection(node DiscoveryNode, profile ConnectionProf
 		}
 	}
 
-	var negotiatedVersion int32
-
 	for ct, count := range profile.ConnPerType {
-		conns := make([]net.Conn, 0, count)
+		cw := make([]*SyncWriter, 0, count)
 		for range count {
 			conn, err := net.DialTimeout("tcp", node.Address, profile.ConnectTimeout)
 			if err != nil {
@@ -170,36 +177,34 @@ func (t *TcpTransport) OpenConnection(node DiscoveryNode, profile ConnectionProf
 				return nil, fmt.Errorf("dial %s: %w", node.Address, err)
 			}
 			allConns = append(allConns, conn)
-
-			version, err := t.performHandshake(conn, profile)
-			if err != nil {
-				cleanup()
-				return nil, fmt.Errorf("handshake with %s: %w", node.Address, err)
-			}
-			negotiatedVersion = version
-
-			conns = append(conns, conn)
+			cw = append(cw, NewSyncWriter(conn))
 		}
-		channels[ct] = conns
-		counters[ct] = &atomic.Uint64{}
+		pools[ct] = &writerPool{writers: cw}
+	}
+
+	if len(allConns) == 0 {
+		return nil, fmt.Errorf("no connections configured for %s", node.Address)
+	}
+
+	version, err := t.performHandshake(allConns[0], profile)
+	if err != nil {
+		cleanup()
+		return nil, fmt.Errorf("handshake with %s: %w", node.Address, err)
 	}
 
 	nc := &NodeConnection{
-		node:     node,
-		channels: channels,
-		version:  negotiatedVersion,
-		counters: counters,
+		node:    node,
+		pools:   pools,
+		version: version,
 	}
 
 	// Start read loops on outbound connections to receive responses.
-	for _, conns := range channels {
-		for _, conn := range conns {
-			t.wg.Add(1)
-			go func(c net.Conn) {
-				defer t.wg.Done()
-				t.handleConn(c)
-			}(conn)
-		}
+	for _, conn := range allConns {
+		t.wg.Add(1)
+		go func(c net.Conn) {
+			defer t.wg.Done()
+			t.handleConn(c)
+		}(conn)
 	}
 
 	return nc, nil
@@ -229,7 +234,7 @@ func (t *TcpTransport) performHandshake(conn net.Conn, profile ConnectionProfile
 		return 0, fmt.Errorf("read handshake response payload: %w", err)
 	}
 
-	in := NewStreamInput(&bufferReader{buf: payloadBytes})
+	in := NewStreamInput(bytes.NewReader(payloadBytes))
 	resp, err := ReadHandshakeResponse(in)
 	if err != nil {
 		return 0, fmt.Errorf("decode handshake response: %w", err)

@@ -5,95 +5,81 @@ import (
 	"sync"
 )
 
-var ErrRejected = errors.New("executor rejected: queue full")
+var ErrRejected = errors.New("worker pool rejected: queue full")
 
-// Executor runs tasks in a controlled concurrency context.
-type Executor interface {
-	Execute(task func()) error
-	Shutdown()
+// PoolName identifies a named worker pool.
+type PoolName string
+
+const (
+	PoolGeneric         PoolName = "generic"
+	PoolSearch          PoolName = "search"
+	PoolIndex           PoolName = "index"
+	PoolTransportWorker PoolName = "transport_worker"
+	PoolClusterState    PoolName = "cluster_state"
+)
+
+// PoolConfig configures a named worker pool.
+// Workers == 0 means tasks run inline on the calling goroutine.
+type PoolConfig struct {
+	Workers   int
+	QueueSize int
 }
 
-// DirectExecutor runs tasks inline on the calling goroutine.
-type DirectExecutor struct{}
-
-func (d *DirectExecutor) Execute(task func()) error {
-	task()
-	return nil
+// WorkerPool manages named pools of worker goroutines backed by channels.
+type WorkerPool struct {
+	queues map[PoolName]chan func()
+	wg     sync.WaitGroup
 }
 
-func (d *DirectExecutor) Shutdown() {}
-
-// BoundedExecutor runs tasks on a fixed pool of worker goroutines
-// with a bounded queue for backpressure.
-type BoundedExecutor struct {
-	queue chan func()
-	wg    sync.WaitGroup
-}
-
-func NewBoundedExecutor(workers, queueSize int) *BoundedExecutor {
-	e := &BoundedExecutor{
-		queue: make(chan func(), queueSize),
+func NewWorkerPool(configs map[PoolName]PoolConfig) *WorkerPool {
+	wp := &WorkerPool{
+		queues: make(map[PoolName]chan func(), len(configs)),
 	}
-	e.wg.Add(workers)
-	for range workers {
-		go func() {
-			defer e.wg.Done()
-			for task := range e.queue {
-				task()
-			}
-		}()
+	for name, cfg := range configs {
+		if cfg.Workers == 0 {
+			wp.queues[name] = nil // nil means run inline
+			continue
+		}
+		ch := make(chan func(), cfg.QueueSize)
+		wp.queues[name] = ch
+		wp.wg.Add(cfg.Workers)
+		for range cfg.Workers {
+			go func() {
+				defer wp.wg.Done()
+				for task := range ch {
+					task()
+				}
+			}()
+		}
 	}
-	return e
+	return wp
 }
 
-func (e *BoundedExecutor) Execute(task func()) error {
+// Submit sends a task to the named pool. Falls back to "generic" if the name
+// is not found. Returns ErrRejected if the queue is full.
+// If the pool is configured with Workers == 0, the task runs inline.
+func (wp *WorkerPool) Submit(name PoolName, task func()) error {
+	ch, ok := wp.queues[name]
+	if !ok {
+		ch = wp.queues[PoolGeneric]
+	}
+	if ch == nil {
+		task()
+		return nil
+	}
 	select {
-	case e.queue <- task:
+	case ch <- task:
 		return nil
 	default:
 		return ErrRejected
 	}
 }
 
-func (e *BoundedExecutor) Shutdown() {
-	close(e.queue)
-	e.wg.Wait()
-}
-
-// PoolConfig configures a named executor pool.
-// Workers == 0 means DirectExecutor (inline).
-type PoolConfig struct {
-	Workers   int
-	QueueSize int
-}
-
-// ThreadPool manages named executor pools.
-type ThreadPool struct {
-	pools map[string]Executor
-}
-
-func NewThreadPool(configs map[string]PoolConfig) *ThreadPool {
-	pools := make(map[string]Executor, len(configs))
-	for name, cfg := range configs {
-		if cfg.Workers == 0 {
-			pools[name] = &DirectExecutor{}
-		} else {
-			pools[name] = NewBoundedExecutor(cfg.Workers, cfg.QueueSize)
+func (wp *WorkerPool) Shutdown() {
+	for _, ch := range wp.queues {
+		if ch != nil {
+			close(ch)
 		}
 	}
-	return &ThreadPool{pools: pools}
-}
-
-// Get returns the named executor, falling back to "generic" if not found.
-func (tp *ThreadPool) Get(name string) Executor {
-	if e, ok := tp.pools[name]; ok {
-		return e
-	}
-	return tp.pools["generic"]
-}
-
-func (tp *ThreadPool) Shutdown() {
-	for _, e := range tp.pools {
-		e.Shutdown()
-	}
+	wp.wg.Wait()
 }

@@ -125,12 +125,12 @@ func NewNode(config NodeConfig) (*Node, error) {
 	ts, err := transport.NewTransportService(transport.TransportServiceConfig{
 		BindAddress: fmt.Sprintf(":%d", config.TransportPort),
 		NodeName:    fmt.Sprintf("gosearch-%d", config.HTTPPort),
-		PoolConfigs: map[string]transport.PoolConfig{
-			"generic":          {Workers: numCPU * 4, QueueSize: 1000},
-			"search":           {Workers: numCPU + 1, QueueSize: 1000},
-			"index":            {Workers: numCPU, QueueSize: 200},
-			"transport_worker": {Workers: 0},
-			"cluster_state":    {Workers: 1, QueueSize: 10},
+		PoolConfigs: map[transport.PoolName]transport.PoolConfig{
+			transport.PoolGeneric:         {Workers: numCPU * 4, QueueSize: 1000},
+			transport.PoolSearch:          {Workers: numCPU + 1, QueueSize: 1000},
+			transport.PoolIndex:           {Workers: numCPU, QueueSize: 200},
+			transport.PoolTransportWorker: {Workers: 0},
+			transport.PoolClusterState:    {Workers: 1, QueueSize: 10},
 		},
 	})
 	if err != nil {

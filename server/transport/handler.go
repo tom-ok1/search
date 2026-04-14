@@ -4,7 +4,34 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"sync"
 )
+
+// maxPoolableBufferSize is the cap above which buffers are not returned to the
+// pool, preventing a single large request/response from permanently inflating
+// pooled memory.
+const maxPoolableBufferSize = 64 * 1024 // 64 KiB
+
+var bufferPool = sync.Pool{
+	New: func() any {
+		return new(bytes.Buffer)
+	},
+}
+
+// getBuffer retrieves a reset buffer from the pool.
+func getBuffer() *bytes.Buffer {
+	buf := bufferPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	return buf
+}
+
+// putBuffer returns buf to the pool if its capacity is within the limit.
+func putBuffer(buf *bytes.Buffer) {
+	if buf.Cap() > maxPoolableBufferSize {
+		return // let GC reclaim oversized buffers
+	}
+	bufferPool.Put(buf)
+}
 
 const handshakeAction = "internal:transport/handshake"
 
@@ -17,8 +44,10 @@ func NewOutboundHandler() *OutboundHandler {
 
 // SendRequest writes a complete request message (header + payload) to w.
 func (oh *OutboundHandler) SendRequest(w io.Writer, requestID int64, action string, request Writeable) error {
-	var payload bytes.Buffer
-	out := NewStreamOutput(&payload)
+	payload := getBuffer()
+	defer putBuffer(payload)
+
+	out := NewStreamOutput(payload)
 	if err := request.WriteTo(out); err != nil {
 		return fmt.Errorf("serialize request payload: %w", err)
 	}
@@ -31,45 +60,12 @@ func (oh *OutboundHandler) SendRequest(w io.Writer, requestID int64, action stri
 	return writeMessageWithPayload(w, h, payload.Bytes())
 }
 
-// SendResponse writes a complete response message to w.
-func (oh *OutboundHandler) SendResponse(w io.Writer, requestID int64, response Writeable) error {
-	var payload bytes.Buffer
-	out := NewStreamOutput(&payload)
-	if err := response.WriteTo(out); err != nil {
-		return fmt.Errorf("serialize response payload: %w", err)
-	}
-
-	h := &Header{
-		RequestID: requestID,
-		Status:    StatusFlags(0),
-	}
-	return writeMessageWithPayload(w, h, payload.Bytes())
-}
-
-// SendErrorResponse writes an error response message to w.
-func (oh *OutboundHandler) SendErrorResponse(w io.Writer, requestID int64, nodeID string, action string, errMsg error) error {
-	rte := &RemoteTransportError{
-		NodeID:  nodeID,
-		Action:  action,
-		Message: errMsg.Error(),
-	}
-	var payload bytes.Buffer
-	out := NewStreamOutput(&payload)
-	if err := rte.WriteTo(out); err != nil {
-		return fmt.Errorf("serialize error payload: %w", err)
-	}
-
-	h := &Header{
-		RequestID: requestID,
-		Status:    StatusFlags(0).WithError(true),
-	}
-	return writeMessageWithPayload(w, h, payload.Bytes())
-}
-
 // SendHandshakeRequest writes a handshake request message to w.
 func (oh *OutboundHandler) SendHandshakeRequest(w io.Writer, requestID int64, req *HandshakeRequest) error {
-	var payload bytes.Buffer
-	out := NewStreamOutput(&payload)
+	payload := getBuffer()
+	defer putBuffer(payload)
+
+	out := NewStreamOutput(payload)
 	if err := req.WriteTo(out); err != nil {
 		return fmt.Errorf("serialize handshake request: %w", err)
 	}
@@ -84,8 +80,10 @@ func (oh *OutboundHandler) SendHandshakeRequest(w io.Writer, requestID int64, re
 
 // SendHandshakeResponse writes a handshake response message to w.
 func (oh *OutboundHandler) SendHandshakeResponse(w io.Writer, requestID int64, resp *HandshakeResponse) error {
-	var payload bytes.Buffer
-	out := NewStreamOutput(&payload)
+	payload := getBuffer()
+	defer putBuffer(payload)
+
+	out := NewStreamOutput(payload)
 	if err := resp.WriteTo(out); err != nil {
 		return fmt.Errorf("serialize handshake response: %w", err)
 	}
@@ -101,15 +99,15 @@ func (oh *OutboundHandler) SendHandshakeResponse(w io.Writer, requestID int64, r
 type InboundHandler struct {
 	requestHandlers  *RequestHandlerMap
 	responseHandlers *ResponseHandlers
-	threadPool       *ThreadPool
+	workerPool       *WorkerPool
 	localNodeID      string
 }
 
-func NewInboundHandler(requestHandlers *RequestHandlerMap, responseHandlers *ResponseHandlers, threadPool *ThreadPool, localNodeID string) *InboundHandler {
+func NewInboundHandler(requestHandlers *RequestHandlerMap, responseHandlers *ResponseHandlers, workerPool *WorkerPool, localNodeID string) *InboundHandler {
 	return &InboundHandler{
 		requestHandlers:  requestHandlers,
 		responseHandlers: responseHandlers,
-		threadPool:       threadPool,
+		workerPool:       workerPool,
 		localNodeID:      localNodeID,
 	}
 }
@@ -163,8 +161,7 @@ func (ih *InboundHandler) handleRequest(si *StreamInput, respWriter io.Writer, h
 
 	channel := NewTcpTransportChannel(h.RequestID, respWriter)
 
-	executor := ih.threadPool.Get(entry.executor)
-	return executor.Execute(func() {
+	return ih.workerPool.Submit(entry.executor, func() {
 		entry.dispatch(si, channel)
 	})
 }
@@ -180,22 +177,11 @@ func (ih *InboundHandler) handleResponse(si *StreamInput, h *Header) error {
 		if err != nil {
 			return fmt.Errorf("read remote transport error: %w", err)
 		}
-		type errorHandler interface {
-			HandleError(*RemoteTransportError)
-		}
-		if eh, ok := ctx.Handler.(errorHandler); ok {
-			eh.HandleError(rte)
-		}
+		ctx.Handler.HandleError(rte)
 		return nil
 	}
 
-	type successHandler interface {
-		ReadAndHandle(*StreamInput) error
-	}
-	if sh, ok := ctx.Handler.(successHandler); ok {
-		return sh.ReadAndHandle(si)
-	}
-	return nil
+	return ctx.Handler.ReadAndHandle(si)
 }
 
 // readPayload reads the payload bytes from r based on the header's payload size.

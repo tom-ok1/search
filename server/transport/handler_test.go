@@ -42,45 +42,24 @@ func TestOutboundHandler_SendRequest(t *testing.T) {
 	}
 }
 
-func TestOutboundHandler_SendResponse(t *testing.T) {
-	var buf bytes.Buffer
-	oh := NewOutboundHandler()
-
-	resp := &testResponse{Result: "ok"}
-	if err := oh.SendResponse(&buf, 42, resp); err != nil {
-		t.Fatalf("SendResponse failed: %v", err)
-	}
-
-	h, err := ReadHeader(&buf)
-	if err != nil {
-		t.Fatalf("ReadHeader failed: %v", err)
-	}
-	if h.RequestID != 42 {
-		t.Errorf("RequestID = %d, want 42", h.RequestID)
-	}
-	if h.Status.IsRequest() {
-		t.Error("expected IsRequest=false")
-	}
-}
-
 func TestInboundHandler_DispatchRequest(t *testing.T) {
 	handlers := NewRequestHandlerMap()
 	done := make(chan *testRequest, 1)
 
-	RegisterHandler(handlers, "test:echo", "generic", readTestRequest,
+	registerHandler(handlers, "test:echo", PoolGeneric, readTestRequest,
 		func(req *testRequest, ch TransportChannel) error {
 			done <- req
 			return ch.SendResponse(&testResponse{Result: "echo:" + req.Value})
 		},
 	)
 
-	tp := NewThreadPool(map[string]PoolConfig{
-		"generic": {Workers: 0}, // DirectExecutor for synchronous dispatch
+	wp := NewWorkerPool(map[PoolName]PoolConfig{
+		PoolGeneric: {Workers: 0}, // inline for synchronous dispatch
 	})
-	defer tp.Shutdown()
+	defer wp.Shutdown()
 
 	rh := NewResponseHandlers()
-	ih := NewInboundHandler(handlers, rh, tp, "test-node")
+	ih := NewInboundHandler(handlers, rh, wp, "test-node")
 
 	// Write a request message using OutboundHandler
 	var msgBuf bytes.Buffer

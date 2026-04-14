@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -189,7 +190,7 @@ func ReadHeader(r io.Reader) (*Header, error) {
 	}
 
 	// Parse variable header
-	stream := NewStreamInput(&bufferReader{buf: varHeaderData})
+	stream := NewStreamInput(bytes.NewReader(varHeaderData))
 	var action string
 	var parentTaskID string
 
@@ -235,17 +236,3 @@ func (w *bufferWriter) Write(p []byte) (n int, err error) {
 	return len(p), nil
 }
 
-// bufferReader is a simple reader that reads from a byte slice.
-type bufferReader struct {
-	buf []byte
-	pos int
-}
-
-func (r *bufferReader) Read(p []byte) (n int, err error) {
-	if r.pos >= len(r.buf) {
-		return 0, io.EOF
-	}
-	n = copy(p, r.buf[r.pos:])
-	r.pos += n
-	return n, nil
-}

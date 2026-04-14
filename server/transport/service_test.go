@@ -28,8 +28,8 @@ func newTestTransportService(t *testing.T) *TransportService {
 	ts, err := NewTransportService(TransportServiceConfig{
 		BindAddress: "127.0.0.1:0",
 		NodeName:    t.Name(),
-		PoolConfigs: map[string]PoolConfig{
-			"generic": {Workers: 4, QueueSize: 100},
+		PoolConfigs: map[PoolName]PoolConfig{
+			PoolGeneric: {Workers: 4, QueueSize: 100},
 		},
 	})
 	if err != nil {
@@ -43,7 +43,7 @@ func TestTransportService_LocalRequest(t *testing.T) {
 	ts := newTestTransportService(t)
 
 	// Register a handler that echoes back "echo:<value>"
-	RegisterTypedHandler(ts, "test:echo", "generic",
+	registerHandler(ts.requestHandlers, "test:echo", PoolGeneric,
 		readSvcTestRequest,
 		func(req *svcTestRequest, ch TransportChannel) error {
 			return ch.SendResponse(&svcTestResponse{Result: "echo:" + req.Value})
@@ -55,7 +55,7 @@ func TestTransportService_LocalRequest(t *testing.T) {
 
 	handler := TypedResponseHandler(
 		readSvcTestResponse,
-		"generic",
+		PoolGeneric,
 		func(resp *svcTestResponse) {
 			gotResult = resp.Result
 			close(done)
@@ -87,7 +87,7 @@ func TestTransportService_RemoteRequest(t *testing.T) {
 	server := newTestTransportService(t)
 
 	// Register handler on server
-	RegisterTypedHandler(server, "test:echo", "generic",
+	registerHandler(server.requestHandlers, "test:echo", PoolGeneric,
 		readSvcTestRequest,
 		func(req *svcTestRequest, ch TransportChannel) error {
 			return ch.SendResponse(&svcTestResponse{Result: "echo:" + req.Value})
@@ -108,7 +108,7 @@ func TestTransportService_RemoteRequest(t *testing.T) {
 
 	handler := TypedResponseHandler(
 		readSvcTestResponse,
-		"generic",
+		PoolGeneric,
 		func(resp *svcTestResponse) {
 			gotResult = resp.Result
 			close(done)

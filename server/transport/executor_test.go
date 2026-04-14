@@ -7,32 +7,37 @@ import (
 	"time"
 )
 
-func TestDirectExecutor(t *testing.T) {
-	exec := &DirectExecutor{}
+func TestWorkerPool_InlineExecution(t *testing.T) {
+	wp := NewWorkerPool(map[PoolName]PoolConfig{
+		PoolGeneric: {Workers: 0},
+	})
+	defer wp.Shutdown()
+
 	var executed bool
-	err := exec.Execute(func() {
+	err := wp.Submit(PoolGeneric, func() {
 		executed = true
 	})
 	if err != nil {
-		t.Fatalf("DirectExecutor.Execute() returned error: %v", err)
+		t.Fatalf("Submit() returned error: %v", err)
 	}
 	if !executed {
-		t.Fatal("DirectExecutor did not run task inline")
+		t.Fatal("inline pool did not run task synchronously")
 	}
-	exec.Shutdown() // should be no-op
 }
 
-func TestBoundedExecutor_ExecutesTasks(t *testing.T) {
-	exec := NewBoundedExecutor(2, 10)
-	defer exec.Shutdown()
+func TestWorkerPool_ExecutesTasks(t *testing.T) {
+	wp := NewWorkerPool(map[PoolName]PoolConfig{
+		PoolGeneric: {Workers: 2, QueueSize: 10},
+	})
+	defer wp.Shutdown()
 
 	var count atomic.Int32
 	for range 5 {
-		err := exec.Execute(func() {
+		err := wp.Submit(PoolGeneric, func() {
 			count.Add(1)
 		})
 		if err != nil {
-			t.Fatalf("Execute() returned error: %v", err)
+			t.Fatalf("Submit() returned error: %v", err)
 		}
 	}
 
@@ -43,32 +48,34 @@ func TestBoundedExecutor_ExecutesTasks(t *testing.T) {
 	}
 }
 
-func TestBoundedExecutor_Backpressure(t *testing.T) {
-	exec := NewBoundedExecutor(1, 1)
-	defer exec.Shutdown()
+func TestWorkerPool_Backpressure(t *testing.T) {
+	wp := NewWorkerPool(map[PoolName]PoolConfig{
+		PoolGeneric: {Workers: 1, QueueSize: 1},
+	})
+	defer wp.Shutdown()
 
 	// Block the worker
 	unblock := make(chan struct{})
 	workerStarted := make(chan struct{})
-	err := exec.Execute(func() {
+	err := wp.Submit(PoolGeneric, func() {
 		close(workerStarted)
 		<-unblock
 	})
 	if err != nil {
-		t.Fatalf("First Execute() failed: %v", err)
+		t.Fatalf("First Submit() failed: %v", err)
 	}
 
 	// Wait for worker to start
 	<-workerStarted
 
 	// Fill the queue
-	err = exec.Execute(func() {})
+	err = wp.Submit(PoolGeneric, func() {})
 	if err != nil {
-		t.Fatalf("Second Execute() failed: %v", err)
+		t.Fatalf("Second Submit() failed: %v", err)
 	}
 
 	// Third task should be rejected
-	err = exec.Execute(func() {})
+	err = wp.Submit(PoolGeneric, func() {})
 	if err != ErrRejected {
 		t.Errorf("Expected ErrRejected, got %v", err)
 	}
@@ -76,87 +83,73 @@ func TestBoundedExecutor_Backpressure(t *testing.T) {
 	close(unblock)
 }
 
-func TestBoundedExecutor_ShutdownDrains(t *testing.T) {
-	exec := NewBoundedExecutor(2, 10)
+func TestWorkerPool_ShutdownDrains(t *testing.T) {
+	wp := NewWorkerPool(map[PoolName]PoolConfig{
+		PoolGeneric: {Workers: 2, QueueSize: 10},
+	})
 
 	var count atomic.Int32
 	for range 10 {
-		exec.Execute(func() {
+		wp.Submit(PoolGeneric, func() {
 			time.Sleep(10 * time.Millisecond)
 			count.Add(1)
 		})
 	}
 
-	exec.Shutdown()
+	wp.Shutdown()
 	if got := count.Load(); got != 10 {
 		t.Errorf("Expected all 10 tasks to complete after Shutdown(), got %d", got)
 	}
 }
 
-func TestThreadPool_Get(t *testing.T) {
-	tp := NewThreadPool(map[string]PoolConfig{
-		"generic": {Workers: 2, QueueSize: 10},
-		"search":  {Workers: 4, QueueSize: 20},
+func TestWorkerPool_NamedPools(t *testing.T) {
+	wp := NewWorkerPool(map[PoolName]PoolConfig{
+		PoolGeneric: {Workers: 2, QueueSize: 10},
+		PoolSearch:  {Workers: 4, QueueSize: 20},
 	})
-	defer tp.Shutdown()
-
-	searchExec := tp.Get("search")
-	if searchExec == nil {
-		t.Fatal("Expected search executor to exist")
-	}
+	defer wp.Shutdown()
 
 	var wg sync.WaitGroup
 	wg.Add(1)
-	err := searchExec.Execute(func() {
+	err := wp.Submit(PoolSearch, func() {
 		wg.Done()
 	})
 	if err != nil {
-		t.Fatalf("Execute() on search pool failed: %v", err)
+		t.Fatalf("Submit() on search pool failed: %v", err)
 	}
 	wg.Wait()
 }
 
-func TestThreadPool_GetFallback(t *testing.T) {
-	tp := NewThreadPool(map[string]PoolConfig{
-		"generic": {Workers: 2, QueueSize: 10},
+func TestWorkerPool_FallbackToGeneric(t *testing.T) {
+	wp := NewWorkerPool(map[PoolName]PoolConfig{
+		PoolGeneric: {Workers: 2, QueueSize: 10},
 	})
-	defer tp.Shutdown()
-
-	exec := tp.Get("nonexistent")
-	if exec == nil {
-		t.Fatal("Expected fallback to generic executor")
-	}
+	defer wp.Shutdown()
 
 	var wg sync.WaitGroup
 	wg.Add(1)
-	err := exec.Execute(func() {
+	err := wp.Submit("nonexistent", func() {
 		wg.Done()
 	})
 	if err != nil {
-		t.Fatalf("Execute() on fallback pool failed: %v", err)
+		t.Fatalf("Submit() on fallback pool failed: %v", err)
 	}
 	wg.Wait()
 }
 
-func TestThreadPool_TransportWorkerInline(t *testing.T) {
-	tp := NewThreadPool(map[string]PoolConfig{
-		"generic":          {Workers: 2, QueueSize: 10},
-		"transport_worker": {Workers: 0, QueueSize: 0},
+func TestWorkerPool_InlinePool(t *testing.T) {
+	wp := NewWorkerPool(map[PoolName]PoolConfig{
+		PoolGeneric:         {Workers: 2, QueueSize: 10},
+		PoolTransportWorker: {Workers: 0},
 	})
-	defer tp.Shutdown()
-
-	exec := tp.Get("transport_worker")
-	_, isDirectExec := exec.(*DirectExecutor)
-	if !isDirectExec {
-		t.Fatal("Expected transport_worker pool to be a DirectExecutor")
-	}
+	defer wp.Shutdown()
 
 	var executed bool
-	err := exec.Execute(func() {
+	err := wp.Submit(PoolTransportWorker, func() {
 		executed = true
 	})
 	if err != nil {
-		t.Fatalf("Execute() on transport_worker pool failed: %v", err)
+		t.Fatalf("Submit() on transport_worker pool failed: %v", err)
 	}
 	if !executed {
 		t.Fatal("transport_worker pool did not run task inline")
