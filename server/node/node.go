@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"runtime"
 	"time"
 
 	"github.com/getkin/kin-openapi/openapi3filter"
@@ -19,22 +20,25 @@ import (
 	"gosearch/server/gateway"
 	"gosearch/server/handler"
 	"gosearch/server/index"
+	"gosearch/server/transport"
 )
 
 type NodeConfig struct {
-	DataPath string
-	HTTPPort int
+	DataPath      string
+	HTTPPort      int
+	TransportPort int
 }
 
 type Node struct {
-	config        NodeConfig
-	clusterState  *cluster.ClusterState
-	indexServices map[string]*index.IndexService
-	router        chi.Router
-	registry      *analysis.AnalyzerRegistry
-	httpServer    *http.Server
-	listener      net.Listener
-	stopped       bool
+	config           NodeConfig
+	clusterState     *cluster.ClusterState
+	indexServices    map[string]*index.IndexService
+	router           chi.Router
+	registry         *analysis.AnalyzerRegistry
+	httpServer       *http.Server
+	listener         net.Listener
+	transportService *transport.TransportService
+	stopped          bool
 }
 
 func NewNode(config NodeConfig) (*Node, error) {
@@ -116,6 +120,24 @@ func NewNode(config NodeConfig) (*Node, error) {
 
 	n.router = router
 
+	// Create TransportService
+	numCPU := runtime.NumCPU()
+	ts, err := transport.NewTransportService(transport.TransportServiceConfig{
+		BindAddress: fmt.Sprintf(":%d", config.TransportPort),
+		NodeName:    fmt.Sprintf("gosearch-%d", config.HTTPPort),
+		PoolConfigs: map[transport.PoolName]transport.PoolConfig{
+			transport.PoolGeneric:         {Workers: numCPU * 4, QueueSize: 1000},
+			transport.PoolSearch:          {Workers: numCPU + 1, QueueSize: 1000},
+			transport.PoolIndex:           {Workers: numCPU, QueueSize: 200},
+			transport.PoolTransportWorker: {Workers: 0},
+			transport.PoolClusterState:    {Workers: 1, QueueSize: 10},
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create transport service: %w", err)
+	}
+	n.transportService = ts
+
 	return n, nil
 }
 
@@ -142,6 +164,11 @@ func (n *Node) Stop() error {
 	}
 	n.stopped = true
 
+	// Stop transport service
+	if n.transportService != nil {
+		n.transportService.Stop()
+	}
+
 	// Close all index services
 	for name, svc := range n.indexServices {
 		svc.Close()
@@ -162,4 +189,8 @@ func (n *Node) ClusterState() *cluster.ClusterState {
 
 func (n *Node) IndexService(name string) *index.IndexService {
 	return n.indexServices[name]
+}
+
+func (n *Node) TransportService() *transport.TransportService {
+	return n.transportService
 }
